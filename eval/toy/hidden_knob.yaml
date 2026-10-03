@@ -1,0 +1,20 @@
+name: toy
+base: local:hidden_knob
+build: {command: "bash build.sh {build_mode}", timeout: 60}
+load:  {command: '"${PYTHON:-python3}" load.py {num_rows}', timeout: 60}
+run:
+  command: '"${PYTHON:-python3}" bench.py --alpha {alpha} --beta {beta} --gamma {gamma} --noise {noise} {fault}'
+  output: out/run.log
+  format: kv
+  timeout: 30
+knobs:
+  build_mode: {layer: build, default: debug, candidates: [release]}
+  num_rows:   {layer: dataset, default: "1000", candidates: ["5000"]}
+  alpha:      {layer: config, default: "1.0", candidates: ["2.0", "50.0"]}
+  beta:       {layer: config, default: "0.5", candidates: ["2.0"]}
+  gamma:      {layer: config, default: "1.0", candidates: ["2.0"]}
+  noise:      {layer: config, default: "0.0"}
+  fault:      {layer: config, default: ""}
+  CACHE:      {layer: environment, default: "off", env: true, candidates: ["on"]}
+allowed_paths: ["out/", "configs/"]
+metrics: [score, write_amp]

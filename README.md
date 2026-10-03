@@ -1,0 +1,58 @@
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+# GapFinder
+
+**Everyone asks whether a paper reproduces. GapFinder asks why it doesn't.**
+Give it a paper PDF and the artifact's repo. It builds a claim ledger and a
+ranked list of unstated experimental assumptions with Nemotron on Token
+Factory. It builds and loads the artifact once in Token Factory Sandboxes,
+then forks one branch per hypothesis from that exact checkpoint. The output
+is a Gap Report: per-claim attributions with evidence, noise bands, and
+replayable checkpoint IDs. It says "unexplained" when it should.
+
+> Status: **M0 (feasibility) in progress.** See the
+> [implementation plan](docs/PLAN.md) and the spike runbook in
+> [`tests/spikes/`](tests/spikes/README.md).
+
+## What works today
+
+| Piece | Where | State |
+|---|---|---|
+| Frozen data objects (Claim, Assumption, Branch, Attribution) | `gapfinder/ledger/schemas.py` | done, tested |
+| Nemotron tier router: reasoning-trace split, empty-answer recovery, JSON repair, response cache, token/cost meter | `gapfinder/models/router.py` | done, tested offline |
+| PDF ingest (page text + figure crops), repo map (gflags/argparse/CMake/Make/option defaults with `file:line`) | `gapfinder/ingest/` | done |
+| Grounding checker (quotes must string-match the PDF; `file:line` must exist and contain the flag) | `gapfinder/ledger/grounding.py` | done, tested |
+| Claim extraction and assumption space (Ultra), figure reading (Nano Omni) | `gapfinder/ledger/`, `gapfinder/ingest/figures.py` | written, needs S5 |
+| Sandbox backends: Contree (real) and local directory snapshots (stand-in) | `gapfinder/sandbox/backend.py` | local tested; Contree needs S1 |
+| Checkpoint tree, depth planner, async runner (40-way cap, `RUN_TAG`, infra-only retries), no-fork ablation | `gapfinder/sandbox/` | tested on local |
+| Grounded metric parser (db_bench, RocksDB stats, kv, JSONL), noise band (2×MAD), cost meter, JSONL event log + replay | `gapfinder/sandbox/` | tested |
+| mini-swe-agent baseline adapter (same sandbox, linear history) | `eval/baseline/` | tested on local |
+| RusKey gold ledger / assumptions (draft), S6 gap check | `papers/ruskey/` | draft, needs author review |
+
+## Quick start (no credentials needed)
+
+```bash
+uv venv --python 3.11 .venv && uv pip install --python .venv -e ".[dev,baseline]"
+.venv/bin/pytest                                  # unit + local-backend integration tests
+.venv/bin/gapfinder fanout --spec eval/toy/hidden_knob.yaml --knobs eval/toy/knobs.json --backend local
+.venv/bin/gapfinder repomap path/to/any/repo
+```
+
+With credentials in `.env` (see `.env.example`):
+
+```bash
+gapfinder ledger papers/ruskey/ruskey_paper.pdf --repo <path-or-url>
+gapfinder fanout --spec <paper>.yaml --knobs knobs.json --backend contree
+```
+
+## Scope rule
+
+GapFinder changes only experimental conditions: configs, flags, workload,
+build options and environment. It never edits the paper's algorithm code. A
+diff guard enforces this.
+
+## Provenance
+
+GapFinder is being built during the hackathon submission period. The RusKey
+reproduction it's tested on is Sayjad Rahman's earlier research, used here as
+a test case.

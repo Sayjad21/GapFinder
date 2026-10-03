@@ -1,0 +1,40 @@
+[project]
+name = "gapfinder"
+version = "0.1.0"
+description = "Forked-sandbox search for why paper reproductions diverge"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "contree-sdk>=0.3.6",
+    "openai>=1.40",
+    "pydantic>=2.7",
+    "pymupdf>=1.24",
+    "pyyaml>=6",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "sse-starlette>=2",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+baseline = ["mini-swe-agent>=2.4"]
+
+[project.scripts]
+gapfinder = "gapfinder.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["gapfinder*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests/unit", "tests/integration"]
+markers = [
+    "live: needs real Token Factory / Sandboxes credentials (deselected by default)",
+]
+addopts = "-m 'not live'"
