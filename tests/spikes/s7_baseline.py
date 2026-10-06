@@ -64,11 +64,18 @@ def main(backend_kind: str, tier: str, cost_limit: float, step_limit: int) -> No
         finished = True
     except Exception as exc:
         result, finished = {"exit_status": type(exc).__name__, "error": str(exc)}, False
-    traj = {"task": task, "result": result, "messages": getattr(agent, "messages", []),
+    answer = None
+    try:  # the agent writes its answer to answer.json in its final checkpoint
+        raw = env._sync(backend.read_file(env.checkpoint, "answer.json")).decode(errors="replace")
+        answer = json.loads(raw)
+    except Exception as exc:  # missing or malformed: recorded as no answer
+        answer = {"error": f"{type(exc).__name__}: {exc}"}
+    traj = {"task": task, "result": result, "answer": answer, "messages": getattr(agent, "messages", []),
             "env": env.serialize(), "wall_s": round(time.monotonic() - t0, 1), "model": tiers()[tier].model_id}
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "trajectory.json").write_text(json.dumps(traj, indent=2, default=str))
     check("one full task completes", finished, exit=str(result)[:300], steps=len(env.history))
+    check("answer.json written", isinstance(answer, dict) and "attributions" in answer, answer=answer)
     check("transcript saved", (run_dir / "trajectory.json").exists(), path=str(run_dir))
     save("S7", {"pass": check.all_ok, "backend": backend_kind, "tier": tier, "checks": check.items})
 

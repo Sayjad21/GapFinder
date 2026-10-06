@@ -2,8 +2,8 @@
      {paper_excerpt}, {claims_table}, {naive_numbers}, {helper} and {budget}
      are filled identically for every arm. -->
 
-You are working in a sandbox that holds a research artifact at /work: its source
-code, already built, with its dataset already loaded.
+You are working in a sandbox. Your current working directory holds a research
+artifact: its source code, already built, with its dataset already loaded.
 
 A reproduction of the paper's experiments with this artifact gives numbers that
 differ from the paper's. Your job is to **find out why**. Identify which
@@ -25,6 +25,7 @@ Rules:
 ## The reproduction's numbers (naive run, artifact defaults)
 {naive_numbers}
 
-When you are done, print `COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` on its own,
-followed by your final answer as JSON:
+When you are done, write your final answer to `answer.json` in the working
+directory, in this format, and then submit:
 `{{"attributions": [{{"claim_id": "...", "knobs": {{"name": "value"}}, "evidence": "...", "gap_before": 0.0, "gap_after": 0.0}}], "unexplained": ["claim ids"]}}`
+Claims you could not explain go in "unexplained".
