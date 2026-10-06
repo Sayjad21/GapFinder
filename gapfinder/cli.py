@@ -25,7 +25,7 @@ def _write(path: Path, obj) -> None:
 
 
 async def cmd_ledger(args) -> int:
-    from gapfinder.ingest.pdf import load_pdf
+    from gapfinder.ingest.pdf import load_paper
     from gapfinder.ingest.repo_map import build_repo_map, clone_or_path
     from gapfinder.ledger.assumptions import build_assumption_space, ground_assumptions, inconsistencies
     from gapfinder.ledger.claims import extract_claims, ground_claims
@@ -33,7 +33,7 @@ async def cmd_ledger(args) -> int:
     from gapfinder.models.router import Router
 
     out = Path(args.out)
-    paper = load_pdf(args.paper, figure_dir=out / "figures")
+    paper = load_paper(args.paper, figure_dir=out / "figures")
     repo_root = clone_or_path(args.repo, settings().cache_dir / "repos")
     rm = build_repo_map(repo_root)
     _write(out / "repo_map.json", rm.to_dict())

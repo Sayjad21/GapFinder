@@ -105,3 +105,18 @@ def _column_rect(page_rect, cap_rect):
     if cap_rect.x1 <= mid + 20:
         return pymupdf.Rect(page_rect.x0, page_rect.y0, mid, page_rect.y1)
     return pymupdf.Rect(mid, page_rect.y0, page_rect.x1, page_rect.y1)
+
+
+def load_text_paper(path: str | Path) -> PaperText:
+    """A Markdown/plain-text paper (GapBench mini-papers). Form feeds split pages; else one page."""
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    chunks = text.split("\f") if "\f" in text else [text]
+    return PaperText(path=path, pages=[Page(i + 1, c) for i, c in enumerate(chunks)])
+
+
+def load_paper(path: str | Path, figure_dir: str | Path | None = None) -> PaperText:
+    path = Path(path)
+    if path.suffix.lower() in {".md", ".txt"}:
+        return load_text_paper(path)
+    return load_pdf(path, figure_dir=figure_dir)

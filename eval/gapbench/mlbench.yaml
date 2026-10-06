@@ -1,0 +1,24 @@
+# Harness spec for the tabular ML artifact. Knobs and defaults only.
+name: mlbench
+base: local:artifacts/mlbench
+run:
+  command: '"${PYTHON:-python3}" train.py --n {n} --positive_rate {positive_rate} --label_noise {label_noise} --split {split} --normalize {normalize} --epochs {epochs} --batch_size {batch_size} --lr {lr} --lr_schedule {lr_schedule} --weight_decay {weight_decay} --class_weight {class_weight} --threshold {threshold} --data_seed {data_seed} --out out/result.json'
+  output: out/result.json
+  format: jsonl
+  timeout: 300
+knobs:
+  n:             {layer: dataset, default: "1200"}
+  positive_rate: {layer: dataset, default: "0.3"}
+  label_noise:   {layer: dataset, default: "0.05"}
+  split:         {layer: dataset, default: "0.8"}
+  data_seed:     {layer: dataset, default: "7"}
+  normalize:     {layer: config, default: none}
+  epochs:        {layer: config, default: "15"}
+  batch_size:    {layer: config, default: "32"}
+  lr:            {layer: config, default: "0.05"}
+  lr_schedule:   {layer: config, default: const}
+  weight_decay:  {layer: config, default: "0.0"}
+  class_weight:  {layer: config, default: none}
+  threshold:     {layer: config, default: "0.5"}
+allowed_paths: ["out/", "configs/"]
+metrics: [test_accuracy, balanced_accuracy]

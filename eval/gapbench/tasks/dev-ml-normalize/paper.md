@@ -1,0 +1,22 @@
+# Plain Logistic Regression Is a Strong Baseline for Credit Screening
+
+## Abstract
+We revisit logistic regression trained with mini-batch SGD on a synthetic
+credit-screening dataset and show it reaches 0.829 test accuracy,
+competitive with far larger models.
+
+## Experimental setup
+The dataset has 1,200 applicants with eight numeric features, a 30% positive
+rate and 5% label noise; we use the first 80% of rows for training and the rest
+for testing (data seed 7). We train for 15 epochs with batch size 32 and a
+constant learning rate of 0.05, with no weight decay and no class weighting.
+Predictions use a decision threshold of 0.5. All numbers are medians over
+seven runs with different shuffling seeds.
+
+## Results
+Table 1 reports the main result. Logistic regression reaches a test accuracy
+of 0.829 and a balanced accuracy of 0.810.
+
+| Model | Test accuracy | Balanced accuracy |
+|---|---|---|
+| Logistic regression (ours) | 0.829 | 0.810 |
