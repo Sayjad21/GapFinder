@@ -61,3 +61,36 @@ live service.
 - `uv pip install` failed with `failed to open file ...dist-info/WHEEL` from
   the default cache. A fresh `UV_CACHE_DIR` plus `UV_LINK_MODE=copy` fixed it.
   Leave this out of the submitted feedback.
+
+### 6. Token Factory: Nemotron 3 Nano Omni isn't offered (confirmed)
+- **Product:** Token Factory model catalogue
+- **Issue:** `nvidia/Nemotron-3-Nano-Omni` isn't in `/v1/models`. The only
+  NVIDIA models served are text-only: Nemotron 3 Ultra, Super, Nano and
+  Nemotron 3.5 Lightning. A Nemotron-only pipeline therefore has no model for
+  image input (reading values off figures).
+- **Impact:** Figure reading has to use a non-NVIDIA vision model.
+- **Suggestion:** Serve Nano Omni, or list it as coming soon.
+
+### 7. Token Factory: `/v1/models?verbose=true` returns live pricing (worked well)
+- **Product:** Token Factory API
+- **What worked:** The verbose model list includes per-token prompt and
+  completion prices plus context length. We use it to price every call
+  exactly, so our spend ledger matches the list price without hard-coding it.
+- **Suggestion:** Document this parameter on the API intro page. We found it by
+  trying it.
+
+### 8. Token Factory: confirmed base URL and real limits
+- `https://api.tokenfactory.nebius.com/v1/` works. The regional URL wasn't
+  needed (resolves item 3).
+- Nemotron 3 Ultra: ~100K-token prompt with a needle answered correctly in 5.2 s.
+  The listed context is 1,048,576 tokens.
+- All three text tiers returned schema-valid JSON when asked for it.
+
+### 9. Onboarding: Bangladesh is missing from the billing country list
+- **Product:** Token Factory signup / billing
+- **Issue:** Bangladesh isn't selectable as the billing country. The hackathon
+  rules don't exclude Bangladesh, but they require runtime calls to Token
+  Factory, so an eligible participant can't complete onboarding without help.
+- **Impact:** Blocked a participant until a workaround was found.
+- **Suggestion:** Let participants redeem hackathon credits without a billing
+  country, or support more countries.

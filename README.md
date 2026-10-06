@@ -31,6 +31,8 @@ replayable checkpoint IDs. It says "unexplained" when it should.
 
 ## Quick start (no credentials needed)
 
+Teammates: see [SETUP.md](SETUP.md) for the full setup, keys and budget rules.
+
 ```bash
 uv venv --python 3.11 .venv && uv pip install --python .venv -e ".[dev,baseline]"
 .venv/bin/pytest                                  # unit + local-backend integration tests
