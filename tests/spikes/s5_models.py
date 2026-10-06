@@ -49,10 +49,13 @@ async def main(long_tokens: int) -> None:
             per_tier[name] = {"ok": ok, "s": round(time.monotonic() - t0, 2), "parsed": out.model_dump()}
         except Exception as exc:  # record, keep going
             per_tier[name] = {"ok": False, "error": repr(exc)[:500]}
-        check(f"{name}: valid JSON for schema task", per_tier[name]["ok"], **per_tier[name])
+        detail = {k: v for k, v in per_tier[name].items() if k != "ok"}
+        check(f"{name}: valid JSON for schema task", per_tier[name]["ok"], **detail)
 
     # Long-context probe: repeat the paper text up to ~long_tokens (4 chars/token) and plant a needle.
-    paper = (ROOT / "papers" / "ruskey" / "ruskey_paper.txt").read_text(encoding="utf-8", errors="replace")
+    paper_path = ROOT / "papers" / "ruskey" / "ruskey_paper.txt"  # git-ignored; filler is fine for a context probe
+    paper = (paper_path.read_text(encoding="utf-8", errors="replace") if paper_path.exists()
+             else "RocksDB compaction policy tuning under mixed read/write workloads. " * 200)
     filler = (paper * (long_tokens * 4 // len(paper) + 1))[: long_tokens * 4]
     mid = len(filler) // 2
     prompt = filler[:mid] + "\nNEEDLE: the secret build flag is GF_NEEDLE_7731.\n" + filler[mid:]
