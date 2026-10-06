@@ -100,8 +100,10 @@ def _norm_knob(k: str) -> str:
 
 class GapSearch:
     def __init__(self, orch: Orchestrator, targets: list[Target], assumptions: list[Assumption],
-                 cfg: SearchConfig | None = None):
+                 cfg: SearchConfig | None = None, evidence=None):
+        """`evidence`: optional EvidenceSearch (web) consulted when paper and code don't back a value."""
         self.orch, self.targets, self.cfg = orch, targets, cfg or SearchConfig()
+        self.evidence = evidence
         self.spec = orch.spec
         spec_knobs = {_norm_knob(k): k for k in self.spec.knobs}
         # assumption -> spec knob; assumptions about knobs the harness can't set are skipped (and reported)
@@ -143,6 +145,20 @@ class GapSearch:
 
     def band(self, t: Target) -> float:
         return self.bands[t.metric].band / abs(t.paper_value)
+
+    def band_at(self, t: Target, changes: Changes) -> float:
+        """Noise band at a configuration, from its own repeats when it has 3+; else the naive band.
+        Noise isn't constant across configs (unstable training at the default can be 50x noisier
+        than a normalised run), so 'closes the gap' must use the candidate's own spread."""
+        vals = [b.parsed_metrics[t.metric] for b in self._runs.get(frozenset(changes.items()), [])
+                if b.status == BranchStatus.succeeded and t.metric in b.parsed_metrics]
+        if not changes or len(vals) < 3:
+            return self.band(t)
+        return noise_band(t.metric, vals, floor_frac=self.cfg.noise_floor_frac).band / abs(t.paper_value)
+
+    def closes(self, t: Target, changes: Changes) -> bool:
+        g = self.gap(t, changes)
+        return g is not None and abs(g) <= self.band_at(t, changes)
 
     def units(self, t: Target, changes: Changes) -> float:
         g, g0 = self.gap(t, changes), self.gap(t, {})
@@ -260,7 +276,7 @@ class GapSearch:
         # closes fully > closes at least half > the rest; evidence-backed first within each tier
         def tier(c: Changes) -> int:
             g, g0 = abs(self.gap(t, c)), abs(res.gap_before)
-            return 0 if g <= res.band else 1 if g0 - g >= self.cfg.partial_frac * g0 else 2
+            return 0 if self.closes(t, c) else 1 if g0 - g >= self.cfg.partial_frac * g0 else 2
         candidates.sort(key=lambda c: (tier(c), not self._supported(c), abs(self.gap(t, c)), len(c),
                                        sorted(c.items())))
         best: ClaimResult | None = None
@@ -283,12 +299,14 @@ class GapSearch:
             res.notes.append(f"closest configuration tried: {res.changes} (gap {res.gap_after:+.1%}); "
                              "it did not pass verification")
             res.changes, res.gap_after = {}, res.gap_before
+            res.plausibility, res.counterfactual, res.held_out, res.replay = {}, {}, {}, []
             res.attribution.assumption_set, res.attribution.gap_after = [], res.gap_before
+            res.attribution.checkpoint_ids, res.attribution.counterfactual_ok = [], None
 
     async def _verify(self, t: Target, changes: Changes, parent: ClaimResult) -> ClaimResult:
         r = ClaimResult(target=t, status="searched", gap_before=parent.gap_before, band=parent.band)
         band, thr = parent.band, self.cfg.effect_threshold
-        closes = lambda c: abs(self.gap(t, c)) <= band  # noqa: E731
+        closes = lambda c: self.closes(t, c)  # noqa: E731
 
         # 4. bisect to the minimal set that still closes the gap
         if len(changes) > 1 and closes(changes):
@@ -317,6 +335,13 @@ class GapSearch:
         # 5c. plausibility: the value needs evidence, not just a good fit
         for knob, value in changes.items() if self.cfg.verify else ():
             r.plausibility[knob] = plausible(self.assumptions.get(knob), value)
+            a = self.assumptions.get(knob)
+            if not r.plausibility[knob].supported and a is not None and self.evidence is not None:
+                ev = await self.evidence.find(knob, value)
+                if ev is not None:
+                    self.assumptions[knob] = a = a.model_copy(update={"evidence": [*a.evidence, ev]})
+                    r.plausibility[knob] = plausible(a, value)
+                    self.orch.events.emit("note", msg=f"web evidence for {knob}={value}: {ev.ref}")
 
         cf_ok = all(v["ok"] for v in r.counterfactual.values())
         ho_ok = all(v["ok"] for v in r.held_out.values())

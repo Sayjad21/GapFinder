@@ -20,6 +20,9 @@ class Plausibility:
     reason: str
 
 
+_CHOICES = re.compile(r"choices\s*=\s*[\[(][^\])]*[\])]")
+
+
 def _norm(v: str) -> str:
     return str(v).strip().lower().strip("\"'")
 
@@ -34,10 +37,12 @@ def plausible(assumption: Assumption | None, value: str) -> Plausibility:
         return Plausibility(False, "no assumption record for this knob, so no evidence")
     v = _norm(value)
     paper = _norm(assumption.paper_value)
-    if not paper.startswith("unstated") and re.search(rf"(?<![\w.]){re.escape(v)}(?![\w.])", paper):
+    if not paper.startswith("unstated") and re.search(rf"(?<![\w.]){re.escape(v)}(?!\w|\.\w)", paper):
         return Plausibility(True, f"paper states {assumption.paper_value!r}")
     for ev in assumption.evidence:
-        if re.search(rf"(?<![\w.]){re.escape(v)}(?![\w.])", ev.quote.lower()):
+        # an options list (argparse choices=[...]) says what the code allows, not what the authors used
+        quote = _CHOICES.sub(" ", ev.quote.lower())
+        if re.search(rf"(?<![\w.]){re.escape(v)}(?!\w|\.\w)", quote):
             return Plausibility(True, f"{ev.kind} evidence at {ev.ref}: {ev.quote[:120]!r}")
     return Plausibility(False, f"no evidence mentions {value!r}; it fits, but nothing says the authors used it")
 

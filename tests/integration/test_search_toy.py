@@ -136,6 +136,7 @@ async def test_no_cause_is_unexplained(tmp_path):
     assert r.attribution.confidence_label == "Unexplained"
     assert r.changes == {}
     assert r.attribution.assumption_set == [] and r.gap_after == r.gap_before
+    GapReport.from_search(s, [r], paper="toy").to_markdown()  # must render (regression: KeyError)
 
 
 # 8. diff guard ----------------------------------------------------------------
@@ -167,3 +168,19 @@ async def test_no_verify_ablation_accepts_overfit(tmp_path):
     s, [r] = await search(tmp_path, {"alpha": "50.0"}, verify=False)
     assert r.changes == {"alpha": "50.0"} and r.attribution.confidence_label == "Explained"
     assert r.counterfactual == {} and r.plausibility == {}
+
+
+async def test_web_evidence_upgrades_fits_but_unsupported(tmp_path):
+    """The overfit-trap value becomes Explained once a (fake) web source states it."""
+    from gapfinder.search.evidence import EvidenceSearch
+
+    async def fake(payload):
+        return {"results": [{"url": "https://example.org/errata", "title": "errata",
+                             "content": "Erratum: all runs used alpha 50.0, not the value in the paper."}]}
+
+    m = await paper(tmp_path, {"alpha": "50.0"})
+    s = GapSearch(orch(tmp_path), targets(m), ALL, SearchConfig(),
+                  evidence=EvidenceSearch("toy", transport=fake, cache_dir=tmp_path / "tv"))
+    [r] = await s.run()
+    assert r.changes == {"alpha": "50.0"} and r.attribution.confidence_label == "Explained"
+    assert r.plausibility["alpha"].supported and "example.org" in r.plausibility["alpha"].reason
