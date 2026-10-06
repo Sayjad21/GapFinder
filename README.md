@@ -34,6 +34,9 @@ replayable checkpoint IDs. It says "unexplained" when it should.
 | Gap Report (Markdown + JSON, replay recipes) | `gapfinder/report/` | done |
 | Spend cap + ledger for every paid call, including the baseline agent | `gapfinder/models/budget.py` | done |
 | GapBench-mini: RL + tabular artifacts, task generator, leakage check, harness, scorer | `eval/gapbench/` | 4 dev tasks; test tasks pending |
+| Web enrichment: web evidence search (Tavily) for the plausibility gate | `gapfinder/search/evidence.py` | done, cached |
+| Web UI: replay, Gap Report, scoreboard; FastAPI + SSE | `web/`, `gapfinder/api/` | done, browser-tested |
+| RusKey Figure 6 harness (spec, cell script, S3/S4 on it) | `papers/ruskey/` | ready; waiting on Sandboxes |
 
 ## Quick start (no credentials needed)
 
@@ -52,6 +55,18 @@ With credentials in `.env` (see `.env.example`):
 gapfinder ledger papers/ruskey/ruskey_paper.pdf --repo <path-or-url>
 gapfinder fanout --spec <paper>.yaml --knobs knobs.json --backend contree
 ```
+
+## Web UI (replay mode)
+
+```bash
+npm --prefix web ci && npm --prefix web run build      # once
+.venv/bin/uvicorn gapfinder.api.server:app --port 8000  # then open http://localhost:8000
+```
+
+It lands on **Replay**, which plays a recorded run (from `demo/runs/`) at 1x, 4x or 16x and costs
+nothing. The other tabs are the **Gap Report** cards (with replay commands) and the **Scoreboard**
+(GapBench arms, per-task answers). Live mode stays off and refuses politely until Sandboxes
+access and an access code are configured. Browser test: `pytest -m e2e tests/e2e`.
 
 ## Scope rule
 

@@ -127,3 +127,9 @@ async def test_adopted_checkpoints_are_not_rebuilt(tmp_path, spec):
     b = await second.run_branch({"alpha": "2.0"})
     assert b.status == BranchStatus.succeeded and b.parent_checkpoint == loaded
     assert second.cost.setup_runs == 0  # nothing rebuilt or reloaded
+
+
+async def test_failed_branch_keeps_its_label(tmp_path, spec):
+    orch = make(tmp_path, spec)
+    b = await orch.run_branch({"fault": "--crash"}, label="screen fault=--crash")
+    assert b.status == BranchStatus.failed and b.note.startswith("screen fault=--crash | ")

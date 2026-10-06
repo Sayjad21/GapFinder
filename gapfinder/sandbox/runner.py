@@ -136,7 +136,7 @@ class Orchestrator:
         try:
             res = await self._exec(parent, cmd, {**env, "RUN_TAG": run_tag}, self.spec.run.timeout, files=files)
         except InfraError as exc:
-            branch.status, branch.note = BranchStatus.infra_error, str(exc)
+            branch.status, branch.note = BranchStatus.infra_error, _note(label, str(exc))
             self.events.emit("branch_finished", branch=branch.model_dump())
             return branch
         self.cost.add_run(res.resources.cost_usd)
@@ -144,7 +144,7 @@ class Orchestrator:
         if res.timed_out:
             branch.status = BranchStatus.timed_out
         elif res.exit_code != 0:
-            branch.status, branch.note = BranchStatus.failed, (res.stderr or res.stdout)[-1500:]
+            branch.status, branch.note = BranchStatus.failed, _note(label, (res.stderr or res.stdout)[-1500:])
         else:
             raw = res.stdout
             if self.spec.run.output != "stdout" and res.checkpoint:
@@ -155,12 +155,13 @@ class Orchestrator:
             try:
                 metrics = ground_values(parse_metrics(raw, self.spec.run.format), raw)
             except UngroundedValueError as exc:
-                metrics, branch.note = {}, str(exc)
+                metrics, branch.note = {}, _note(label, str(exc))
             if self.spec.metrics:
                 metrics = {k: v for k, v in metrics.items() if k in self.spec.metrics}
             if not metrics:
                 branch.status = BranchStatus.failed
-                branch.note = branch.note or f"no metrics parsed from output: {raw[-500:]!r}"
+                if branch.note == label:
+                    branch.note = _note(label, f"no metrics parsed from output: {raw[-500:]!r}")
             else:
                 branch.parsed_metrics, branch.status = metrics, BranchStatus.succeeded
         if res.checkpoint:
@@ -217,6 +218,11 @@ class Orchestrator:
             node.tag = f"{self.tag_prefix}/{tag}"
         self.tree.add(node)
         self.events.emit("checkpoint", node=node.__dict__)
+
+
+def _note(label: str | None, detail: str) -> str:
+    """Failure detail without losing the branch's label (the UI groups branches by it)."""
+    return f"{label} | {detail}" if label else detail
 
 
 def _tag() -> str:
