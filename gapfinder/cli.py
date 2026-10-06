@@ -3,6 +3,7 @@
     gapfinder ledger paper.pdf --repo <url|path> [--out runs/ledger]
     gapfinder repomap <path>
     gapfinder fanout --spec spec.yaml --knobs knobs.json [--noise 5] [--no-fork]
+    gapfinder search --spec spec.yaml --targets targets.json --assumptions assumptions.json
 """
 
 from __future__ import annotations
@@ -97,6 +98,40 @@ async def cmd_fanout(args) -> int:
     return 0
 
 
+async def cmd_search(args) -> int:
+    from gapfinder.ledger.schemas import Assumption
+    from gapfinder.report.gap_report import GapReport
+    from gapfinder.sandbox.backend import make_backend
+    from gapfinder.sandbox.cost import CostMeter
+    from gapfinder.sandbox.events import EventLog
+    from gapfinder.sandbox.runner import Orchestrator
+    from gapfinder.sandbox.spec import HarnessSpec
+    from gapfinder.search.engine import GapSearch, SearchConfig, Target
+
+    spec = HarnessSpec.load_yaml(args.spec)
+    targets = [Target(**t) for t in json.loads(Path(args.targets).read_text())]
+    raw = json.loads(Path(args.assumptions).read_text())
+    assumptions = [Assumption(**a) for a in (raw["assumptions"] if isinstance(raw, dict) else raw)]
+    run_dir = Path(args.out or settings().runs_dir / f"search-{spec.name}-{time.strftime('%Y%m%d-%H%M%S')}")
+    events = EventLog(run_dir / "events.jsonl")
+    orch = Orchestrator(make_backend(args.backend), spec, events, cost=CostMeter(cap_usd=args.cap),
+                        concurrency=args.concurrency, no_fork=args.no_fork)
+    events.emit("run_started", spec=spec.model_dump(), mode="search", no_fork=args.no_fork)
+    search = GapSearch(orch, targets, assumptions, SearchConfig(max_runs=args.max_runs))
+    results = await search.run()
+    await orch.tag_key_nodes()
+    report = GapReport.from_search(search, results, paper=args.paper or spec.name)
+    md, js = report.write(run_dir)
+    events.emit("run_finished", cost=orch.cost.summary(), runs=search.runs_used)
+    for r in results:
+        label = r.attribution.confidence_label if r.attribution else "Reproduced"
+        print(f"{r.target.claim_id}: {label}  {r.changes or ''}")
+    print(f"{search.runs_used} branch runs, {orch.cost.setup_runs} setups, sandbox ${orch.cost.sandbox_usd:.4f}"
+          f"{' (PARTIAL)' if report.partial else ''}")
+    print(f"report: {md}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="gapfinder")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -121,10 +156,22 @@ def main(argv: list[str] | None = None) -> int:
     pf.add_argument("--cap", type=float, default=None, help="dollar cap")
     pf.add_argument("--out")
 
+    ps = sub.add_parser("search", help="explain divergent claims: screen/confirm/combine/bisect/verify (M3)")
+    ps.add_argument("--spec", required=True)
+    ps.add_argument("--targets", required=True, help="JSON list of {claim_id, metric, paper_value, held_out}")
+    ps.add_argument("--assumptions", required=True, help="assumptions.json from `gapfinder ledger`, or a list")
+    ps.add_argument("--paper", help="paper name for the report title")
+    ps.add_argument("--max-runs", type=int, default=None, help="branch-run budget")
+    ps.add_argument("--no-fork", action="store_true", help="ablation: rebuild and reload for every branch")
+    ps.add_argument("--backend", default=None)
+    ps.add_argument("--concurrency", type=int, default=settings().max_concurrency)
+    ps.add_argument("--cap", type=float, default=None, help="dollar cap for this run")
+    ps.add_argument("--out")
+
     args = p.parse_args(argv)
     if args.cmd == "repomap":
         return cmd_repomap(args)
-    coro = cmd_ledger(args) if args.cmd == "ledger" else cmd_fanout(args)
+    coro = {"ledger": cmd_ledger, "fanout": cmd_fanout, "search": cmd_search}[args.cmd](args)
     return asyncio.run(coro)
 
 
