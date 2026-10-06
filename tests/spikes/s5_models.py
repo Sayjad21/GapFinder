@@ -14,6 +14,7 @@ from _common import ROOT, Check, need, save
 from pydantic import BaseModel
 
 from gapfinder.config import settings, tiers
+from gapfinder.models import budget
 from gapfinder.models.router import Router
 
 
@@ -36,12 +37,16 @@ async def main(long_tokens: int) -> None:
     listed = sorted(m.id for m in (await client.models.list()).data)
     nemotron = [m for m in listed if "emotron" in m]
     configured = {name: t.model_id for name, t in tiers().items()}
-    check("configured IDs exist", all(mid in listed for mid in configured.values()),
+    text_tiers = ("nano", "super", "ultra")
+    check("text tier IDs exist", all(configured[t] in listed for t in text_tiers),
           configured=configured, nemotron_listed=nemotron)
+    omni_ok = configured["omni"] in listed
+    if not omni_ok:
+        print(f"  [info] omni tier {configured['omni']} not offered; figure reading needs another vision model")
 
     router = Router(use_cache=False)
     per_tier = {}
-    for name in ("nano", "super", "ultra", "omni"):
+    for name in text_tiers + (("omni",) if omni_ok else ()):
         t0 = time.monotonic()
         try:
             out = await router.structured(name, [{"role": "user", "content": f"Parse this db_bench line:\n{LOG}"}], Extract)
@@ -72,7 +77,7 @@ async def main(long_tokens: int) -> None:
         long_ok, detail = False, {"error": repr(exc)[:800]}
     check(f"ultra ~{long_tokens // 1000}K-token prompt", long_ok, s=round(time.monotonic() - t0, 1), **detail)
 
-    save("S5", {"pass": check.all_ok, "base_url": s.token_factory_base_url, "models_listed": listed,
+    save("S5", {"pass": check.all_ok, "omni_available": omni_ok, "spend": budget.summary(), "base_url": s.token_factory_base_url, "models_listed": listed,
                 "usage": router.meter.summary(), "checks": check.items})
 
 
