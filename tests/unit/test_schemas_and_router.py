@@ -126,3 +126,53 @@ async def test_structured_repairs_once(tmp_path):
     r = Router(transport=transport, cache=ResponseCache(tmp_path))
     out = await r.structured("nano", [{"role": "user", "content": "q"}], Out)
     assert out.n == 3 and len(calls) == 2
+
+
+async def test_budget_refuses_call_that_could_cross_cap(tmp_path, monkeypatch):
+    from gapfinder.models import budget
+
+    monkeypatch.setenv("GF_SPEND_CAP_USD", "0.01")
+    transport, calls = _fake(['{"x": 1}'])
+    r = Router(transport=transport, cache=ResponseCache(tmp_path))
+    # ultra worst case: 32768 output tokens x $3/M = ~$0.098 > $0.01 cap
+    with pytest.raises(budget.BudgetExceeded):
+        await r.complete("ultra", [{"role": "user", "content": "hi"}])
+    assert calls == []  # refused before any request was sent
+
+
+async def test_spend_is_recorded_and_doubling_happens_once(tmp_path):
+    from gapfinder.models import budget
+
+    transport, calls = _fake(["<think>no answer"])
+    r = Router(transport=transport, cache=ResponseCache(tmp_path))
+    with pytest.raises(EmptyAnswerError):
+        await r.complete("nano", [{"role": "user", "content": "hi"}])
+    assert len(calls) == 2 and calls[1]["max_tokens"] == 2 * calls[0]["max_tokens"]
+    assert budget.spent_usd() == pytest.approx(2 * (100 * 0.06 + 50 * 0.24) / 1e6)
+
+
+async def test_fatal_errors_not_retried(tmp_path):
+    class Unauthorized(Exception):
+        status_code = 401
+
+    n = {"calls": 0}
+
+    async def transport(*a):
+        n["calls"] += 1
+        raise Unauthorized("invalid api key")
+
+    r = Router(transport=transport, cache=ResponseCache(tmp_path))
+    with pytest.raises(Unauthorized):
+        await r.complete("nano", [{"role": "user", "content": "hi"}])
+    assert n["calls"] == 1
+
+
+async def test_cache_only_mode_never_calls_api(tmp_path, monkeypatch):
+    from gapfinder.models.router import CacheMiss
+
+    monkeypatch.setenv("GF_CACHE_ONLY", "1")
+    transport, calls = _fake(['{"x": 1}'])
+    r = Router(transport=transport, cache=ResponseCache(tmp_path))
+    with pytest.raises(CacheMiss):
+        await r.complete("nano", [{"role": "user", "content": "hi"}])
+    assert calls == []

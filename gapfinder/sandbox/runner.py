@@ -17,6 +17,7 @@ import itertools
 import uuid as uuidlib
 
 from gapfinder.ledger.schemas import Branch, BranchStatus, Layer
+from gapfinder.models import budget
 from gapfinder.sandbox.backend import InfraError, RunResult, SandboxBackend
 from gapfinder.sandbox.cost import CostMeter
 from gapfinder.sandbox.events import EventLog
@@ -60,6 +61,7 @@ class Orchestrator:
     async def _exec(self, parent: str, shell: str, env: dict, timeout: float, disposable: bool = False) -> RunResult:
         last: Exception | None = None
         for attempt in range(self.infra_retries + 1):
+            budget.check(0.0, "sandbox run")  # sandbox cost isn't known up front: stop once the cap is reached
             try:
                 async with self.sem:
                     self.running += 1

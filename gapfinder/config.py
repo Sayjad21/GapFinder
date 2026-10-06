@@ -49,11 +49,22 @@ DEFAULT_TIERS = {
 }
 
 
+def _live_prices() -> dict[str, tuple[float, float]]:
+    """Per-1M-token prices saved from the provider's /models?verbose=true (scripts/check_env.py writes it)."""
+    import json
+
+    path = Path(os.environ.get("GF_CACHE_DIR", REPO_ROOT / ".gf_cache")) / "pricing.json"
+    if not path.exists():
+        return {}
+    return {k: (v[0], v[1]) for k, v in json.loads(path.read_text()).items()}
+
+
 def tiers() -> dict[str, ModelTier]:
-    out = {}
+    out, live = {}, _live_prices()
     for name, tier in DEFAULT_TIERS.items():
-        override = os.environ.get(f"GF_MODEL_{name.upper()}")
-        out[name] = ModelTier(name, override, tier.price_in, tier.price_out, tier.max_tokens) if override else tier
+        model_id = os.environ.get(f"GF_MODEL_{name.upper()}") or tier.model_id
+        price_in, price_out = live.get(model_id, (tier.price_in, tier.price_out))
+        out[name] = ModelTier(name, model_id, price_in, price_out, tier.max_tokens)
     return out
 
 

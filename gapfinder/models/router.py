@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from typing import Any, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from gapfinder.config import ModelTier, settings, tiers
+from gapfinder.models import budget
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -38,6 +40,10 @@ class EmptyAnswerError(RuntimeError):
 
 class BadJSONError(RuntimeError):
     pass
+
+
+class CacheMiss(RuntimeError):
+    """GF_CACHE_ONLY=1 and the answer isn't cached: refuse rather than spend."""
 
 
 # ------------------------------------------------------------ response parsing
@@ -209,9 +215,14 @@ class Router:
         if self.use_cache and (hit := self.cache.get(key)):
             self.meter.record(tier, hit.get("usage") or {}, 0.0, cached=True)
             return hit["reasoning"], hit["answer"], hit
+        if os.environ.get("GF_CACHE_ONLY") == "1":
+            raise CacheMiss(f"{tier}: not in cache and GF_CACHE_ONLY=1, so no paid call was made")
 
         last_exc: Exception | None = None
+        doubled = False
+        prompt_est = budget.estimate_prompt_tokens(messages)
         for attempt in range(4):
+            budget.check((prompt_est * t.price_in + max_tokens * t.price_out) / 1e6, f"{tier} call")
             start = time.monotonic()
             try:
                 raw = await self._transport(t.model_id, messages, max_tokens, response_format)
@@ -219,6 +230,8 @@ class Router:
                 if _is_schema_rejection(exc) and response_format is not None:
                     response_format = {"type": "json_object"}  # endpoint lacks json_schema support
                     continue
+                if _is_fatal(exc):  # bad key, no funds, unknown model: retrying won't help
+                    raise
                 last_exc = exc
                 await asyncio.sleep(min(2**attempt, 20))
                 continue
@@ -226,10 +239,14 @@ class Router:
             reasoning, answer = split_reasoning(msg.get("content"), msg.get("reasoning_content"))
             usage = raw.get("usage") or {}
             self.meter.record(tier, usage, time.monotonic() - start, cached=False)
+            budget.record("llm", _usage_cost(usage, t), tier=tier, model=t.model_id,
+                          prompt_tokens=usage.get("prompt_tokens"), completion_tokens=usage.get("completion_tokens"))
             if not answer:
-                # Budget eaten by reasoning: double the limit once before giving up.
+                # Budget eaten by reasoning: double the limit once, then give up.
                 last_exc = EmptyAnswerError(f"{tier}: empty content at max_tokens={max_tokens}")
-                max_tokens *= 2
+                if doubled:
+                    break
+                max_tokens, doubled = max_tokens * 2, True
                 continue
             record = {"reasoning": reasoning, "answer": answer, "usage": usage, "model": t.model_id}
             if self.use_cache:
@@ -258,6 +275,17 @@ class Router:
             ]
             _, answer, _ = await self.complete(tier, repair, schema=schema, max_tokens=max_tokens)
             return model.model_validate(extract_json(answer))
+
+
+def _usage_cost(usage: dict, tier: ModelTier) -> float:
+    return ((usage.get("prompt_tokens") or 0) * tier.price_in + (usage.get("completion_tokens") or 0) * tier.price_out) / 1e6
+
+
+def _is_fatal(exc: Exception) -> bool:
+    if isinstance(exc, budget.BudgetExceeded):
+        return True
+    status = getattr(exc, "status_code", None)
+    return status in (400, 401, 402, 403, 404) and not _is_schema_rejection(exc)
 
 
 def _is_schema_rejection(exc: Exception) -> bool:

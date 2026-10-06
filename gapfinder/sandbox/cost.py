@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from gapfinder.models import budget
 from gapfinder.models.router import TokenMeter
 
 
@@ -20,6 +21,8 @@ class CostMeter:
     tokens: TokenMeter = field(default_factory=TokenMeter)
 
     def add_run(self, cost_usd: float, *, setup: bool = False) -> None:
+        if cost_usd:
+            budget.record("sandbox", cost_usd, setup=setup)
         self.sandbox_usd += cost_usd
         self.sandbox_runs += 1
         self.setup_runs += int(setup)
