@@ -9,6 +9,7 @@ p.add_argument("--alpha", type=float, default=1.0)   # the planted default
 p.add_argument("--beta", type=float, default=0.5)    # decoy: moves score the wrong way
 p.add_argument("--gamma", type=float, default=1.0)   # only matters together with CACHE=on
 p.add_argument("--noise", type=float, default=0.0)   # injected noise sigma (fraction)
+p.add_argument("--threads", type=int, default=1)     # no effect on any metric (bisect must drop it)
 p.add_argument("--crash", action="store_true")
 p.add_argument("--hang", action="store_true")
 p.add_argument("--garbage", action="store_true")

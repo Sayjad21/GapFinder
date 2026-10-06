@@ -25,6 +25,8 @@ EVENT_TYPES = {
     "noise_band",
     "cost",
     "note",
+    "round",
+    "attribution",
     "run_finished",
 }
 

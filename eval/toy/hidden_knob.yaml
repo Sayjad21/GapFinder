@@ -3,7 +3,7 @@ base: local:hidden_knob
 build: {command: "bash build.sh {build_mode}", timeout: 60}
 load:  {command: '"${PYTHON:-python3}" load.py {num_rows}', timeout: 60}
 run:
-  command: '"${PYTHON:-python3}" bench.py --alpha {alpha} --beta {beta} --gamma {gamma} --noise {noise} {fault}'
+  command: '"${PYTHON:-python3}" bench.py --alpha {alpha} --beta {beta} --gamma {gamma} --noise {noise} --threads {threads} {fault}'
   output: out/run.log
   format: kv
   timeout: 30
@@ -15,6 +15,8 @@ knobs:
   gamma:      {layer: config, default: "1.0", candidates: ["2.0"]}
   noise:      {layer: config, default: "0.0"}
   fault:      {layer: config, default: ""}
+  threads:    {layer: config, default: "1", candidates: ["4"]}
+  LOG_LEVEL:  {layer: environment, default: info, env: true, candidates: [debug]}
   CACHE:      {layer: environment, default: "off", env: true, candidates: ["on"]}
 allowed_paths: ["out/", "configs/"]
 metrics: [score, write_amp]

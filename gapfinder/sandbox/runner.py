@@ -23,7 +23,7 @@ from gapfinder.sandbox.cost import CostMeter
 from gapfinder.sandbox.events import EventLog
 from gapfinder.sandbox.noise import NoiseBand, noise_band, starved
 from gapfinder.sandbox.parse import UngroundedValueError, ground_values, parse_metrics
-from gapfinder.sandbox.spec import HarnessSpec
+from gapfinder.sandbox.spec import HarnessSpec, diff_guard
 from gapfinder.sandbox.tree import CheckpointTree, Node
 
 BUILD_LAYERS = {Layer.build.value}
@@ -58,7 +58,8 @@ class Orchestrator:
         self.max_running_seen = 0
 
     # ------------------------------------------------------------- stages
-    async def _exec(self, parent: str, shell: str, env: dict, timeout: float, disposable: bool = False) -> RunResult:
+    async def _exec(self, parent: str, shell: str, env: dict, timeout: float, disposable: bool = False,
+                    files: dict[str, bytes] | None = None) -> RunResult:
         last: Exception | None = None
         for attempt in range(self.infra_retries + 1):
             budget.check(0.0, "sandbox run")  # sandbox cost isn't known up front: stop once the cap is reached
@@ -67,7 +68,8 @@ class Orchestrator:
                     self.running += 1
                     self.max_running_seen = max(self.max_running_seen, self.running)
                     try:
-                        return await self.backend.run(parent, shell, env=env, timeout=timeout, disposable=disposable)
+                        return await self.backend.run(parent, shell, env=env, timeout=timeout,
+                                                      disposable=disposable, files=files)
                     finally:
                         self.running -= 1
             except InfraError as exc:
@@ -112,10 +114,18 @@ class Orchestrator:
             return res.checkpoint
 
     # ------------------------------------------------------------ branches
-    async def run_branch(self, changes: dict[str, str], *, label: str | None = None) -> Branch:
+    async def run_branch(self, changes: dict[str, str], *, label: str | None = None,
+                         files: dict[str, bytes] | None = None) -> Branch:
+        """Run one branch. `files` (e.g. a config fix proposed by a model) pass the diff guard first:
+        anything outside the spec's allowed_paths is algorithm code and the branch is rejected unrun."""
         bid = f"B{next(self._ids):04d}"
         self.spec.values(changes)  # validates knob names
         run_tag = _tag()
+        if files and (bad := diff_guard(list(files), self.spec.allowed_paths)):
+            branch = Branch(id=bid, parent_checkpoint="-", knob_changes=changes, command="-", run_tag=run_tag,
+                            status=BranchStatus.rejected, note=f"diff guard: edits outside allowed paths: {bad}")
+            self.events.emit("branch_finished", branch=branch.model_dump())
+            return branch
         # build/dataset changes are handled by stage(): it keys checkpoints on them
         parent = await self.stage("loaded", changes)
         cmd, env = self.spec.render(self.spec.run, changes)
@@ -124,7 +134,7 @@ class Orchestrator:
         self.events.emit("branch_created", branch=branch.model_dump())
         self.events.emit("branch_started", id=bid)
         try:
-            res = await self._exec(parent, cmd, {**env, "RUN_TAG": run_tag}, self.spec.run.timeout)
+            res = await self._exec(parent, cmd, {**env, "RUN_TAG": run_tag}, self.spec.run.timeout, files=files)
         except InfraError as exc:
             branch.status, branch.note = BranchStatus.infra_error, str(exc)
             self.events.emit("branch_finished", branch=branch.model_dump())
