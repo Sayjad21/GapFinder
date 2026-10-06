@@ -10,9 +10,11 @@ then forks one branch per hypothesis from that exact checkpoint. The output
 is a Gap Report: per-claim attributions with evidence, noise bands, and
 replayable checkpoint IDs. It says "unexplained" when it should.
 
-> Status: **M0 (feasibility) in progress.** See the
-> [implementation plan](docs/PLAN.md) and the spike runbook in
-> [`tests/spikes/`](tests/spikes/README.md).
+> Status: M0 spikes S5 and S7 pass; M1 ledger meets its bars on RusKey; M3
+> search passes all nine planted toy behaviours; GapBench-mini dev set: 4/4
+> solved with 0 false attributions. Waiting on Sandboxes Beta access for the
+> sandbox spikes (S1-S4) and the RusKey end-to-end run.
+> Plan: [docs/PLAN.md](docs/PLAN.md) · spikes: [tests/spikes/](tests/spikes/README.md).
 
 ## What works today
 
@@ -28,6 +30,10 @@ replayable checkpoint IDs. It says "unexplained" when it should.
 | Grounded metric parser (db_bench, RocksDB stats, kv, JSONL), noise band (2×MAD), cost meter, JSONL event log + replay | `gapfinder/sandbox/` | tested |
 | mini-swe-agent baseline adapter (same sandbox, linear history) | `eval/baseline/` | tested on local |
 | RusKey gold ledger / assumptions (draft), S6 gap check | `papers/ruskey/` | draft, needs author review |
+| Search loop: screen, confirm, combine, bisect, verify (counterfactual, held-out, evidence) | `gapfinder/search/` | 9/9 toy behaviours |
+| Gap Report (Markdown + JSON, replay recipes) | `gapfinder/report/` | done |
+| Spend cap + ledger for every paid call, including the baseline agent | `gapfinder/models/budget.py` | done |
+| GapBench-mini: RL + tabular artifacts, task generator, leakage check, harness, scorer | `eval/gapbench/` | 4 dev tasks; test tasks pending |
 
 ## Quick start (no credentials needed)
 
