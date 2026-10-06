@@ -60,6 +60,7 @@ class SearchConfig:
     partial_frac: float = 0.5  # "partially explained" needs at least this share of the gap closed
     verify_candidates: int = 3  # best configurations taken through verification
     max_runs: int | None = None  # branch-run budget; None = unlimited
+    verify: bool = True  # ablation: False labels any gap-closing config "Explained" without checks
 
 
 @dataclass(frozen=True)
@@ -274,22 +275,23 @@ class GapSearch:
             await self.measure(changes, self.cfg.confirm_repeats, "confirm-minimal")
         r.changes, r.gap_after = dict(changes), self.gap(t, changes)
 
+        # The no-verification ablation skips 5a-5c and accepts whatever closes the gap.
         # 5a. counterfactual: revert each knob; the gap must come back
-        for knob in changes:
+        for knob in changes if self.cfg.verify else ():
             without = {k: v for k, v in changes.items() if k != knob}
             if without:
                 await self.measure(without, 1, "counterfactual")
             g_without = self.gap(t, without)
             r.counterfactual[knob] = {"gap_without": g_without, "ok": gap_returns(r.gap_after, g_without, band)}
         # 5b. held-out: every other claim must not get worse beyond its noise
-        for other in self.targets:
+        for other in self.targets if self.cfg.verify else ():
             if other.claim_id == t.claim_id:
                 continue
             before, after = self.gap(other, {}), self.gap(other, changes)
             r.held_out[other.claim_id] = {"gap_before": before, "gap_after": after,
                                           "ok": after is not None and held_out_ok(before, after, self.band(other))}
         # 5c. plausibility: the value needs evidence, not just a good fit
-        for knob, value in changes.items():
+        for knob, value in changes.items() if self.cfg.verify else ():
             r.plausibility[knob] = plausible(self.assumptions.get(knob), value)
 
         cf_ok = all(v["ok"] for v in r.counterfactual.values())

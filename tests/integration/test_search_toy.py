@@ -159,3 +159,10 @@ async def test_report_renders_full_card(tmp_path):
     s, results = await search(tmp_path, {"alpha": "2.0"})
     md = GapReport.from_search(s, results, paper="toy").to_markdown()
     assert "Explained" in md and "Counterfactual" in md and "Replay: fork checkpoint" in md
+
+
+async def test_no_verify_ablation_accepts_overfit(tmp_path):
+    """Without the checks, the absurd value that merely fits is called 'Explained'."""
+    s, [r] = await search(tmp_path, {"alpha": "50.0"}, verify=False)
+    assert r.changes == {"alpha": "50.0"} and r.attribution.confidence_label == "Explained"
+    assert r.counterfactual == {} and r.plausibility == {}
