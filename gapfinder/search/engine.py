@@ -57,6 +57,8 @@ class SearchConfig:
     effect_threshold: float = 1.0  # noise units needed to survive screen/confirm
     noise_floor_frac: float = 0.01  # band never below 1% of the metric (MAD can be 0 for discrete metrics)
     combine_top: int = 4
+    confirm_prior_min: float = 0.8  # hypotheses this likely (or paper-vs-code mismatches) always get confirmed
+    combine_prior_top: int = 2  # also pair the ledger's highest-prior knobs (interactions score ~0 alone)
     partial_frac: float = 0.5  # "partially explained" needs at least this share of the gap closed
     verify_candidates: int = 3  # best configurations taken through verification
     max_runs: int | None = None  # branch-run budget; None = unlimited
@@ -168,8 +170,12 @@ class GapSearch:
         return results
 
     def hypotheses(self) -> list[Hypothesis]:
+        """One hypothesis per (knob, candidate value). A knob whose value the paper states and the
+        code already uses can't cause the gap (the naive run already matches the paper there)."""
         out = []
-        for knob, a in list(self.assumptions.items())[: self.cfg.screen_top_k]:
+        open_knobs = [(k, a) for k, a in self.assumptions.items()
+                      if a.status != AssumptionStatus.stated_matches.value]
+        for knob, a in open_knobs[: self.cfg.screen_top_k]:
             default = self.spec.knobs[knob].default
             values = [v for v in a.candidate_values if v != default] or [
                 v for v in self.spec.knobs[knob].candidates if v != default]
@@ -209,14 +215,16 @@ class GapSearch:
         score = {h: self.units(t, h.changes) for h in hyps}
         res.screen = [{"knob": h.knob, "value": h.value, "assumption": h.assumption_id,
                        "units": round(score[h], 2), "gap": self.gap(t, h.changes)} for h in hyps]
-        survivors = [h for h in hyps if score[h] >= thr]
+        # strong leads from the ledger skip pruning: one noisy screen run shouldn't discard them
+        survivors = [h for h in hyps if score[h] >= thr or self._strong_lead(h)]
         for h in hyps:
             self.orch.events.emit("survivor" if h in survivors else "pruned", claim=t.claim_id,
                                   knob=h.knob, value=h.value, units=round(score[h], 2), round="screen")
         self.orch.events.emit("round", name="screen", claim=t.claim_id, tested=len(hyps), survivors=len(survivors))
 
         # 2. confirm: survivors get repeats; effects that fade are pruned
-        await asyncio.gather(*(self.measure(h.changes, self.cfg.confirm_repeats, "confirm") for h in survivors))
+        reps = self.confirm_repeats(t)
+        await asyncio.gather(*(self.measure(h.changes, reps, "confirm") for h in survivors))
         confirmed = [h for h in survivors if self.units(t, h.changes) >= thr]
         self.orch.events.emit("round", name="confirm", claim=t.claim_id, confirmed=len(confirmed))
 
@@ -227,6 +235,10 @@ class GapSearch:
             best_value.setdefault(h.knob, h)
         prior = {k: self.assumptions[k].prior_score for k in best_value}
         top = sorted(best_value.values(), key=lambda h: (-score[h], -prior[h.knob], h.knob))[: self.cfg.combine_top]
+        # knobs that matter only together score ~0 alone, so also pair the ledger's highest-prior knobs
+        for h in sorted(best_value.values(), key=lambda h: (-prior[h.knob], h.knob))[: self.cfg.combine_prior_top]:
+            if h not in top:
+                top.append(h)
         combos: list[Changes] = []
         conf_knobs = {}
         for h in sorted(confirmed, key=lambda h: -self.units(t, h.changes)):
@@ -240,12 +252,17 @@ class GapSearch:
         await asyncio.gather(*(self.measure(c, 1, "combine") for c in combos))
         tried.update(frozenset(c.items()) for c in combos)
         good_combos = [c for c in combos if self.units(t, c) >= thr]
-        await asyncio.gather(*(self.measure(c, self.cfg.confirm_repeats, "confirm-combo") for c in good_combos))
+        await asyncio.gather(*(self.measure(c, reps, "confirm-combo") for c in good_combos))
         self.orch.events.emit("round", name="combine", claim=t.claim_id, tried=len(combos), kept=len(good_combos))
 
         # candidates: confirmed singles and combos, closest to the paper first
         candidates = [h.changes for h in confirmed] + [c for c in good_combos if self.units(t, c) >= thr]
-        candidates.sort(key=lambda c: (abs(self.gap(t, c)), len(c), sorted(c.items())))
+        # closes fully > closes at least half > the rest; evidence-backed first within each tier
+        def tier(c: Changes) -> int:
+            g, g0 = abs(self.gap(t, c)), abs(res.gap_before)
+            return 0 if g <= res.band else 1 if g0 - g >= self.cfg.partial_frac * g0 else 2
+        candidates.sort(key=lambda c: (tier(c), not self._supported(c), abs(self.gap(t, c)), len(c),
+                                       sorted(c.items())))
         best: ClaimResult | None = None
         for c in candidates[: self.cfg.verify_candidates]:
             trial = await self._verify(t, c, res)
@@ -272,7 +289,7 @@ class GapSearch:
                 await self.measure(sub, 1, "bisect")
                 return closes(sub)
             changes = await minimal_set(changes, still_closes)
-            await self.measure(changes, self.cfg.confirm_repeats, "confirm-minimal")
+            await self.measure(changes, self.confirm_repeats(t), "confirm-minimal")
         r.changes, r.gap_after = dict(changes), self.gap(t, changes)
 
         # The no-verification ablation skips 5a-5c and accepts whatever closes the gap.
@@ -307,6 +324,8 @@ class GapSearch:
                 label = ConfidenceLabel.inconsistency
             else:
                 label = ConfidenceLabel.explained
+        elif reduced and ho_ok and not plaus_ok:
+            label = ConfidenceLabel.fits_but_unsupported
         elif reduced and ho_ok:
             label = ConfidenceLabel.partially_explained
             if closes(changes) and not cf_ok:
@@ -328,6 +347,18 @@ class GapSearch:
         return r
 
     # -------------------------------------------------------------- helpers
+    def confirm_repeats(self, t: Target) -> int:
+        """Noisy metrics (run-to-run CV above 5%) get two extra repeats."""
+        return self.cfg.confirm_repeats + (2 if self.bands[t.metric].cv > 0.05 else 0)
+
+    def _strong_lead(self, h: Hypothesis) -> bool:
+        a = self.assumptions.get(h.knob)
+        return a is not None and (a.prior_score >= self.cfg.confirm_prior_min
+                                  or a.status == AssumptionStatus.stated_code_differs.value)
+
+    def _supported(self, changes: Changes) -> bool:
+        return all(plausible(self.assumptions.get(k), v).supported for k, v in changes.items())
+
     def _attribution(self, t: Target, changes: Changes, gap_after: float, label: ConfidenceLabel,
                      checkpoints: list[str], held: dict | None = None, cf_ok: bool | None = None) -> Attribution:
         aset = [f"{self.assumptions[k].id if k in self.assumptions else '?'}:{k}={v}" for k, v in changes.items()]
