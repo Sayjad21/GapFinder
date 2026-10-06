@@ -39,9 +39,11 @@ async def cmd_ledger(args) -> int:
     router = Router(use_cache=not args.no_cache)
 
     claims = await extract_claims(router, paper)
+    _write(out / "raw" / "claims.json", [c.model_dump() for c in claims])  # pre-grounding, for offline re-grounding
     crep = ground_claims(paper, claims)
     _write(out / "claim_ledger.json", ClaimLedger(paper=str(args.paper), claims=crep.kept).model_dump())
     assumptions = await build_assumption_space(router, paper, rm, crep.kept)
+    _write(out / "raw" / "assumptions.json", [a.model_dump() for a in assumptions])
     arep = ground_assumptions(paper, repo_root, assumptions)
     _write(out / "assumptions.json", AssumptionSpace(paper=str(args.paper), repo=args.repo,
                                                      assumptions=arep.kept).model_dump())

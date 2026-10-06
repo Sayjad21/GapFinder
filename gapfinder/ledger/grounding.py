@@ -54,6 +54,17 @@ class Grounder:
             return q in window
         return q in self.paper
 
+    def find_page(self, quote: str) -> int | None:
+        """The page a quote actually starts on (models often cite section numbers as pages)."""
+        q = normalise(quote)
+        for n in sorted(self.pages):
+            if q in self.pages[n]:
+                return n
+        for n in sorted(self.pages):  # quote straddles a page break
+            if q in self.pages[n] + " " + self.pages.get(n + 1, ""):
+                return n
+        return None
+
     def code_ref_ok(self, ref: str, must_contain: str | None, quote: str | None = None) -> bool:
         if self.repo_root is None:
             return False
@@ -81,8 +92,7 @@ class Grounder:
     # -- objects ------------------------------------------------------------
     def evidence_ok(self, ev: Evidence, knob: str | None = None) -> bool:
         if ev.kind == "paper":
-            page = _page_of(ev.ref)
-            return self.quote_in_paper(ev.quote, page)
+            return self.quote_in_paper(ev.quote)  # page refs are corrected separately (fix_page)
         if ev.kind == "code":
             return self.code_ref_ok(ev.ref, knob)
         # web and measurement evidence are checked by their producers
@@ -91,21 +101,34 @@ class Grounder:
     def check_claims(self, claims: list[Claim]) -> GroundingReport:
         rep = GroundingReport()
         for c in claims:
-            if self.quote_in_paper(c.quote, c.page) or self.quote_in_paper(c.quote):
-                rep.kept.append(c)
+            if self.quote_in_paper(c.quote):
+                page = self.find_page(c.quote)
+                rep.kept.append(c.model_copy(update={"page": page}) if page and page != c.page else c)
             else:
                 rep.dropped.append((c.id, "quote not found in paper"))
         return rep
+
+    def fix_page(self, ev: Evidence) -> Evidence:
+        if ev.kind != "paper" or not self.pages:
+            return ev
+        page = self.find_page(ev.quote)
+        return ev.model_copy(update={"ref": f"p.{page}"}) if page else ev
 
     def check_assumptions(self, assumptions: list[Assumption]) -> GroundingReport:
         """Drop ungrounded evidence; drop an assumption whose evidence is all ungrounded."""
         rep = GroundingReport()
         for a in assumptions:
-            good = [e for e in a.evidence if self.evidence_ok(e, a.knob)]
+            good = [self.fix_page(e) for e in a.evidence if self.evidence_ok(e, a.knob)]
             if a.evidence and not good:
                 rep.dropped.append((a.id, "no grounded evidence"))
                 continue
-            rep.kept.append(a.model_copy(update={"evidence": good}))
+            update = {"evidence": good}
+            # A value "stated in the paper" needs a grounded paper quote; otherwise it's unstated.
+            stated = not a.paper_value.strip().lower().startswith("unstated")
+            if stated and not any(e.kind == "paper" for e in good):
+                update.update(paper_value="unstated", status="unstated")
+                rep.dropped.append((a.id, f"paper_value {a.paper_value!r} had no paper quote; set to unstated"))
+            rep.kept.append(a.model_copy(update=update))
         return rep
 
 

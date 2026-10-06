@@ -133,3 +133,39 @@ def test_grounding_tolerates_pdf_hyphen_and_math_spacing():
     g = Grounder("in the read-\nheavy workload Lerp selects 𝐾= 4 on the balanced workload")
     assert g.quote_in_paper("in the read-heavy workload Lerp selects K = 4 on the balanced")
     assert not g.quote_in_paper("in the read-heavy workload Lerp selects K = 5 on the balanced")
+
+
+@pytest.mark.parametrize("paper,code,expected", [
+    ("unstated", "64", "unstated"),
+    ("100000000", "100000000", "stated_matches"),
+    ("100 million", "100000000", "stated_matches"),
+    ("2MB", "2097152", "stated_matches"),
+    ("true", "false", "stated_code_differs"),
+    ("8", "8.0", "stated_matches"),
+    ("4", "8", "stated_code_differs"),
+    ("DDPG actor", "greedy critic", "stated_code_differs"),  # unparseable: model's label kept
+])
+def test_derive_status(paper, code, expected):
+    from gapfinder.ledger.assumptions import derive_status
+
+    assert derive_status(paper, code, "stated_code_differs") == expected
+
+
+def test_stated_paper_value_needs_paper_quote(repo):
+    g = Grounder(PAPER, repo)
+    a = Assumption(id="A9", knob="write_buffer_size", layer="config", paper_value="64", prior_score=0.5,
+                   status="stated_matches",
+                   evidence=[Evidence(kind="code", ref="opts.h:2", quote="write_buffer_size")])
+    rep = g.check_assumptions([a])
+    assert rep.kept[0].paper_value == "unstated" and rep.kept[0].status == "unstated"
+
+
+def test_wrong_page_ref_is_corrected_not_rejected(repo):
+    pages = {1: "intro text here", 2: "We set the memory buffer size to 2MB for all runs."}
+    g = Grounder(" ".join(pages.values()), repo, pages=pages)
+    a = Assumption(id="A1", knob="write_buffer_size", layer="config", paper_value="2 MB", prior_score=0.5,
+                   evidence=[Evidence(kind="paper", ref="p.7", quote="set the memory buffer size to 2MB")])
+    kept = g.check_assumptions([a]).kept[0]
+    assert kept.paper_value == "2 MB" and kept.evidence[0].ref == "p.2"
+    c = g.check_claims([_claim("set the memory buffer size to 2MB")]).kept[0]
+    assert c.page == 2

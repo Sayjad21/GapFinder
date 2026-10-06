@@ -21,7 +21,7 @@ CODE_EXT = {".cc", ".cpp", ".c", ".h", ".hpp", ".py", ".rs", ".go", ".java"}
 # gflags: DEFINE_int32(name, default, "help")
 _GFLAGS_RE = re.compile(r"\bDEFINE_(bool|int32|int64|uint32|uint64|double|string)\s*\(\s*(\w+)\s*,\s*([^,]+?)\s*,")
 # argparse: add_argument("--name", ..., default=X)
-_ARGPARSE_RE = re.compile(r"add_argument\(\s*['\"](--?[\w-]+)['\"](.*?)\)\s*$", re.DOTALL)
+_ARGPARSE_RE = re.compile(r"add_argument\(\s*['\"](--?[\w-]+)['\"](.*)$")
 _DEFAULT_RE = re.compile(r"default\s*=\s*([^,)]+)")
 # CMake: option(NAME "help" ON)
 _CMAKE_OPT_RE = re.compile(r"^\s*option\s*\(\s*(\w+)\s+\"[^\"]*\"\s+(\w+)", re.IGNORECASE)
@@ -31,6 +31,9 @@ _MAKE_VAR_RE = re.compile(r"^\s*([A-Z][A-Z0-9_]+)\s*\??=\s*(.*)$")
 _OPTION_FIELD_RE = re.compile(
     r"^\s*(?:bool|int|int32_t|int64_t|uint32_t|uint64_t|size_t|double|std::string)\s+(\w+)\s*=\s*([^;]+);"
 )
+# Usage/help text: "  --rate_limit_mb N        cap compaction bandwidth (default 0)"
+_USAGE_RE = re.compile(r"^\s{1,8}(--[a-z][\w-]*)(\s+[A-Z][A-Z0-9,.]*)?\s{2,}(.*?)\s*$")
+_USAGE_DEFAULT_RE = re.compile(r"\(default:?\s*([^)]*)\)|\bdefault:?\s+([^\s,;)]+)")
 # getenv("NAME")
 _ENV_RE = re.compile(r"""(?:getenv|environ\.get|environ\[)\s*\(?\s*['"]([A-Z][A-Z0-9_]+)['"]""")
 
@@ -39,7 +42,7 @@ _ENV_RE = re.compile(r"""(?:getenv|environ\.get|environ\[)\s*\(?\s*['"]([A-Z][A-
 class Flag:
     name: str
     default: str | None
-    kind: str  # gflags | argparse | cmake | make | option_field | env
+    kind: str  # gflags | argparse | cmake | make | option_field | usage | env
     file: str  # repo-relative, posix
     line: int
     text: str  # the declaring line, verbatim
@@ -47,6 +50,9 @@ class Flag:
     @property
     def ref(self) -> str:
         return f"{self.file}:{self.line}"
+
+
+_KIND_RANK = {"gflags": 0, "usage": 0, "option_field": 1, "cmake": 1, "make": 2, "argparse": 3, "env": 4}
 
 
 @dataclass
@@ -78,8 +84,10 @@ class RepoMap:
         return "\n".join(lines)
 
     def find_flag(self, name: str) -> list[Flag]:
+        """Definitions first: a binary's own flag beats a wrapper script that passes it."""
         norm = name.lstrip("-").replace("-", "_").lower()
-        return [f for f in self.flags if f.name.lstrip("-").replace("-", "_").lower() == norm]
+        hits = [f for f in self.flags if f.name.lstrip("-").replace("-", "_").lower() == norm]
+        return sorted(hits, key=lambda f: _KIND_RANK.get(f.kind, 9))
 
 
 def clone_or_path(repo: str, dest: Path) -> Path:
@@ -135,11 +143,18 @@ def _scan_flags(path: Path, rel: str) -> list[Flag]:
     out: list[Flag] = []
     is_py = path.suffix == ".py"
     is_header = path.suffix in {".h", ".hpp"}
-    for i, line in enumerate(text.splitlines(), start=1):
+    lines = text.splitlines()
+    for i, line in enumerate(lines, start=1):
         if m := _GFLAGS_RE.search(line):
             out.append(Flag(m.group(2), m.group(3).strip(), "gflags", rel, i, line.strip()))
         elif is_py and "add_argument" in line and (m := _ARGPARSE_RE.search(line.strip())):
-            d = _DEFAULT_RE.search(m.group(2))
+            # the call may continue over the next lines: look for default= up to the closing paren
+            window = m.group(2)
+            for nxt in lines[i : i + 3]:
+                if ")" in window:
+                    break
+                window += " " + nxt.strip()
+            d = _DEFAULT_RE.search(window)
             out.append(Flag(m.group(1), d.group(1).strip() if d else None, "argparse", rel, i, line.strip()))
         elif path.name == "CMakeLists.txt" and (m := _CMAKE_OPT_RE.match(line)):
             out.append(Flag(m.group(1), m.group(2), "cmake", rel, i, line.strip()))
@@ -147,6 +162,12 @@ def _scan_flags(path: Path, rel: str) -> list[Flag]:
             out.append(Flag(m.group(1), m.group(2).strip(), "make", rel, i, line.strip()))
         elif is_header and (m := _OPTION_FIELD_RE.match(line)):
             out.append(Flag(m.group(1), m.group(2).strip(), "option_field", rel, i, line.strip()))
+        elif not is_py and (m := _USAGE_RE.match(line)):
+            d = _USAGE_DEFAULT_RE.search(m.group(3))
+            default = (d.group(1) or d.group(2)).strip() if d else None
+            if default is None and m.group(2) is None:
+                default = "false"  # a switch with no value is off unless passed
+            out.append(Flag(m.group(1), default, "usage", rel, i, line.strip()))
         for m in _ENV_RE.finditer(line):
             out.append(Flag(m.group(1), None, "env", rel, i, line.strip()))
     return out

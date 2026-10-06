@@ -17,9 +17,20 @@ ASSUMPTION_PROMPT = """You are enumerating the experimental assumptions behind a
 so that a reproduction gap can be searched knob by knob.
 
 An assumption is any experimental condition that could change the measured
-numbers WITHOUT editing the algorithm: build options, configuration flags,
-dataset size/distribution, workload mix, warm-up, run length, environment
-(threads, disk, page cache, CPU frequency).
+numbers WITHOUT editing the algorithm. Go through every family:
+- build options (optimisation level, compile flags);
+- system configuration flags (buffer, cache, file and I/O settings, threads,
+  rate limits);
+- learning or tuning hyperparameters exposed as flags (thresholds, margins,
+  hold times, exploration settings, which component is active), including
+  defaults the paper never mentions;
+- dataset (size, key/value sizes, distribution, load order);
+- workload shape (operation mix, key skew, fraction of lookups for absent
+  keys, range queries, run length, warm-up);
+- hardware and environment (CPU, memory size, storage device and its spare
+  bandwidth, OS settings). Include the paper's stated hardware as an
+  environment assumption, since a reproduction's machine almost always differs.
+Read the whole flag list in the repo map, not only the first entries.
 
 For each knob:
 - `knob`: the exact flag / option / env var name as it appears in the code.
@@ -69,7 +80,8 @@ def relevant_files(rm: RepoMap, claims: list[Claim], limit: int = 20, max_bytes:
         s = flag_counts.get(path, 0) * 2 + (10 if path in rm.scripts else 0) + (8 if path in rm.build_files else 0)
         s += sum(3 for w in words if w in path.lower())
         return s
-    ranked = sorted({*flag_counts, *rm.scripts, *rm.build_files}, key=score, reverse=True)[:limit]
+    # Ties broken by path: set order varies between processes, and a reordered prompt misses the cache.
+    ranked = sorted({*flag_counts, *rm.scripts, *rm.build_files}, key=lambda p: (-score(p), p))[:limit]
     chunks = []
     for rel in ranked:
         try:
@@ -94,14 +106,49 @@ async def build_assumption_space(router: Router, paper: PaperText, rm: RepoMap, 
 
 
 def _fill_defaults(assumptions: list[Assumption], rm: RepoMap) -> list[Assumption]:
-    """Code defaults come from the repo map, not the model, whenever we can find the flag."""
+    """Code defaults come from the repo map, and status is computed, not taken from the model."""
     fixed = []
     for a in assumptions:
-        flags = rm.find_flag(a.knob)
-        if flags and flags[0].default is not None:
+        flags = [f for f in rm.find_flag(a.knob) if f.default not in (None, "None")]
+        if flags:
             a = a.model_copy(update={"code_default": flags[0].default})
-        fixed.append(a)
+        fixed.append(a.model_copy(update={"status": derive_status(a.paper_value, a.code_default, a.status)}))
     return sorted(fixed, key=lambda a: a.prior_score, reverse=True)
+
+
+_UNITS = {"k": 1e3, "kb": 1e3, "kib": 1024, "m": 1e6, "mb": 1e6, "mib": 1024**2, "g": 1e9, "gb": 1e9,
+          "gib": 1024**3, "million": 1e6, "billion": 1e9}
+_BOOLS = {"true": True, "on": True, "yes": True, "enabled": True, "1": True,
+          "false": False, "off": False, "no": False, "disabled": False, "0": False}
+
+
+def _value(v: str | None):
+    """Parse '2 MB', '2097152', '100 million', 'true' into comparable values; None if unparseable."""
+    if v is None:
+        return None
+    s = str(v).strip().lower().strip("\"'").split("(")[0].strip().rstrip(",")
+    if s in _BOOLS:
+        return _BOOLS[s]
+    m = re.fullmatch(r"([-+]?\d+(?:\.\d+)?)\s*([a-z]*)", s.replace(",", "").replace("_", ""))
+    if m:
+        mult = _UNITS.get(m.group(2), 1 if not m.group(2) else None)
+        if mult is not None:
+            return float(m.group(1)) * mult
+    return None
+
+
+def derive_status(paper_value: str, code_default: str | None, model_status: str) -> str:
+    if paper_value.strip().lower().startswith("unstated"):
+        return AssumptionStatus.unstated.value
+    p, c = _value(paper_value), _value(code_default)
+    if p is None or c is None:
+        return model_status  # can't compare mechanically; keep the model's judgement
+    if isinstance(p, float) and isinstance(c, float):
+        # binary/decimal megabytes ('2MB' vs 2097152) count as the same value
+        same = abs(p - c) <= 0.05 * max(abs(p), abs(c), 1e-12)
+    else:
+        same = p == c
+    return (AssumptionStatus.stated_matches if same else AssumptionStatus.stated_code_differs).value
 
 
 def ground_assumptions(paper: PaperText, repo_root: Path, assumptions: list[Assumption]) -> GroundingReport:
