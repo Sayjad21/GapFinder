@@ -113,6 +113,7 @@ async def test_router_cache_hit_is_free_and_identical(tmp_path):
     assert a1[1] == a2[1] and len(calls) == 1
     s = r.meter.summary()["super"]
     assert s["calls"] == 2 and s["cached_calls"] == 1
+    assert r.meter.total_fresh_cost() == pytest.approx(2 * r.meter.total_cost())  # the hit counts at full price
     assert s["cost_usd"] == pytest.approx((100 * 0.30 + 50 * 0.90) / 1e6)
 
 

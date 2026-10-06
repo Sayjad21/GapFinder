@@ -80,7 +80,9 @@ async def run_gapfinder(task_dir: Path, out: Path, verify: bool, backend: str, u
     GapReport.from_search(search, results, paper=task["id"]).write(out)
     pred = {r.target.claim_id: {"label": r.attribution.confidence_label if r.attribution else "Reproduced",
                                 "knobs": r.changes} for r in results}
-    return {"claims": pred, "llm_usd": router.meter.total_cost(), "sandbox_usd": orch.cost.sandbox_usd,
+    # llm_usd is the fresh-run cost even when answers came from the cache, so arms compare fairly
+    return {"claims": pred, "llm_usd": router.meter.total_fresh_cost(), "llm_usd_paid": router.meter.total_cost(),
+            "sandbox_usd": orch.cost.sandbox_usd,
             "runs": search.runs_used, "setup_runs": orch.cost.setup_runs}
 
 
@@ -142,10 +144,18 @@ def main() -> int:
     import os
 
     os.environ["GF_SPEND_CAP_USD"] = str(min(budget.cap_usd(), budget.spent_usd() + a.cap))  # per-task cap
-    if a.arm.startswith("gapfinder"):
-        res = asyncio.run(run_gapfinder(a.task_dir, out, a.arm == "gapfinder", a.backend, not a.fresh))
-    else:
-        res = run_baseline(a.task_dir, out, a.arm.split("-")[1], a.backend, a.cap, a.steps)
+    spent0 = budget.spent_usd()
+    try:
+        if a.arm.startswith("gapfinder"):
+            res = asyncio.run(run_gapfinder(a.task_dir, out, a.arm == "gapfinder", a.backend, not a.fresh))
+        else:
+            res = run_baseline(a.task_dir, out, a.arm.split("-")[1], a.backend, a.cap, a.steps)
+    except Exception as exc:  # a crashed run is scored as a failure, never silently dropped
+        import traceback
+
+        (out / "error.txt").write_text(traceback.format_exc(), encoding="utf-8")
+        res = {"claims": {}, "error": f"{type(exc).__name__}: {exc}"[:500], "llm_usd": budget.spent_usd() - spent0,
+               "sandbox_usd": 0.0, "runs": 0, "setup_runs": 0}
     pred = {"task": task["id"], "arm": a.arm, "run": a.run, **res, "cost_usd": res["llm_usd"] + res["sandbox_usd"],
             "wall_s": round(time.monotonic() - t0, 1)}
     (out / "prediction.json").write_text(json.dumps(pred, indent=1), encoding="utf-8")

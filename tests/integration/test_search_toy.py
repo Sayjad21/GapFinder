@@ -135,6 +135,7 @@ async def test_no_cause_is_unexplained(tmp_path):
     [r] = await s.run()
     assert r.attribution.confidence_label == "Unexplained"
     assert r.changes == {}
+    assert r.attribution.assumption_set == [] and r.gap_after == r.gap_before
 
 
 # 8. diff guard ----------------------------------------------------------------

@@ -129,9 +129,16 @@ class Usage:
     completion_tokens: int = 0
     reasoning_tokens: int = 0
     seconds: float = 0.0
+    cached_prompt_tokens: int = 0  # tokens a cache hit would have cost on a fresh run
+    cached_completion_tokens: int = 0
 
     def cost(self, tier: ModelTier) -> float:
         return (self.prompt_tokens * tier.price_in + self.completion_tokens * tier.price_out) / 1e6
+
+    def fresh_cost(self, tier: ModelTier) -> float:
+        """What these calls cost without the cache: the fair number for comparing methods."""
+        return self.cost(tier) + (self.cached_prompt_tokens * tier.price_in
+                                  + self.cached_completion_tokens * tier.price_out) / 1e6
 
 
 @dataclass
@@ -141,9 +148,11 @@ class TokenMeter:
     def record(self, tier: str, usage: dict, seconds: float, cached: bool) -> None:
         u = self.by_tier.setdefault(tier, Usage())
         u.calls += 1
-        if cached:
+        if cached:  # paid nothing now, but record what a fresh run would cost
             u.cached_calls += 1
-            return  # cached calls cost nothing
+            u.cached_prompt_tokens += usage.get("prompt_tokens", 0) or 0
+            u.cached_completion_tokens += usage.get("completion_tokens", 0) or 0
+            return
         u.prompt_tokens += usage.get("prompt_tokens", 0) or 0
         u.completion_tokens += usage.get("completion_tokens", 0) or 0
         details = usage.get("completion_tokens_details") or {}
@@ -159,6 +168,10 @@ class TokenMeter:
     def total_cost(self) -> float:
         t = tiers()
         return sum(u.cost(t[name]) for name, u in self.by_tier.items())
+
+    def total_fresh_cost(self) -> float:
+        t = tiers()
+        return sum(u.fresh_cost(t[name]) for name, u in self.by_tier.items())
 
 
 # --------------------------------------------------------------------- router

@@ -271,12 +271,19 @@ class GapSearch:
             if _rank(best) == 0:
                 break
         if best is None:
+            res.gap_after = res.gap_before
             res.attribution = self._attribution(t, {}, res.gap_before, ConfidenceLabel.unexplained, [])
             res.notes.append(f"no hypothesis moved the gap by more than {thr:g} noise units")
             return
         for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay"):
             setattr(res, f, getattr(best, f))
         res.notes.extend(best.notes)
+        if res.attribution.confidence_label == ConfidenceLabel.unexplained.value and res.changes:
+            # nothing explains the gap: don't present the best failed attempt as an explanation
+            res.notes.append(f"closest configuration tried: {res.changes} (gap {res.gap_after:+.1%}); "
+                             "it did not pass verification")
+            res.changes, res.gap_after = {}, res.gap_before
+            res.attribution.assumption_set, res.attribution.gap_after = [], res.gap_before
 
     async def _verify(self, t: Target, changes: Changes, parent: ClaimResult) -> ClaimResult:
         r = ClaimResult(target=t, status="searched", gap_before=parent.gap_before, band=parent.band)
