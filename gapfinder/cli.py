@@ -24,6 +24,17 @@ def _write(path: Path, obj) -> None:
     print(f"wrote {path}")
 
 
+def _adopt(orch, pairs: list[str]) -> None:
+    """--adopt built=<uuid> --adopt loaded=<uuid>: reuse checkpoints instead of rebuilding."""
+    parent = None
+    for stage in ("source", "built", "loaded"):
+        for pair in pairs or []:
+            name, _, uuid = pair.partition("=")
+            if name == stage:
+                orch.adopt(stage, uuid, parent)
+                parent = uuid
+
+
 async def cmd_ledger(args) -> int:
     from gapfinder.ingest.pdf import load_paper
     from gapfinder.ingest.repo_map import build_repo_map, clone_or_path
@@ -77,6 +88,7 @@ async def cmd_fanout(args) -> int:
     events = EventLog(run_dir / "events.jsonl")
     orch = Orchestrator(make_backend(args.backend), spec, events, cost=CostMeter(cap_usd=args.cap),
                         concurrency=args.concurrency, no_fork=args.no_fork)
+    _adopt(orch, args.adopt)
     events.emit("run_started", spec=spec.model_dump(), no_fork=args.no_fork, backend=args.backend)
     bands, noise_branches = await orch.calibrate_noise(n=args.noise) if args.noise else ({}, [])
     branches = await orch.fanout(knobs)
@@ -116,6 +128,7 @@ async def cmd_search(args) -> int:
     events = EventLog(run_dir / "events.jsonl")
     orch = Orchestrator(make_backend(args.backend), spec, events, cost=CostMeter(cap_usd=args.cap),
                         concurrency=args.concurrency, no_fork=args.no_fork)
+    _adopt(orch, args.adopt)
     events.emit("run_started", spec=spec.model_dump(), mode="search", no_fork=args.no_fork)
     search = GapSearch(orch, targets, assumptions, SearchConfig(max_runs=args.max_runs))
     results = await search.run()
@@ -155,6 +168,8 @@ def main(argv: list[str] | None = None) -> int:
     pf.add_argument("--concurrency", type=int, default=settings().max_concurrency)
     pf.add_argument("--cap", type=float, default=None, help="dollar cap")
     pf.add_argument("--out")
+    pf.add_argument("--adopt", action="append", metavar="STAGE=UUID",
+                    help="reuse an existing checkpoint: source=, built=, loaded= (e.g. from spike S3)")
 
     ps = sub.add_parser("search", help="explain divergent claims: screen/confirm/combine/bisect/verify (M3)")
     ps.add_argument("--spec", required=True)
@@ -167,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--concurrency", type=int, default=settings().max_concurrency)
     ps.add_argument("--cap", type=float, default=None, help="dollar cap for this run")
     ps.add_argument("--out")
+    ps.add_argument("--adopt", action="append", metavar="STAGE=UUID",
+                    help="reuse an existing checkpoint: source=, built=, loaded= (e.g. from spike S3)")
 
     args = p.parse_args(argv)
     if args.cmd == "repomap":

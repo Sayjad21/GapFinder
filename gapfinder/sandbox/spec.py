@@ -23,6 +23,7 @@ environment variables instead.
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 from pathlib import Path
 
@@ -74,6 +75,9 @@ class HarnessSpec(BaseModel):
     @classmethod
     def load_yaml(cls, path: str | Path) -> "HarnessSpec":
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        data["base"] = os.path.expandvars(str(data.get("base", "")))  # e.g. ${GF_RUSKEY_SOURCE}
+        if "$" in data["base"]:
+            raise ValueError(f"{path}: base {data['base']!r} needs an environment variable that isn't set")
         spec = cls.model_validate(data)
         if spec.base.startswith("local:"):  # resolve relative to the spec file
             p = Path(spec.base[6:])

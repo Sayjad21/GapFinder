@@ -194,6 +194,13 @@ class Orchestrator:
                     self.events.emit("noise_band", **bands[metric].to_dict())
         return bands, branches
 
+    def adopt(self, stage: str, checkpoint: str, parent: str | None = None) -> None:
+        """Register an existing default-config checkpoint (e.g. from spike S3) so this process
+        forks from it instead of rebuilding. Only for the no-changes chain: source/built/loaded."""
+        if stage not in ("source", "built", "loaded"):
+            raise ValueError(f"can only adopt source/built/loaded, not {stage}")
+        self._add(Node(checkpoint, parent, stage), tag=None)
+
     async def tag_key_nodes(self) -> None:
         for node in self.tree.nodes.values():
             if node.tag:

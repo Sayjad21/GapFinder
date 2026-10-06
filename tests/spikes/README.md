@@ -9,7 +9,7 @@ and prints `SKIP`.
 | S1 | `s1_lifecycle.py` | Sandboxes | Chaining, branching, isolation, 40× concurrency, timeout, log download; records `nproc`/memory/disk speed |
 | S2 | `s2_dedup.py` | Sandboxes | Whether identical commands re-execute (the `RUN_TAG` decision) |
 | S3 | `s3_build_ruskey.py` | Sandboxes + source tarball | RusKey fork builds and loads; the loaded image fits in 12 GiB |
-| S4 | `s4_noise.py --loaded <uuid>` | S3's loaded checkpoint | CV ≤ 10%, or stable K=1/K=10 ratios |
+| S4 | `s4_noise.py` | S3's checkpoints in `.env` | CV ≤ 10% on the within-VM latency ratios the search targets |
 | S5 | `s5_models.py` | Token Factory key | All four Nemotron tiers return valid JSON; real Ultra context limit; model IDs and base URL |
 | S6 | `papers/ruskey/S6_gap_check.md` | — | RusKey has ≥ 2 claims off by more than 2× noise (draft says yes) |
 | S7 | `s7_baseline.py` | Token Factory key (+ Sandboxes for the real pass) | mini-swe-agent completes one task in a sandbox; transcript saved |
@@ -24,7 +24,8 @@ python tests/spikes/s1_lifecycle.py
 python tests/spikes/s2_dedup.py
 wsl -d Ubuntu-24.04 -u root -- bash scripts/pack_ruskey.sh /root/ruskey "/mnt/c/Users/Legion/Downloads/nvidia hackathon/gapfinder-repo/.gf_cache/ruskey_src.tar.gz"
 python tests/spikes/s3_build_ruskey.py --tarball .gf_cache/ruskey_src.tar.gz --num-keys 2000000
-python tests/spikes/s4_noise.py --loaded <loaded uuid printed by S3>
+# S3 prints GF_RUSKEY_SOURCE / GF_RUSKEY_BUILT / GF_RUSKEY_LOADED: paste them into .env
+python tests/spikes/s4_noise.py
 python tests/spikes/s7_baseline.py --backend contree
 ```
 

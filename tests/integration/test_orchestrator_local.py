@@ -114,3 +114,16 @@ async def test_event_log_replays_tree(tmp_path, spec):
     assert CheckpointTree.replay(orch.events.read()).to_dict() == orch.tree.to_dict()
     tags = {n.tag for n in orch.tree.nodes.values() if n.tag}
     assert tags == {"gf/toy/source", "gf/toy/built", "gf/toy/loaded"}
+
+
+async def test_adopted_checkpoints_are_not_rebuilt(tmp_path, spec):
+    first = make(tmp_path, spec)
+    loaded = await first.stage("loaded", {})
+    built = first.tree.find_stage("built")
+    second = make(tmp_path, spec)  # a new process: knows nothing about the first one's tree
+    second.backend = first.backend
+    second.adopt("built", built)
+    second.adopt("loaded", loaded, parent=built)
+    b = await second.run_branch({"alpha": "2.0"})
+    assert b.status == BranchStatus.succeeded and b.parent_checkpoint == loaded
+    assert second.cost.setup_runs == 0  # nothing rebuilt or reloaded
