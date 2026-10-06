@@ -30,3 +30,21 @@ def test_adapter_chains_linearly_and_submits(tmp_path):
         env.execute({"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT; echo '{\"attributions\": []}'"})
     assert "attributions" in exc.value.messages[0]["content"]
     assert len(env.history) == 4 and env.cost.sandbox_runs == 4
+
+
+def test_budgeted_model_records_spend_and_respects_cap(monkeypatch):
+    from budgeted_model import BudgetedLitellmModel
+
+    from gapfinder.models import budget
+
+    # litellm's mock_response: no network, but a real response object with usage
+    m = BudgetedLitellmModel(tier="super", model_kwargs={"mock_response": "ok", "api_key": "test"})
+    msgs = [{"role": "user", "content": "hello"}]
+    m._query(msgs)
+    assert budget.spent_usd() > 0 and m._calculate_cost(None)["cost"] == budget.spent_usd()
+    assert budget.entries()[-1]["source"] == "baseline"
+
+    monkeypatch.setenv("GF_SPEND_CAP_USD", "0.000001")
+    with pytest.raises(budget.BudgetExceeded):
+        m._query(msgs)  # refused before sending
+    assert budget.BudgetExceeded in m.abort_exceptions  # the agent's retry loop won't retry it

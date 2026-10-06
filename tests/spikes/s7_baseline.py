@@ -34,7 +34,6 @@ def main(backend_kind: str, tier: str, cost_limit: float, step_limit: int) -> No
     if backend_kind == "contree":
         need("NEBIUS_API_KEY", "NEBIUS_PROJECT_ID")
     from minisweagent.agents.default import DefaultAgent
-    from minisweagent.models.litellm_model import LitellmModel
     from mini_swe_env import SandboxEnvironment
     import yaml
 
@@ -47,10 +46,9 @@ def main(backend_kind: str, tier: str, cost_limit: float, step_limit: int) -> No
     loaded = naive.parent_checkpoint
     check("naive run", naive.status == "succeeded", metrics=naive.parsed_metrics)
 
-    s = settings()
-    model = LitellmModel(model_name=f"openai/{tiers()[tier].model_id}", cost_tracking="ignore_errors",
-                         model_kwargs={"api_base": s.token_factory_base_url, "api_key": s.token_factory_api_key,
-                                       "max_tokens": tiers()[tier].max_tokens})
+    from budgeted_model import BudgetedLitellmModel
+
+    model = BudgetedLitellmModel(tier=tier)  # spend is capped and recorded in the shared ledger
     env = SandboxEnvironment(backend, loaded, timeout=120)
     import minisweagent
 
