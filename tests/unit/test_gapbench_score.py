@@ -21,9 +21,12 @@ def test_score_claim_cases():
     wrong = score_claim(KEY, {"label": "Attributed", "knobs": {"lr": "0.5"}})
     assert not wrong["correct"] and wrong["false_attr"]
     hedged = score_claim(KEY, {"label": "Fits but unsupported", "knobs": {"lr": "0.5"}})
-    assert not hedged["correct"] and not hedged["false_attr"]  # not an attribution
+    assert not hedged["correct"] and not hedged["false_attr"]  # hedged and wrong: not an overclaim
+    found = score_claim(KEY, {"label": "Fits but unsupported", "knobs": {"normalize": "zscore", "threshold": "0.3"}})
+    assert found["correct"] and not found["confident"]  # right knobs, honestly hedged: still found
     nocause = {**KEY, "type": "no_cause", "hidden": {}}
     assert score_claim(nocause, {"label": "Unexplained", "knobs": {}})["correct"]
+    assert score_claim(nocause, {"label": "Fits but unsupported", "knobs": {"lr": "0.5"}})["correct"]
     assert score_claim(nocause, {"label": "Explained", "knobs": {"lr": "0.5"}})["false_attr"]
     assert not score_claim(KEY, None)["correct"]  # missing answer
 

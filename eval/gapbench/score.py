@@ -3,14 +3,15 @@
     python eval/gapbench/score.py [--split dev|test] [--remeasure 3] [--out eval/results/gapbench_dev.json]
 
 Per task, arm and run (primary claims only):
-    correct          the claimed knob set equals the hidden one (values compared numerically
-                     when both parse as numbers); for no_cause tasks, correct = no attribution
-    false_attr       a confident attribution that isn't correct
+    correct          identified: the proposed knob set equals the hidden one (values compared
+                     numerically when both parse), at any label except Unexplained. A hedged
+                     "Fits but unsupported" with the right knobs still counts as found.
+                     For no_cause tasks, correct = no confident attribution.
+    confident        Explained / Paper-artifact inconsistency / Partially explained, or any
+                     baseline answer with knobs (baselines don't hedge)
+    false_attr       confident and not correct: the failure the verification step exists to prevent
     gap_closed       share of the paper gap closed by the arm's proposed config, measured by
                      re-running it (never taken from the arm's own report)
-Attribution means: GapFinder labels Explained / Paper-artifact inconsistency / Partially
-explained, or any baseline answer with knobs. "Fits but unsupported" and "Unexplained" are
-not attributions.
 
 Scoring is deterministic given the prediction files and the re-measurements, which are cached
 in each run directory, so rescoring from saved logs reproduces every number.
@@ -35,7 +36,8 @@ from gapfinder.sandbox.runner import Orchestrator  # noqa: E402
 from gapfinder.sandbox.spec import HarnessSpec  # noqa: E402
 
 GB = ROOT / "eval" / "gapbench"
-ATTRIBUTING = {"Explained", "Paper-artifact inconsistency", "Partially explained", "Attributed"}
+CONFIDENT = {"Explained", "Paper-artifact inconsistency", "Partially explained", "Attributed"}
+NOT_AN_ANSWER = {"Unexplained", "Reproduced", "missing"}
 
 
 def _norm_knob(k: str) -> str:
@@ -58,13 +60,14 @@ def same_knobs(pred: dict, hidden: dict) -> bool:
 
 def score_claim(answer: dict, pred: dict | None) -> dict:
     pred = pred or {"label": "missing", "knobs": {}}
-    attributed = pred["label"] in ATTRIBUTING and bool(pred["knobs"])
+    proposed = pred["label"] not in NOT_AN_ANSWER and bool(pred["knobs"])
+    confident = pred["label"] in CONFIDENT and bool(pred["knobs"])
     if answer["type"] == "no_cause":
-        correct = not attributed
+        correct = not confident
     else:
-        correct = attributed and same_knobs(pred["knobs"], answer["hidden"])
-    return {"label": pred["label"], "knobs": pred["knobs"], "attributed": attributed,
-            "correct": correct, "false_attr": attributed and not correct}
+        correct = proposed and same_knobs(pred["knobs"], answer["hidden"])
+    return {"label": pred["label"], "knobs": pred["knobs"], "confident": confident,
+            "correct": correct, "false_attr": confident and not correct}
 
 
 async def remeasure(task_dir: Path, knobs: dict, n: int, cache: Path) -> dict[str, float] | None:
