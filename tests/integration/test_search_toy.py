@@ -200,3 +200,31 @@ async def test_costly_values_reported_not_run_and_stated_values_judged_against_n
     assert all(x["knob"] != "beta" for x in r.screen)
     md = GapReport.from_search(s, [r], paper="toy").to_markdown()
     assert "Not testable within the budget" in md and "alpha=50.0" in md
+
+
+async def test_budget_exhausted_result_is_not_a_confident_unverified_label(tmp_path):
+    """Regression: an unverified best guess used to be labelled 'Partially explained'."""
+    s, [r] = await search(tmp_path, {"gamma": "2.0", "CACHE": "on"},
+                          assumptions=[a for a in ALL if a.knob != "alpha"], max_runs=12)
+    assert r.status == "partial"
+    if r.attribution.confidence_label not in ("Unexplained", "Fits but unsupported"):
+        assert r.counterfactual and r.held_out  # anything confident was actually verified
+
+
+async def test_resume_reuses_runs(tmp_path):
+    s1, [r1] = await search(tmp_path, {"alpha": "2.0"})
+    events = list(s1.orch.events.read())
+    m = await paper(tmp_path, {"alpha": "2.0"})
+    s2 = GapSearch(orch(tmp_path, "resumed"), targets(m), ALL, SearchConfig(max_runs=s1.runs_used))
+    assert s2.seed(events) == s1.runs_used
+    [r2] = await s2.run()  # every measurement is cached: no new run is allowed or needed
+    assert r2.changes == r1.changes and r2.attribution.confidence_label == r1.attribution.confidence_label
+
+
+def test_directional_plausibility():
+    from gapfinder.search.verify import plausible
+
+    a = Assumption(id="A1", knob="num_keys", layer="dataset", paper_value="100000000", prior_score=0.5)
+    p = plausible(a, "2000000", naive="500000")
+    assert p.supported and p.partial
+    assert not plausible(a, "100000", naive="500000").supported  # away from the paper's value

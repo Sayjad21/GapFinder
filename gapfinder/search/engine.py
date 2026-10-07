@@ -227,7 +227,7 @@ class GapSearch:
         except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
             res.status = "partial"
             res.notes.append(f"stopped early: {exc}")
-            self._label_partial(t, res)
+            await self._label_partial(t, res)
         res.hypotheses_tested = len(tried)
         if res.attribution is not None:
             res.attribution.hypotheses_tested = len(tried)
@@ -349,13 +349,14 @@ class GapSearch:
                                           "ok": after is not None and held_out_ok(before, after, self.band(other))}
         # 5c. plausibility: the value needs evidence, not just a good fit
         for knob, value in changes.items() if self.cfg.verify else ():
-            r.plausibility[knob] = plausible(self.assumptions.get(knob), value)
+            naive = self.spec.knobs[knob].default
+            r.plausibility[knob] = plausible(self.assumptions.get(knob), value, naive)
             a = self.assumptions.get(knob)
             if not r.plausibility[knob].supported and a is not None and self.evidence is not None:
                 ev = await self.evidence.find(knob, value)
                 if ev is not None:
                     self.assumptions[knob] = a = a.model_copy(update={"evidence": [*a.evidence, ev]})
-                    r.plausibility[knob] = plausible(a, value)
+                    r.plausibility[knob] = plausible(a, value, naive)
                     self.orch.events.emit("note", msg=f"web evidence for {knob}={value}: {ev.ref}")
 
         cf_ok = all(v["ok"] for v in r.counterfactual.values())
@@ -366,6 +367,9 @@ class GapSearch:
         if closes(changes) and cf_ok and ho_ok:
             if not plaus_ok:
                 label = ConfidenceLabel.fits_but_unsupported
+            elif any(p.partial for p in r.plausibility.values()):
+                label = ConfidenceLabel.partially_explained  # only the direction toward the paper was tested
+                r.notes.append("closes the gap moving toward the paper's stated value; that value itself is untested")
             elif any(self.assumptions[k].status == AssumptionStatus.stated_code_differs.value
                      for k in changes if k in self.assumptions):
                 label = ConfidenceLabel.inconsistency
@@ -404,7 +408,8 @@ class GapSearch:
                                   or a.status == AssumptionStatus.stated_code_differs.value)
 
     def _supported(self, changes: Changes) -> bool:
-        return all(plausible(self.assumptions.get(k), v).supported for k, v in changes.items())
+        return all(plausible(self.assumptions.get(k), v, self.spec.knobs[k].default).supported
+                   for k, v in changes.items())
 
     def _attribution(self, t: Target, changes: Changes, gap_after: float, label: ConfidenceLabel,
                      checkpoints: list[str], held: dict | None = None, cf_ok: bool | None = None) -> Attribution:
@@ -416,19 +421,49 @@ class GapSearch:
                            gap_after=gap_after, noise_band=self.band(t), held_out_result=held_txt,
                            counterfactual_ok=cf_ok, checkpoint_ids=checkpoints, confidence_label=label)
 
-    def _label_partial(self, t: Target, res: ClaimResult) -> None:
-        """Budget ran out: report the best configuration measured so far, unverified."""
+    async def _label_partial(self, t: Target, res: ClaimResult) -> None:
+        """Budget ran out. Verify the best measured configurations using only runs already made;
+        anything that can't be verified that way is NOT given a confident label."""
         measured = [dict(k) for k in self._runs if k and self.value(dict(k), t.metric) is not None]
-        if not measured:
-            res.attribution = self._attribution(t, {}, res.gap_before, ConfidenceLabel.unexplained, [])
+        measured.sort(key=lambda c: (abs(self.gap(t, c)), len(c), sorted(c.items())))
+        best: ClaimResult | None = None
+        rejected: list[str] = []
+        for c in measured[: self.cfg.verify_candidates]:
+            try:
+                trial = await self._verify(t, c, res)  # raises if it would need a new run
+            except (RunBudgetExceeded, budget.BudgetExceeded):
+                continue
+            if _rank(trial) >= _LABEL_RANK[ConfidenceLabel.unexplained.value]:
+                why = "; ".join(trial.notes) or "did not pass verification"
+                rejected.append(f"{c} (gap {self.gap(t, c):+.1%}) was verified from existing runs and rejected: {why}")
+            if best is None or _rank(trial) < _rank(best):
+                best = trial
+        if best is not None and _rank(best) < _LABEL_RANK[ConfidenceLabel.unexplained.value]:
+            for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay"):
+                setattr(res, f, getattr(best, f))
+            res.notes.extend(best.notes)
+            res.notes.append("verified from runs already made, after the budget ran out")
             return
-        best = min(measured, key=lambda c: abs(self.gap(t, c)))
-        g = self.gap(t, best)
-        reduced = abs(res.gap_before) - abs(g) >= self.cfg.partial_frac * abs(res.gap_before)
-        label = ConfidenceLabel.partially_explained if reduced else ConfidenceLabel.unexplained
-        res.changes, res.gap_after = best, g
-        res.attribution = self._attribution(t, best, g, label, [])
-        res.notes.append("best configuration so far, NOT verified (no counterfactual or held-out check)")
+        res.attribution = self._attribution(t, {}, res.gap_before, ConfidenceLabel.unexplained, [])
+        res.gap_after = res.gap_before
+        res.notes.extend(rejected)
+        unverified = [c for c in measured[: self.cfg.verify_candidates] if not any(str(c) in r for r in rejected)]
+        if unverified:
+            c = unverified[0]
+            res.notes.append(f"closest configuration not verified: {c} (gap {self.gap(t, c):+.1%}); "
+                             "the budget ran out first, so no attribution is made")
+
+    def seed(self, events: list[dict]) -> int:
+        """Resume: reuse branch results from an earlier run's event log (same spec and checkpoints)."""
+        n = 0
+        for ev in events:
+            if ev.get("type") == "branch_finished" and ev["branch"].get("knob_changes") is not None:
+                b = Branch(**ev["branch"])
+                if b.status in (BranchStatus.succeeded.value, BranchStatus.failed.value, BranchStatus.timed_out.value):
+                    self._runs.setdefault(frozenset(b.knob_changes.items()), []).append(b)
+                    n += 1
+        self.runs_used += n
+        return n
 
     def _renderable(self, h: Hypothesis, res: ClaimResult) -> bool:
         try:

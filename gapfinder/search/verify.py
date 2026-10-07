@@ -18,6 +18,7 @@ from gapfinder.ledger.schemas import Assumption
 class Plausibility:
     supported: bool
     reason: str
+    partial: bool = False  # supported in direction only: moves toward the paper's value, which wasn't tested
 
 
 _CHOICES = re.compile(r"choices\s*=\s*[\[(][^\])]*[\])]")
@@ -27,7 +28,14 @@ def _norm(v: str) -> str:
     return str(v).strip().lower().strip("\"'")
 
 
-def plausible(assumption: Assumption | None, value: str) -> Plausibility:
+def _num(v) -> float | None:
+    try:
+        return float(str(v).strip().replace(",", "").replace("_", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def plausible(assumption: Assumption | None, value: str, naive: str | None = None) -> Plausibility:
     """Is `value` backed by evidence, or just the number that happens to fit?
 
     Supported when the paper states that value, or when the value appears in
@@ -44,6 +52,11 @@ def plausible(assumption: Assumption | None, value: str) -> Plausibility:
         quote = _CHOICES.sub(" ", ev.quote.lower())
         if re.search(rf"(?<![\w.]){re.escape(v)}(?!\w|\.\w)", quote):
             return Plausibility(True, f"{ev.kind} evidence at {ev.ref}: {ev.quote[:120]!r}")
+    p, n, x = _num(assumption.paper_value), _num(naive), _num(value)
+    if None not in (p, n, x) and p != n and min(n, p) < x < max(n, p):
+        # e.g. the paper states 100M keys, the reproduction ran 500K, and 2M was tested
+        return Plausibility(True, f"moves from the naive {naive} toward the paper's stated {assumption.paper_value}; "
+                                  "the stated value itself was not tested", partial=True)
     return Plausibility(False, f"no evidence mentions {value!r}; it fits, but nothing says the authors used it")
 
 

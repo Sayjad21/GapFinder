@@ -136,6 +136,9 @@ async def cmd_search(args) -> int:
 
         evidence = EvidenceSearch(args.paper or spec.name, anchors=[args.evidence_anchor])
     search = GapSearch(orch, targets, assumptions, SearchConfig(max_runs=args.max_runs), evidence=evidence)
+    for path in args.resume or []:  # reuse earlier runs' branch results (no re-running, no re-paying)
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+        print(f"resumed {search.seed([json.loads(x) for x in lines if x.strip()])} branch results from {path}")
     results = await search.run()
     await orch.tag_key_nodes()
     report = GapReport.from_search(search, results, paper=args.paper or spec.name)
@@ -182,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--assumptions", required=True, help="assumptions.json from `gapfinder ledger`, or a list")
     ps.add_argument("--paper", help="paper name for the report title")
     ps.add_argument("--max-runs", type=int, default=None, help="branch-run budget")
+    ps.add_argument("--resume", action="append", help="events.jsonl of an earlier search on the same spec "
+                    "(repeatable): reuse its branch results")
     ps.add_argument("--evidence-anchor", help="enable web evidence; sources must mention this name (e.g. RusKey)")
     ps.add_argument("--no-fork", action="store_true", help="ablation: rebuild and reload for every branch")
     ps.add_argument("--backend", default=None)
