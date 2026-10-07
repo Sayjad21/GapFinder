@@ -169,3 +169,16 @@ def test_wrong_page_ref_is_corrected_not_rejected(repo):
     assert kept.paper_value == "2 MB" and kept.evidence[0].ref == "p.2"
     c = g.check_claims([_claim("set the memory buffer size to 2MB")]).kept[0]
     assert c.page == 2
+
+
+def test_tree_handles_content_addressed_noop_stage():
+    """A build check that changes no files returns its parent's ID (spike S2). Regression: infinite loop."""
+    t = CheckpointTree()
+    t.add(Node("img-1", None, "source"))
+    t.add(Node("img-1", "img-1", "built"))  # no-op stage: same ID as its parent
+    t.add(Node("img-2", "img-1", "loaded"))
+    assert t.find_stage("source") == "img-1" and t.find_stage("built") == "img-1"
+    assert t.find_stage("loaded") == "img-2"
+    assert t.lineage_changes("img-2") == {}  # terminates
+    t.nodes["img-3"] = Node("img-3", "img-3", "branch")  # even a self-parent can't loop forever
+    assert t.lineage_changes("img-3") == {}

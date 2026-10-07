@@ -177,3 +177,17 @@ async def test_cache_only_mode_never_calls_api(tmp_path, monkeypatch):
     with pytest.raises(CacheMiss):
         await r.complete("nano", [{"role": "user", "content": "hi"}])
     assert calls == []
+
+
+def test_tagged_project_cap(monkeypatch):
+    from gapfinder.models import budget
+
+    monkeypatch.setenv("GF_SPEND_CAP_USD", "100")
+    budget.record("sandbox", 3.0)  # untagged spend doesn't count against the project
+    monkeypatch.setenv("GF_SPEND_TAG", "ruskey")
+    monkeypatch.setenv("GF_TAG_CAP_USD", "8")
+    budget.record("sandbox", 7.5)
+    assert budget.tag_spent_usd("ruskey") == 7.5
+    budget.check(0.4, "ok")
+    with pytest.raises(budget.BudgetExceeded):
+        budget.check(0.6, "over the project cap")

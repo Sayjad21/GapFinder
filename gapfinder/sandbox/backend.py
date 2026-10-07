@@ -265,6 +265,10 @@ class ContreeBackend(SandboxBackend):
     async def run(self, parent, shell, *, env=None, timeout=600, disposable=False, files=None) -> RunResult:
         """Every sandbox run, from any caller, is checked against the spend cap and recorded."""
         budget.check(0.0, "sandbox run")  # cost isn't known up front: refuse once the cap is reached
+        # The cap can't stop a run already executing, and billing is per CPU-second, so every
+        # process in the run gets a CPU-time limit: a runaway gets killed instead of draining credits.
+        cpu_limit = int(os.environ.get("GF_SANDBOX_CPU_LIMIT_S", "300"))
+        shell = f"ulimit -t {cpu_limit}; {shell}"
         res = await self._run(parent, shell, env=env, timeout=timeout, disposable=disposable, files=files)
         if res.resources.cost_usd:
             budget.record("sandbox", res.resources.cost_usd, elapsed_s=res.resources.elapsed_s,

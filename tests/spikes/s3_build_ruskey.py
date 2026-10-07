@@ -1,16 +1,19 @@
-"""S3 - Build the RusKey RocksDB fork in release mode, checkpoint it, load the dataset, checkpoint again.
+"""S3 - Put the RusKey driver in a sandbox, load the dataset, checkpoint both.
 
-First pack the sources inside WSL (paths are WSL paths):
-    bash scripts/pack_ruskey.sh /root/ruskey /mnt/c/.../gapfinder-repo/.gf_cache/ruskey_src.tar.gz
-Then:
-    python tests/spikes/s3_build_ruskey.py --tarball .gf_cache/ruskey_src.tar.gz [--num-keys 2000000]
+The driver is prebuilt locally: compiling RocksDB in a sandbox costs thousands of CPU-seconds
+(~$20-40 at the price measured in eval/results/spikes/S0_pricing_probe.json). So:
 
-It prepares the *source* checkpoint (dependencies + RusKey sources + papers/ruskey/harness in
-/work) and then builds and loads it through papers/ruskey/ruskey_fig6.yaml with the same
-Orchestrator the search uses, so the built/loaded checkpoints are exactly the ones branches
-fork from. Prints GF_RUSKEY_SOURCE=<uuid> for .env.
+    # inside WSL: stripped binary + its non-system libs + provenance
+    bash scripts/prep_ruskey_bin.sh /root/ruskey /tmp/ruskey_bin && cp -r /tmp/ruskey_bin <repo>/.gf_cache/
+    # then, with the RusKey budget tag so the project cap applies:
+    GF_SPEND_TAG=ruskey GF_TAG_CAP_USD=8 python tests/spikes/s3_build_ruskey.py --num-keys 500000
 
-Pass: build and load succeed; the loaded image fits in the 12 GiB layer; time and cost recorded.
+It uploads the bundle and papers/ruskey/harness into /work of ubuntu:24.04 (the *source*
+checkpoint), then runs the spec's build check and load stage through the same Orchestrator
+the search uses, so the loaded checkpoint is exactly what branches fork from.
+Prints GF_RUSKEY_SOURCE / GF_RUSKEY_BUILT / GF_RUSKEY_LOADED for .env.
+
+Pass: the binary runs, the load succeeds, the loaded image fits in 12 GiB; time and cost recorded.
 """
 
 import argparse
@@ -22,35 +25,39 @@ from pathlib import Path
 
 from _common import ROOT, Check, need, save
 
+from gapfinder.models import budget
 from gapfinder.sandbox.backend import ContreeBackend
 from gapfinder.sandbox.events import EventLog
 from gapfinder.sandbox.runner import Orchestrator
 
-DEPS = ("apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-        "build-essential libgflags-dev libsnappy-dev zlib1g-dev libbz2-dev liblz4-dev libzstd-dev "
-        "python3 > /dev/null && mkdir -p /work && echo deps-ok")
-UNPACK = "cd /work && tar -xzf src.tar.gz && rm src.tar.gz && chmod +x harness/*.sh && ls"
+
+def bundle_files(bundle: Path) -> dict[str, bytes]:
+    files = {}
+    for sub in ("driver", "lib"):
+        for f in (bundle / sub).iterdir():
+            files[f"{sub}/{f.name}"] = f.read_bytes()
+    files["provenance.json"] = (bundle / "provenance.json").read_bytes()
+    for f in (ROOT / "papers" / "ruskey" / "harness").glob("*.sh"):
+        files[f"harness/{f.name}"] = f.read_bytes().replace(b"\r\n", b"\n")
+    return files
 
 
-async def main(tarball: Path, num_keys: int) -> None:
+async def main(bundle: Path, num_keys: int) -> None:
     need("NEBIUS_API_KEY", "NEBIUS_PROJECT_ID")
     be = ContreeBackend()
     check = Check()
-    t0 = time.monotonic()
+    t0, s0 = time.monotonic(), budget.spent_usd()
     base = await be.base("ubuntu:24.04")
-    deps = await be.run(base, DEPS, timeout=1800)
-    check("dependencies", "deps-ok" in deps.stdout, s=deps.resources.elapsed_s, usd=deps.resources.cost_usd)
-
-    files = {"src.tar.gz": tarball.read_bytes()}
-    for f in (ROOT / "papers" / "ruskey" / "harness").glob("*.sh"):
-        files[f"harness/{f.name}"] = f.read_bytes().replace(b"\r\n", b"\n")
-    src = await be.run(deps.checkpoint, UNPACK, files=files, timeout=900)
-    ok = check("sources + harness in /work", src.exit_code == 0 and "harness" in src.stdout, ls=src.stdout[-300:])
+    files = bundle_files(bundle)
+    setup = ("chmod +x driver/ruskey_bench harness/*.sh && "
+             "LD_LIBRARY_PATH=/work/lib ./driver/ruskey_bench --help 2>&1 | head -1")
+    src = await be.run(base, setup, files=files, timeout=600)
+    ok = check("prebuilt driver runs in ubuntu:24.04", src.exit_code == 0 and "RusKey" in src.stdout,
+               out=src.stdout.strip()[:120], err=src.stderr[-300:], usd=src.resources.cost_usd)
     if not ok:
-        save("S3", {"pass": False, "checks": check.items, "stderr": src.stderr[-2000:]})
+        save("S3", {"pass": False, "checks": check.items})
         return
     await be.tag(src.checkpoint, "gf/ruskey/source")
-    print(f"\nGF_RUSKEY_SOURCE={src.checkpoint}   <- add this line to .env\n")
 
     os.environ["GF_RUSKEY_SOURCE"] = src.checkpoint
     from gapfinder.sandbox.spec import HarnessSpec
@@ -59,32 +66,33 @@ async def main(tarball: Path, num_keys: int) -> None:
     spec.knobs["num_keys"].default = str(num_keys)
     events = EventLog(ROOT / "eval" / "results" / "spikes" / "S3_events.jsonl")
     orch = Orchestrator(be, spec, events, tag_prefix="gf/ruskey")
+    orch.adopt("source", src.checkpoint)
     try:
         loaded = await orch.stage("loaded", {})
         built = orch.tree.find_stage("built")
-        check("build (release) + load via the harness spec", True, built=built, loaded=loaded)
+        check("build check + load via the harness spec", True, built=built, loaded=loaded)
     except RuntimeError as exc:
-        check("build (release) + load via the harness spec", False, error=str(exc)[-1500:])
+        check("build check + load via the harness spec", False, error=str(exc)[-1500:])
         save("S3", {"pass": False, "source": src.checkpoint, "checks": check.items})
         return
-    stages = {n.stage: {"id": n.id, "s": n.elapsed_s, "usd": n.cost_usd} for n in orch.tree.nodes.values()}
-    size = await be.run(loaded, "du -sm /work/db | cut -f1; df -m /work | tail -1", disposable=True, timeout=300)
+    stages = {n.stage: {"id": n.id, "cpu_s": n.elapsed_s, "usd": n.cost_usd}
+              for n in orch.tree.nodes.values() if n.stage in ("built", "loaded")}
+    size = await be.run(loaded, "du -sm /work/db | cut -f1; cat /work/load.log | tail -2", disposable=True, timeout=300)
     lines = size.stdout.split()
     db_mb = int(lines[0]) if lines and lines[0].isdigit() else None
-    check("fits 12 GiB layer", db_mb is not None and db_mb < 11 * 1024, db_mb=db_mb, df=size.stdout[-200:])
+    check("fits 12 GiB layer", db_mb is not None and db_mb < 11 * 1024, db_mb=db_mb)
     await orch.tag_key_nodes()
     print("\nAdd to .env:")
     print(f"GF_RUSKEY_SOURCE={src.checkpoint}\nGF_RUSKEY_BUILT={built}\nGF_RUSKEY_LOADED={loaded}\n")
-    meta = tarball.with_suffix("").with_suffix(".json")
     save("S3", {"pass": check.all_ok, "num_keys": num_keys, "wall_s": round(time.monotonic() - t0, 1),
+                "cost_usd": round(budget.spent_usd() - s0, 4), "stages": stages,
                 "GF_RUSKEY_SOURCE": src.checkpoint, "GF_RUSKEY_BUILT": built, "GF_RUSKEY_LOADED": loaded,
-                "stages": stages,
-                "source_commit": json.loads(meta.read_text()) if meta.exists() else None, "checks": check.items})
+                "provenance": json.loads(files["provenance.json"]), "checks": check.items})
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--tarball", type=Path, required=True)
-    p.add_argument("--num-keys", type=int, default=2_000_000, help="2M x 1 KB ~ 2 GB; scale toward 10M if it fits")
+    p.add_argument("--bundle", type=Path, default=ROOT / ".gf_cache" / "ruskey_bin")
+    p.add_argument("--num-keys", type=int, default=500_000)
     a = p.parse_args()
-    asyncio.run(main(a.tarball, a.num_keys))
+    asyncio.run(main(a.bundle, a.num_keys))

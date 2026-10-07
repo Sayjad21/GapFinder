@@ -25,7 +25,8 @@ RATIOS = ("balanced_ratio_k1_k5", "balanced_ratio_k10_k5", "writeheavy_ratio_k1_
 async def main(n: int, missions: int) -> None:
     need("NEBIUS_API_KEY", "NEBIUS_PROJECT_ID", "GF_RUSKEY_SOURCE", "GF_RUSKEY_BUILT", "GF_RUSKEY_LOADED")
     spec = HarnessSpec.load_yaml(ROOT / "papers" / "ruskey" / "ruskey_fig6.yaml")
-    spec.knobs["missions"].default = str(missions)
+    if missions is not None:
+        spec.knobs["missions"].default = str(missions)
     orch = Orchestrator(ContreeBackend(), spec, EventLog(ROOT / "eval" / "results" / "spikes" / "S4_events.jsonl"))
     orch.adopt("source", os.environ["GF_RUSKEY_SOURCE"])
     orch.adopt("built", os.environ["GF_RUSKEY_BUILT"], os.environ["GF_RUSKEY_SOURCE"])
@@ -46,6 +47,6 @@ async def main(n: int, missions: int) -> None:
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--n", type=int, default=5)
-    p.add_argument("--missions", type=int, default=40)
+    p.add_argument("--missions", type=int, default=None, help="override the spec default")
     a = p.parse_args()
     asyncio.run(main(a.n, a.missions))

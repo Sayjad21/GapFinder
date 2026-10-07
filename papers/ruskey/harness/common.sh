@@ -2,6 +2,8 @@
 # Every knob has a default equal to the driver's own default, so an unset knob
 # means "what the artifact does out of the box".
 for kv in "$@"; do declare "${kv%%=*}=${kv#*=}"; done
+# the prebuilt driver ships its non-system libraries in /work/lib
+export LD_LIBRARY_PATH="/work/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 : "${bench:=/work/driver/ruskey_bench}" "${db:=/work/db}"
 : "${num_keys:=2000000}" "${key_size:=128}" "${value_size:=896}" "${sequential_load:=false}"
 : "${logical_levels:=6}" "${size_ratio:=10}" "${write_buffer:=2097152}" "${target_file_size_mb:=64}"

@@ -48,6 +48,8 @@ def spent_usd() -> float:
 
 
 def record(kind: str, cost_usd: float, **detail) -> None:
+    if os.environ.get("GF_SPEND_TAG"):  # e.g. "ruskey": lets one project have its own cap
+        detail.setdefault("tag", os.environ["GF_SPEND_TAG"])
     p = _path()
     p.parent.mkdir(parents=True, exist_ok=True)
     with _lock, p.open("a", encoding="utf-8") as f:
@@ -70,6 +72,10 @@ def estimate_prompt_tokens(messages: list[dict]) -> int:
     return chars // 3 + 1500 * images + 50
 
 
+def tag_spent_usd(tag: str) -> float:
+    return sum(e.get("cost_usd", 0.0) for e in entries() if e.get("tag") == tag)
+
+
 def check(worst_case_usd: float, what: str) -> None:
     spent, cap = spent_usd(), cap_usd()
     if spent + worst_case_usd > cap:
@@ -77,6 +83,11 @@ def check(worst_case_usd: float, what: str) -> None:
             f"refusing {what}: spent ${spent:.4f} + worst case ${worst_case_usd:.4f} would exceed the "
             f"${cap:.2f} cap (GF_SPEND_CAP_USD). Raise the cap deliberately if this spend is intended."
         )
+    tag, tag_cap = os.environ.get("GF_SPEND_TAG"), os.environ.get("GF_TAG_CAP_USD")
+    if tag and tag_cap and tag_spent_usd(tag) + worst_case_usd > float(tag_cap):
+        raise BudgetExceeded(
+            f"refusing {what}: {tag!r} has spent ${tag_spent_usd(tag):.4f} of its ${float(tag_cap):.2f} "
+            f"budget (GF_TAG_CAP_USD)")
 
 
 def summary() -> dict:

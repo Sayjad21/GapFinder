@@ -41,14 +41,27 @@ class CheckpointTree:
         self.stage_index: dict[tuple[str, tuple], str] = {}  # (stage, frozen build changes) -> id
 
     def add(self, node: Node) -> Node:
+        """Sandbox checkpoint IDs are content-addressed: a run that changes nothing on disk returns
+        its parent's ID. Such a no-op node isn't stored again (it would be its own parent);
+        the existing node just also serves as this stage's checkpoint."""
+        if node.parent == node.id or (node.id in self.nodes and node.stage != "branch"
+                                      and self.nodes[node.id].stage != node.stage):
+            existing = self.nodes.get(node.id)
+            if existing is not None:
+                if node.stage in ("source", "built", "loaded"):
+                    key = (node.stage, _freeze({**self._lineage_changes(node.id, build_only=True), **node.changes}))
+                    self.stage_index[key] = node.id
+                return existing
+            node.parent = None
         self.nodes[node.id] = node
         if node.stage in ("source", "built", "loaded"):
             self.stage_index[(node.stage, _freeze(self._lineage_changes(node.id, build_only=True)))] = node.id
         return node
 
     def _lineage_changes(self, nid: str, build_only: bool = False) -> dict[str, str]:
-        chain, cur = [], self.nodes.get(nid)
-        while cur is not None:
+        chain, cur, seen = [], self.nodes.get(nid), set()
+        while cur is not None and cur.id not in seen:  # never loop, even on a malformed tree
+            seen.add(cur.id)
             chain.append(cur)
             cur = self.nodes.get(cur.parent) if cur.parent else None
         out: dict[str, str] = {}
