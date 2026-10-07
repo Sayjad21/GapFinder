@@ -45,7 +45,13 @@ live service.
   (`TOKEN_FACTORY_BASE_URL`) and spike S5 records which one works.
 - *To confirm in S5.*
 
-### 4. Branching dedup is documented as a feature but affects benchmarking
+### 4. Branching dedup (resolved by spike S2)
+- **Measured:** identical commands DO re-execute (different stdout each time), but runs that leave
+  an identical filesystem return the same image UUID, with or without a distinct env var. UUIDs look
+  content-addressed. Harmless for us (each branch writes different result files), but undocumented.
+- **Suggestion:** say in the branching guide that UUIDs identify filesystem content, not runs.
+
+### 4a. (original note) Branching dedup is documented as a feature but affects benchmarking
 - **Product:** Sandboxes
 - **Issue:** The branching guide notes that identical commands from the same
   image return the same UUID. For anyone measuring noise from repeated runs,

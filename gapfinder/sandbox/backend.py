@@ -243,12 +243,19 @@ class ContreeBackend(SandboxBackend):
         from contree_sdk.sdk.exceptions import ContreeError
 
         try:
+            files = None
+            if ref.startswith("local:"):
+                # a local artifact folder: upload it into /work of a Python image, so the same
+                # harness spec runs on the local backend and in Sandboxes
+                files = _folder_files(Path(ref[6:]))
+                ref = os.environ.get("GF_CONTREE_LOCAL_IMAGE", "python:3.12-slim")
             if _looks_like_uuid(ref):
                 img = await self.sdk.images.use(ref)
             else:
                 img = await self.sdk.images.oci(ref)
             # make sure the work dir exists in every descendant
-            img = await img.run(shell=f"mkdir -p {WORK_DIR}", disposable=False)
+            upload = {f"{WORK_DIR}/{k}": v for k, v in (files or {}).items()} or None
+            img = await img.run(shell=f"mkdir -p {WORK_DIR}", disposable=False, files=upload)
             if img.result.cost:
                 budget.record("sandbox", img.result.cost, note="base image setup")
             return str(img.uuid)
@@ -328,6 +335,25 @@ class ContreeBackend(SandboxBackend):
     async def tag(self, checkpoint, tag) -> None:
         img = await self.sdk.images.use(checkpoint)
         await img.tag_as(tag)
+
+
+def _folder_files(root: Path, max_bytes: int = 50_000_000) -> dict[str, bytes]:
+    """All files under `root` (relative posix paths), skipping VCS/cache dirs; CRLF -> LF for scripts."""
+    if not root.is_dir():
+        raise InfraError(f"local artifact folder {root} does not exist")
+    out, total = {}, 0
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root).as_posix()
+        if p.is_dir() or any(part in {".git", "__pycache__", ".venv", "node_modules", "out"} for part in rel.split("/")):
+            continue
+        data = p.read_bytes()
+        if p.suffix in {".sh", ".py", ".yaml", ".yml"}:
+            data = data.replace(b"\r\n", b"\n")
+        total += len(data)
+        if total > max_bytes:
+            raise InfraError(f"{root} is over {max_bytes} bytes; build an image instead of uploading")
+        out[rel] = data
+    return out
 
 
 def _looks_like_uuid(s: str) -> bool:
