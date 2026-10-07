@@ -94,3 +94,15 @@ live service.
 - **Impact:** Blocked a participant until a workaround was found.
 - **Suggestion:** Let participants redeem hackathon credits without a billing
   country, or support more countries.
+
+### 10. Sandboxes: pricing and the `elapsed_time` field are undocumented and surprising
+- **Product:** Token Factory Sandboxes (Beta)
+- **What we measured** (eval/results/spikes/S0_pricing_probe.json): `cost` tracks CPU-seconds at
+  about 0.01 per CPU-second (1 core x 20 s = 0.200; 4 cores x 5 s = 0.200; `sleep 5` = 0.00007).
+  `resources.elapsed_time` reports CPU time, not wall-clock time (a 5 s sleep reports 0.0 s).
+- **Impact:** At ~36 per CPU-hour, compiling a C++ system like RocksDB inside a sandbox (thousands of
+  CPU-seconds) costs more than a hackathon's credits. We couldn't find pricing, the unit of `cost`, or
+  the meaning of `elapsed_time` in the docs, and only discovered this by spending.
+- **Suggestion:** Document the price per CPU-second and the unit of `cost`; rename or document
+  `elapsed_time`; show sandbox spend on the billing page; let OCI import cover heavy builds cheaply.
+- *To confirm:* whether `cost` is USD (compare with the console balance).

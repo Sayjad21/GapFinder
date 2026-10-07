@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from gapfinder.ledger.schemas import ResourceStats
+from gapfinder.models import budget
 
 WORK_DIR = "/work"
 
@@ -248,18 +249,30 @@ class ContreeBackend(SandboxBackend):
                 img = await self.sdk.images.oci(ref)
             # make sure the work dir exists in every descendant
             img = await img.run(shell=f"mkdir -p {WORK_DIR}", disposable=False)
+            if img.result.cost:
+                budget.record("sandbox", img.result.cost, note="base image setup")
             return str(img.uuid)
         except ContreeError as exc:
             raise InfraError(str(exc)) from exc
 
     async def run(self, parent, shell, *, env=None, timeout=600, disposable=False, files=None) -> RunResult:
+        """Every sandbox run, from any caller, is checked against the spend cap and recorded."""
+        budget.check(0.0, "sandbox run")  # cost isn't known up front: refuse once the cap is reached
+        res = await self._run(parent, shell, env=env, timeout=timeout, disposable=disposable, files=files)
+        if res.resources.cost_usd:
+            budget.record("sandbox", res.resources.cost_usd, elapsed_s=res.resources.elapsed_s,
+                          cpu_s=res.resources.user_cpu_s + res.resources.system_cpu_s)
+        return res
+
+    async def _run(self, parent, shell, *, env=None, timeout=600, disposable=False, files=None) -> RunResult:
         from contree_sdk.sdk.exceptions import (
             ApiTimeoutError,
             ContreeApiError,
             ContreeTransportError,
+            FailedOperationError,
             OperationTimedOutError,
-            TooManyRequestsError,
         )
+        from contree_sdk.sdk.exceptions.api import TooManyRequestsError  # not re-exported by the package
 
         img = await self.sdk.images.use(parent)
         upload = {f"{WORK_DIR}/{k.removeprefix(WORK_DIR + '/').lstrip('/')}": v for k, v in (files or {}).items()}
