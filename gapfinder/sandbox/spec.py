@@ -49,6 +49,15 @@ class Knob(BaseModel):
     default: str
     env: bool = False
     candidates: list[str] = Field(default_factory=list)
+    max: float | None = None  # values above this are too costly to test (reported, not run)
+
+    def affordable(self, value: str) -> bool:
+        if self.max is None:
+            return True
+        try:
+            return float(value) <= self.max
+        except ValueError:
+            return True
 
 
 class HarnessSpec(BaseModel):

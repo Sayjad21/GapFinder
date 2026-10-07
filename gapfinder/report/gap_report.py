@@ -25,6 +25,7 @@ class GapReport:
     setup_runs: int
     cost: dict
     unmapped_assumptions: list[str] = field(default_factory=list)
+    untestable: list[tuple[str, str]] = field(default_factory=list)
     generated: str = field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M"))
 
     @classmethod
@@ -32,7 +33,7 @@ class GapReport:
         return cls(paper=paper, artifact=search.spec.name, results=results,
                    noise={m: b.to_dict() for m, b in search.bands.items()}, naive=dict(search.naive),
                    runs=search.runs_used, setup_runs=search.orch.cost.setup_runs, cost=search.orch.cost.summary(),
-                   unmapped_assumptions=search.unmapped)
+                   unmapped_assumptions=search.unmapped, untestable=list(search.untestable))
 
     @property
     def partial(self) -> bool:
@@ -48,6 +49,7 @@ class GapReport:
         return {"paper": self.paper, "artifact": self.artifact, "generated": self.generated,
                 "partial": self.partial, "runs": self.runs, "setup_runs": self.setup_runs, "cost": self.cost,
                 "naive": self.naive, "noise": self.noise, "unmapped_assumptions": self.unmapped_assumptions,
+                "untestable": [{"knob": k, "value": v} for k, v in self.untestable],
                 "claims": [claim(r) for r in self.results]}
 
     def to_markdown(self) -> str:
@@ -89,6 +91,11 @@ class GapReport:
                         f"(result checkpoint `{x['result_checkpoint']}`; {len(r.replay)} repeat(s) recorded)"]
             if r.notes:
                 out += ["", "Notes:"] + [f"- {n}" for n in r.notes]
+        if self.untestable:
+            out += ["", "## Not testable within the budget",
+                    "Candidate values above the harness spec's cost limits (e.g. the paper's full scale). "
+                    "A gap that only these could close stays Unexplained here: " +
+                    ", ".join(f"`{k}={v}`" for k, v in self.untestable)]
         if self.unmapped_assumptions:
             out += ["", "## Not testable with this harness",
                     "Assumptions about knobs the harness spec can't set: " +

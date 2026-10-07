@@ -184,3 +184,19 @@ async def test_web_evidence_upgrades_fits_but_unsupported(tmp_path):
     [r] = await s.run()
     assert r.changes == {"alpha": "50.0"} and r.attribution.confidence_label == "Explained"
     assert r.plausibility["alpha"].supported and "example.org" in r.plausibility["alpha"].reason
+
+
+async def test_costly_values_reported_not_run_and_stated_values_judged_against_naive(tmp_path):
+    m = await paper(tmp_path, {"alpha": "2.0"})
+    o = orch(tmp_path)
+    o.spec.knobs["alpha"].max = 10.0
+    many = [A("A1", "alpha", ["50.0", "2.0"], supported=["2.0"], prior=0.9),
+            # paper states beta=0.5 and the naive run uses 0.5 -> not a hypothesis
+            Assumption(id="A2", knob="beta", layer="config", paper_value="0.5", candidate_values=["2.0"],
+                       prior_score=0.6, status="stated_code_differs")]
+    s = GapSearch(o, targets(m), many, SearchConfig())
+    [r] = await s.run()
+    assert ("alpha", "50.0") in s.untestable and r.changes == {"alpha": "2.0"}
+    assert all(x["knob"] != "beta" for x in r.screen)
+    md = GapReport.from_search(s, [r], paper="toy").to_markdown()
+    assert "Not testable within the budget" in md and "alpha=50.0" in md

@@ -130,7 +130,12 @@ async def cmd_search(args) -> int:
                         concurrency=args.concurrency, no_fork=args.no_fork)
     _adopt(orch, args.adopt)
     events.emit("run_started", spec=spec.model_dump(), mode="search", no_fork=args.no_fork)
-    search = GapSearch(orch, targets, assumptions, SearchConfig(max_runs=args.max_runs))
+    evidence = None
+    if args.evidence_anchor:  # web evidence for values the paper and code don't back (Tavily)
+        from gapfinder.search.evidence import EvidenceSearch
+
+        evidence = EvidenceSearch(args.paper or spec.name, anchors=[args.evidence_anchor])
+    search = GapSearch(orch, targets, assumptions, SearchConfig(max_runs=args.max_runs), evidence=evidence)
     results = await search.run()
     await orch.tag_key_nodes()
     report = GapReport.from_search(search, results, paper=args.paper or spec.name)
@@ -177,6 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--assumptions", required=True, help="assumptions.json from `gapfinder ledger`, or a list")
     ps.add_argument("--paper", help="paper name for the report title")
     ps.add_argument("--max-runs", type=int, default=None, help="branch-run budget")
+    ps.add_argument("--evidence-anchor", help="enable web evidence; sources must mention this name (e.g. RusKey)")
     ps.add_argument("--no-fork", action="store_true", help="ablation: rebuild and reload for every branch")
     ps.add_argument("--backend", default=None)
     ps.add_argument("--concurrency", type=int, default=settings().max_concurrency)

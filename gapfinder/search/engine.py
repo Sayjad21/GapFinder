@@ -22,6 +22,7 @@ from gapfinder.models import budget
 from gapfinder.sandbox.noise import NoiseBand, noise_band
 from gapfinder.sandbox.runner import Orchestrator
 from gapfinder.search.bisect import minimal_set
+from gapfinder.ledger.assumptions import derive_status
 from gapfinder.search.verify import Plausibility, gap_returns, held_out_ok, plausible
 
 Changes = dict[str, str]
@@ -116,6 +117,7 @@ class GapSearch:
             elif k not in self.assumptions:
                 self.assumptions[k] = a
         self._runs: dict[frozenset, list[Branch]] = {}
+        self.untestable: list[tuple[str, str]] = []  # (knob, value) above the spec's cost limit
         self.runs_used = 0
         self.bands: dict[str, NoiseBand] = {}
         self.naive: dict[str, float] = {}
@@ -189,14 +191,27 @@ class GapSearch:
         """One hypothesis per (knob, candidate value). A knob whose value the paper states and the
         code already uses can't cause the gap (the naive run already matches the paper there)."""
         out = []
-        open_knobs = [(k, a) for k, a in self.assumptions.items()
-                      if a.status != AssumptionStatus.stated_matches.value]
+        open_knobs = []
+        for k, a in self.assumptions.items():
+            # "matches" must be judged against what the naive run used (the spec default), not the
+            # artifact's own default: a scaled reproduction differs from the paper exactly there
+            if derive_status(a.paper_value, self.spec.knobs[k].default, a.status) == AssumptionStatus.stated_matches.value:
+                continue
+            open_knobs.append((k, a))
         for knob, a in open_knobs[: self.cfg.screen_top_k]:
-            default = self.spec.knobs[knob].default
-            values = [v for v in a.candidate_values if v != default] or [
-                v for v in self.spec.knobs[knob].candidates if v != default]
-            for v in values[: self.cfg.candidates_per_knob]:
-                out.append(Hypothesis(knob, str(v), a.id))
+            spec_knob = self.spec.knobs[knob]
+            default = spec_knob.default
+            values = [str(v) for v in a.candidate_values if str(v) != default] or [
+                v for v in spec_knob.candidates if v != default]
+            stated = _stated_value(a.paper_value)
+            if stated is not None and stated != default and stated not in values:
+                values.insert(0, stated)  # the paper's own value is always a candidate
+            affordable = [v for v in values if spec_knob.affordable(v)]
+            for v in values:
+                if not spec_knob.affordable(v) and (knob, v) not in self.untestable:
+                    self.untestable.append((knob, v))
+            for v in affordable[: self.cfg.candidates_per_knob]:
+                out.append(Hypothesis(knob, v, a.id))
         return out
 
     async def explain(self, t: Target) -> ClaimResult:
@@ -422,6 +437,14 @@ class GapSearch:
         except ValueError as exc:
             res.notes.append(f"skipped {h.knob}={h.value!r}: {exc}")
             return False
+
+
+def _stated_value(paper_value: str) -> str | None:
+    """A plain stated value ('2000', '100000000', 'true'), or None for prose or 'unstated'."""
+    v = paper_value.strip().strip("\"'")
+    if v.lower().startswith("unstated") or " " in v or not v:
+        return None
+    return v
 
 
 def _rank(r: ClaimResult) -> int:
