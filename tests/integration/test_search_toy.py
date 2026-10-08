@@ -228,3 +228,26 @@ def test_directional_plausibility():
     p = plausible(a, "2000000", naive="500000")
     assert p.supported and p.partial
     assert not plausible(a, "100000", naive="500000").supported  # away from the paper's value
+
+
+def test_paper_values_are_experiment_specific_and_duplicates_merge(tmp_path):
+    from gapfinder.ledger.schemas import Claim
+
+    o = orch(tmp_path)
+    claims = [Claim(id="L1", figure_or_table="Figure 6", metric="m", type="trend", quote="q1"),
+              Claim(id="L2", figure_or_table="Figure 8", metric="m", type="trend", quote="q2")]
+    asm = [
+        # stated for Figure 8 only, and equal to the naive value: must NOT block the knob for Figure 6
+        Assumption(id="A1", knob="beta", layer="config", paper_value="0.5", candidate_values=["2.0"],
+                   prior_score=0.9, affects_claims=["L2"]),
+        # two entries for one knob: one matches naive (1.0), one states 2.0 -> the knob stays open, 2.0 first
+        Assumption(id="A2", knob="alpha", layer="config", paper_value="1.0", candidate_values=["50.0"],
+                   prior_score=0.8, affects_claims=["L1"]),
+        Assumption(id="A3", knob="alpha", layer="config", paper_value="2.0", candidate_values=[],
+                   prior_score=0.2, affects_claims=["L1"]),
+    ]
+    t = [Target("C1", "score", 68.3, figure="Figure 6")]
+    s = GapSearch(o, t, asm, SearchConfig(), claims=claims)
+    hyps = [(h.knob, h.value) for h in s.hypotheses()]
+    assert ("beta", "2.0") in hyps
+    assert hyps.index(("alpha", "2.0")) < hyps.index(("alpha", "50.0"))

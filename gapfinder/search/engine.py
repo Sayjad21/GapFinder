@@ -47,6 +47,7 @@ class Target:
     metric: str
     paper_value: float
     held_out: bool = False  # only used to check explanations, never to choose them
+    figure: str | None = None  # e.g. "Figure 6": which experiment's stated settings apply
 
 
 @dataclass
@@ -54,6 +55,7 @@ class SearchConfig:
     screen_top_k: int = 24  # assumptions screened, by prior
     candidates_per_knob: int = 2
     noise_repeats: int = 5
+    screen_repeats: int = 1  # >1 guards against batch effects (one run per config in a crowded batch)
     confirm_repeats: int = 3
     effect_threshold: float = 1.0  # noise units needed to survive screen/confirm
     noise_floor_frac: float = 0.01  # band never below 1% of the metric (MAD can be 0 for discrete metrics)
@@ -101,21 +103,31 @@ def _norm_knob(k: str) -> str:
 
 class GapSearch:
     def __init__(self, orch: Orchestrator, targets: list[Target], assumptions: list[Assumption],
-                 cfg: SearchConfig | None = None, evidence=None):
-        """`evidence`: optional EvidenceSearch (web) consulted when paper and code don't back a value."""
+                 cfg: SearchConfig | None = None, evidence=None, claims: list | None = None):
+        """`evidence`: optional EvidenceSearch (web) consulted when paper and code don't back a value.
+        `claims`: the ledger's claims, so a paper value can be tied to the experiment it belongs to."""
         self.orch, self.targets, self.cfg = orch, targets, cfg or SearchConfig()
         self.evidence = evidence
+        self.claim_figure = {c.id: c.figure_or_table for c in (claims or [])}
+        self.target_figures = {t.figure for t in targets if t.figure}
         self.spec = orch.spec
         spec_knobs = {_norm_knob(k): k for k in self.spec.knobs}
         # assumption -> spec knob; assumptions about knobs the harness can't set are skipped (and reported)
         self.assumptions: dict[str, Assumption] = {}
+        self.all_for: dict[str, list[Assumption]] = {}  # every ledger entry per knob (papers state some twice)
         self.unmapped: list[str] = []
         for a in sorted(assumptions, key=lambda a: -a.prior_score):
             k = spec_knobs.get(_norm_knob(a.knob))
             if k is None:
                 self.unmapped.append(a.knob)
-            elif k not in self.assumptions:
-                self.assumptions[k] = a
+                continue
+            self.all_for.setdefault(k, []).append(a)
+        for k, entries in self.all_for.items():
+            # one representative (highest prior) carrying the union of evidence and candidates
+            head = entries[0]
+            evidence = [e for a in entries for e in a.evidence]
+            cands = list(dict.fromkeys(str(v) for a in entries for v in a.candidate_values))
+            self.assumptions[k] = head.model_copy(update={"evidence": evidence, "candidate_values": cands})
         self._runs: dict[frozenset, list[Branch]] = {}
         self.untestable: list[tuple[str, str]] = []  # (knob, value) above the spec's cost limit
         self.runs_used = 0
@@ -193,19 +205,25 @@ class GapSearch:
         out = []
         open_knobs = []
         for k, a in self.assumptions.items():
-            # "matches" must be judged against what the naive run used (the spec default), not the
-            # artifact's own default: a scaled reproduction differs from the paper exactly there
-            if derive_status(a.paper_value, self.spec.knobs[k].default, a.status) == AssumptionStatus.stated_matches.value:
+            stated = self._stated_values(k)
+            default = self.spec.knobs[k].default
+            # "matches" is judged against what the naive run used (the spec default), not the artifact's
+            # default, and only on values the paper states FOR THESE claims' experiment(s). The knob is
+            # confirmed only if every such value matches the naive run.
+            if stated and all(derive_status(v, default, "stated_code_differs") == AssumptionStatus.stated_matches.value
+                              for v in stated):
                 continue
-            open_knobs.append((k, a))
-        for knob, a in open_knobs[: self.cfg.screen_top_k]:
+            open_knobs.append((k, a, stated))
+        for knob, a, stated in open_knobs[: self.cfg.screen_top_k]:
             spec_knob = self.spec.knobs[knob]
             default = spec_knob.default
             values = [str(v) for v in a.candidate_values if str(v) != default] or [
                 v for v in spec_knob.candidates if v != default]
-            stated = _stated_value(a.paper_value)
-            if stated is not None and stated != default and stated not in values:
-                values.insert(0, stated)  # the paper's own value is always a candidate
+            for v in reversed([_stated_value(s) for s in stated]):
+                if v is not None and v != default:  # the paper's own values come first
+                    if v in values:
+                        values.remove(v)
+                    values.insert(0, v)
             affordable = [v for v in values if spec_knob.affordable(v)]
             for v in values:
                 if not spec_knob.affordable(v) and (knob, v) not in self.untestable:
@@ -241,7 +259,8 @@ class GapSearch:
         hyps = [h for h in self.hypotheses() if self._renderable(h, res)]
 
         # 1. screen: one knob per branch, one run each
-        await asyncio.gather(*(self.measure(h.changes, 1, f"screen {h.knob}={h.value}") for h in hyps))
+        await asyncio.gather(*(self.measure(h.changes, self.cfg.screen_repeats, f"screen {h.knob}={h.value}")
+                               for h in hyps))
         tried.update(frozenset(h.changes.items()) for h in hyps)
         score = {h: self.units(t, h.changes) for h in hyps}
         res.screen = [{"knob": h.knob, "value": h.value, "assumption": h.assumption_id,
@@ -401,6 +420,19 @@ class GapSearch:
     def confirm_repeats(self, t: Target) -> int:
         """Noisy metrics (run-to-run CV above 5%) get two extra repeats."""
         return self.cfg.confirm_repeats + (2 if self.bands[t.metric].cv > 0.05 else 0)
+
+    def _stated_values(self, knob: str) -> list[str]:
+        """Paper values for `knob` that apply to the targets' figures. An entry tied only to claims of
+        other figures (e.g. Monkey for Figure 8 when Figure 6 is explained) doesn't count."""
+        out = []
+        for a in self.all_for.get(knob, []):
+            if a.paper_value.strip().lower().startswith("unstated"):
+                continue
+            figs = {self.claim_figure.get(c) for c in a.affects_claims if c in self.claim_figure}
+            if self.target_figures and figs and not (figs & self.target_figures):
+                continue  # stated for another experiment
+            out.append(a.paper_value)
+        return out
 
     def _strong_lead(self, h: Hypothesis) -> bool:
         a = self.assumptions.get(h.knob)

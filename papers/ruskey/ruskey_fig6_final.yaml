@@ -1,0 +1,42 @@
+# Harness spec: RusKey Figure 6, starting from the reproduction's FINAL Figure 6 regime.
+# results_fig6_final2 links to results_monkey20 (go20.sh / wsl_monkey.sh): Monkey 4 bits/key,
+# 256 MB block cache, zero-result ratio 1.0, 8 MB SST files, 40K ops/mission, 20M keys.
+# Scaled here to 2M keys and 10 missions x 20K ops (sandbox CPU; see papers/ruskey/FINDINGS.md).
+# The paper's Figure 6 uses uniform 8 bits/key (p.15): the question is whether GapFinder finds that.
+name: ruskey-fig6-final
+base: ${GF_RUSKEY_SOURCE}
+build:
+  # The driver is prebuilt locally (scripts/prep_ruskey_bin.sh) and uploaded by spike S3:
+  # compiling RocksDB in a sandbox costs thousands of CPU-seconds. This stage only checks that
+  # the binary's libraries resolve. Build options are therefore out of scope for RusKey.
+  command: 'LD_LIBRARY_PATH=/work/lib ldd /work/driver/ruskey_bench | grep -q "not found" && exit 1; echo prebuilt-ok'
+  timeout: 120
+load:
+  command: 'bash /work/harness/load.sh db=/work/db num_keys={num_keys} key_size={key_size} value_size={value_size} sequential_load={sequential_load} logical_levels={logical_levels} size_ratio={size_ratio} write_buffer={write_buffer} target_file_size_mb={target_file_size_mb} bits_per_key={bits_per_key} monkey={monkey} direct_io={direct_io} background_jobs={background_jobs} block_cache_mb={block_cache_mb}'
+  timeout: 3600
+run:
+  command: 'bash /work/harness/fig6_cell.sh db=/work/db workloads=balanced:0.5,writeheavy:0.1 missions={missions} ops_per_mission={ops_per_mission} num_keys={num_keys} key_size={key_size} value_size={value_size} logical_levels={logical_levels} size_ratio={size_ratio} write_buffer={write_buffer} target_file_size_mb={target_file_size_mb} bits_per_key={bits_per_key} monkey={monkey} direct_io={direct_io} background_jobs={background_jobs} rate_limit_mb={rate_limit_mb} block_cache_mb={block_cache_mb} zero_result_ratio={zero_result_ratio}'
+  output: out/result.json
+  format: jsonl
+  timeout: 3600
+knobs:
+  num_keys:            {layer: dataset, default: "2000000", max: 4000000}
+  key_size:            {layer: dataset, default: "128"}
+  value_size:          {layer: dataset, default: "896"}
+  sequential_load:     {layer: dataset, default: "false"}
+  logical_levels:      {layer: dataset, default: "6"}
+  size_ratio:          {layer: dataset, default: "10"}
+  write_buffer:        {layer: dataset, default: "2097152"}
+  target_file_size_mb: {layer: dataset, default: "8"}
+  bits_per_key:        {layer: dataset, default: "4"}
+  monkey:              {layer: dataset, default: "true"}
+  direct_io:           {layer: config, default: "true"}
+  background_jobs:     {layer: config, default: "4"}
+  rate_limit_mb:       {layer: environment, default: "0"}
+  block_cache_mb:      {layer: config, default: "256"}
+  zero_result_ratio:   {layer: workload, default: "1.0"}
+  missions:            {layer: workload, default: "10", max: 20}
+  ops_per_mission:     {layer: workload, default: "20000", max: 50000}
+allowed_paths: ["out/", "configs/"]
+metrics: [balanced_ratio_k1_k5, balanced_ratio_k10_k5, balanced_ratio_k1_k10, writeheavy_ratio_k1_k10,
+          writeheavy_ratio_k10_k5, balanced_wamp_k1, balanced_wamp_k10, balanced_us_k5]
