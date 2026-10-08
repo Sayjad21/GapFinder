@@ -51,6 +51,54 @@ class _Claims(BaseModel):
     claims: list[Claim]
 
 
+FILTER_PROMPT = """Below are statements extracted from a research paper as candidate claims.
+For each one, decide whether it states a RESULT of the paper's own experiments:
+a measured number, a comparison or ranking between methods, a trend, or which
+setting a method chose or converged to. These are results even without a number.
+
+It is NOT a result if it is:
+- a description of the experimental setup (what was run, parameters, hardware,
+  dataset sizes, number of runs);
+- part of an illustrative, simplified, toy or running example used to explain a
+  mechanism (use the figure captions below: a figure captioned as an example or
+  overview is not a measurement);
+- a limitation, design property or analytical argument that is not measured.
+
+A repeated statement of a real result is still a result.
+
+FIGURE CAPTIONS:
+{captions}
+
+STATEMENTS:
+{statements}
+"""
+
+
+class _Verdict(BaseModel):
+    id: str
+    result: bool
+    why: str
+
+
+class _Verdicts(BaseModel):
+    verdicts: list[_Verdict]
+
+
+async def filter_claims(router: Router, paper: PaperText, claims: list[Claim]) -> tuple[list[Claim], list[tuple[str, str]]]:
+    """Second pass (Super): drop extracted statements that aren't results. Returns (kept, [(id, why)])."""
+    if not claims:
+        return [], []
+    captions = "\n".join(f"{f.label}: {f.caption}" for f in paper.figures) or "(none extracted)"
+    statements = "\n".join(f"{c.id} [{c.figure_or_table or 'prose'}]: {c.quote}" for c in claims)
+    out = await router.structured("super", [{"role": "user", "content": FILTER_PROMPT.format(
+        captions=captions, statements=statements)}], _Verdicts)
+    verdict = {v.id: v for v in out.verdicts}
+    kept = [c for c in claims if verdict.get(c.id) is None or verdict[c.id].result]  # unjudged: keep
+    dropped = [(c.id, f"not a result: {verdict[c.id].why}") for c in claims
+               if verdict.get(c.id) is not None and not verdict[c.id].result]
+    return kept, dropped
+
+
 async def extract_claims(router: Router, paper: PaperText, *, max_chars: int = 180_000) -> list[Claim]:
     text = paper.full_text[:max_chars]
     out = await router.structured("ultra", [{"role": "user", "content": CLAIM_PROMPT.format(paper=text)}], _Claims)

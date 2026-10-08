@@ -39,7 +39,7 @@ async def cmd_ledger(args) -> int:
     from gapfinder.ingest.pdf import load_paper
     from gapfinder.ingest.repo_map import build_repo_map, clone_or_path
     from gapfinder.ledger.assumptions import build_assumption_space, ground_assumptions, inconsistencies
-    from gapfinder.ledger.claims import extract_claims, ground_claims
+    from gapfinder.ledger.claims import extract_claims, filter_claims, ground_claims
     from gapfinder.ledger.schemas import AssumptionSpace, ClaimLedger
     from gapfinder.models.router import Router
 
@@ -53,15 +53,16 @@ async def cmd_ledger(args) -> int:
     claims = await extract_claims(router, paper)
     _write(out / "raw" / "claims.json", [c.model_dump() for c in claims])  # pre-grounding, for offline re-grounding
     crep = ground_claims(paper, claims)
-    _write(out / "claim_ledger.json", ClaimLedger(paper=str(args.paper), claims=crep.kept).model_dump())
+    results, not_results = await filter_claims(router, paper, crep.kept)
+    _write(out / "claim_ledger.json", ClaimLedger(paper=str(args.paper), claims=results).model_dump())
     assumptions = await build_assumption_space(router, paper, rm, crep.kept)
     _write(out / "raw" / "assumptions.json", [a.model_dump() for a in assumptions])
     arep = ground_assumptions(paper, repo_root, assumptions)
     _write(out / "assumptions.json", AssumptionSpace(paper=str(args.paper), repo=args.repo,
                                                      assumptions=arep.kept).model_dump())
-    _write(out / "dropped.json", {"claims": crep.dropped, "assumptions": arep.dropped})
+    _write(out / "dropped.json", {"claims": crep.dropped, "not_results": not_results, "assumptions": arep.dropped})
     _write(out / "cost.json", router.meter.summary())
-    print(f"{len(crep.kept)} claims ({len(crep.dropped)} ungrounded dropped); "
+    print(f"{len(results)} claims ({len(crep.dropped)} ungrounded, {len(not_results)} not results, dropped); "
           f"{len(arep.kept)} assumptions ({len(inconsistencies(arep.kept))} paper-artifact inconsistencies); "
           f"${router.meter.total_cost():.4f}")
     return 0

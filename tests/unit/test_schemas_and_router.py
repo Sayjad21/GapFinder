@@ -217,3 +217,18 @@ async def test_failed_call_is_recorded_as_unconfirmed(tmp_path):
         await r.complete("nano", [{"role": "user", "content": "x" * 3000}])
     unconfirmed = [e for e in budget.entries() if e["kind"] == "llm_unconfirmed"]
     assert len(unconfirmed) == 4 and budget.spent_usd() > 0
+
+
+async def test_filter_claims_drops_non_results_and_keeps_unjudged(tmp_path):
+    from gapfinder.ingest.pdf import FigureCrop, Page, PaperText
+    from gapfinder.ledger.claims import filter_claims
+
+    verdicts = '{"verdicts": [{"id": "C1", "result": true, "why": "measured"}, {"id": "C2", "result": false, "why": "setup"}]}'
+    transport, calls = _fake([verdicts])
+    r = Router(transport=transport, cache=ResponseCache(tmp_path))
+    paper = PaperText(path=tmp_path / "p.pdf", pages=[Page(1, "x")],
+                      figures=[FigureCrop(label="Figure 2", page=1, caption="Figure 2: a simplified example")])
+    claims = [Claim(id=i, figure_or_table=None, metric="m", type="trend", quote=f"q{i}") for i in ("C1", "C2", "C3")]
+    kept, dropped = await filter_claims(r, paper, claims)
+    assert [c.id for c in kept] == ["C1", "C3"]  # C3 wasn't judged: kept, never silently dropped
+    assert dropped == [("C2", "not a result: setup")]

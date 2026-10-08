@@ -21,6 +21,7 @@ from gapfinder.ledger.grounding import normalise
 # Gold knobs that are a concept rather than one flag, and the extracted names that count for them.
 KNOB_ALIASES = {
     "host_memory_and_device": {"memory", "ram", "ssd", "nvme", "device", "hardware", "cpu", "disk"},
+    "key_value_size": {"key_size", "value_size"},  # a concept made of two flags
 }
 
 
@@ -73,13 +74,27 @@ def score(run_dir: Path, gold_dir: Path) -> dict:
 
     c_hits = {g["id"]: _claim_found(g, claims) for g in gold_c}
     head = [g["id"] for g in gold_c if g.get("headline")]
+    # out of scope by design: GapFinder only changes conditions, never code (hard-coded settings,
+    # algorithm rewrites); the gold file says which and why
+    out_of_scope = [g["knob"] for g in gold_a if g.get("in_scope") is False]
+    gold_a = [g for g in gold_a if g.get("in_scope") is not False]
     a_hits = {g["knob"]: _knob_found(g["knob"], assumptions) for g in gold_a}
     rel = [g["knob"] for g in gold_a if g.get("prior_score", 0) >= 0.3]  # knobs that could explain a gap
     cost = json.loads((run_dir / "cost.json").read_text()) if (run_dir / "cost.json").exists() else {}
+    # precision: extracted claims judged real by the author-reviewed labels (matched by quote)
+    lab_path = gold_dir / "claim_labels.json"
+    labels = json.loads(lab_path.read_text())["labels"] if lab_path.exists() else []
+    judged, unlabeled = [], []
+    for c in claims:
+        hit = next((l for l in labels if _quote_match(l["quote"], c["quote"])), None)
+        (judged.append(hit["real"]) if hit else unlabeled.append({"id": c["id"], "quote": c["quote"][:200]}))
     return {
         "claim_recall_all": round(sum(v is not None for v in c_hits.values()) / len(gold_c), 3),
         "claim_recall_headline": round(sum(c_hits[h] is not None for h in head) / max(len(head), 1), 3),
         "claims_extracted": len(claims),
+        "claim_precision_labeled": round(sum(judged) / len(judged), 3) if judged else None,
+        "claims_labeled": len(judged),
+        "claims_needing_label": unlabeled,
         "claims_dropped_ungrounded": len(dropped.get("claims", [])),
         "assumption_recall_relevant_top30": round(sum(a_hits[k] is not None for k in rel) / max(len(rel), 1), 3),
         "assumption_recall_all_top30": round(sum(v is not None for v in a_hits.values()) / len(gold_a), 3),
@@ -88,8 +103,10 @@ def score(run_dir: Path, gold_dir: Path) -> dict:
         "knob_matches": a_hits,
         "missed_claims": [k for k, v in c_hits.items() if v is None],
         "missed_knobs": [k for k, v in a_hits.items() if v is None],
+        "out_of_scope_knobs": out_of_scope,
         "cost": cost,
-        "bars": {"claim_recall_headline": 0.85, "assumption_recall_relevant_top30": 0.80},
+        "bars": {"claim_recall_headline": 0.85, "assumption_recall_relevant_top30": 0.80,
+                 "claim_precision": 0.90},
     }
 
 
