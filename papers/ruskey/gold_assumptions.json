@@ -2,44 +2,397 @@
   "schema_version": "1.0",
   "paper": "RusKey, SIGMOD 2024, arXiv:2308.07013v2",
   "repo": "Sayjad's RusKey reproduction (/root/ruskey in WSL): driver/ruskey_bench.cc, lerp/lerp.py, rocksdb fork v11.8.1 branch ruskey-flsm",
-  "status": "DRAFT -- knob names and defaults taken from RESULTS_LOG.md's flag audit; Sayjad must verify. code refs other than rate_limit_mb still need file:line.",
+  "status": "Reviewed 2026-10-08 by an assistant against the paper and the reproduction's scripts (review/REVIEW.md); not yet signed off by the reproduction author. reproduction_value = the final Figure 6 regime: results_fig6_final2 -> results_monkey20 (go20.sh, wsl_monkey.sh).",
   "assumptions": [
-    {"id": "A1", "knob": "num_keys", "layer": "dataset", "paper_value": "100000000", "code_default": "100000000",
-     "candidate_values": ["20000000", "100000000"], "prior_score": 0.85, "status": "stated_matches", "affects_claims": ["C4", "C5", "C7"],
-     "evidence": [{"kind": "paper", "ref": "p.16", "quote": "we initially bulk load the empty database with 100 million random sampled key-value entries"},
-                  {"kind": "measurement", "ref": "RESULTS_LOG.md (balanced ground truth)", "quote": "4 levels at 20 GB against the paper's 5-6 at 100 GB"}]},
-    {"id": "A2", "knob": "rate_limit_mb", "layer": "environment", "paper_value": "unstated", "code_default": "0",
-     "candidate_values": ["30", "60"], "prior_score": 0.8, "status": "unstated", "affects_claims": ["C3", "C5", "C7"],
-     "evidence": [{"kind": "code", "ref": "driver/ruskey_bench.cc:1284", "quote": "--rate_limit_mb N        cap compaction bandwidth at N MB/s (0 = off)"},
-                  {"kind": "measurement", "ref": "WHERE_WE_ARE.md", "quote": "With the cap, K=1 stalls nearly four times as much as K=10."}]},
-    {"id": "A3", "knob": "direct_io", "layer": "config", "paper_value": "true", "code_default": "false",
-     "candidate_values": ["true"], "prior_score": 0.6, "status": "stated_code_differs", "affects_claims": ["C2", "C3", "C5"],
-     "evidence": [{"kind": "paper", "ref": "p.15", "quote": "we enable direct I/Os for read and write"}]},
-    {"id": "A4", "knob": "target_file_size_mb", "layer": "config", "paper_value": "unstated", "code_default": "64",
-     "candidate_values": ["2", "64"], "prior_score": 0.55, "status": "unstated", "affects_claims": ["C3", "C4"], "evidence": []},
-    {"id": "A5", "knob": "block_cache_mb", "layer": "config", "paper_value": "unstated", "code_default": "32",
-     "candidate_values": ["8", "0"], "prior_score": 0.5, "status": "unstated", "affects_claims": ["C2", "C5"], "evidence": []},
-    {"id": "A6", "knob": "background_jobs", "layer": "config", "paper_value": "unstated", "code_default": "4",
-     "candidate_values": ["1", "8"], "prior_score": 0.45, "status": "unstated", "affects_claims": ["C3", "C5"], "evidence": []},
-    {"id": "A7", "knob": "zero_result_ratio", "layer": "workload", "paper_value": "unstated", "code_default": "0.0",
-     "candidate_values": ["0.5"], "prior_score": 0.4, "status": "unstated", "affects_claims": ["C2", "C5"], "evidence": []},
-    {"id": "A8", "knob": "propagate_during_learning", "layer": "config", "paper_value": "false (other levels frozen while training, sec. 5.2.1)", "code_default": "true",
-     "candidate_values": ["false"], "prior_score": 0.5, "status": "stated_code_differs", "affects_claims": ["C3", "C4", "C6"], "evidence": []},
-    {"id": "A9", "knob": "greedy_critic", "layer": "config", "paper_value": "false (DDPG actor)", "code_default": "true",
-     "candidate_values": ["false"], "prior_score": 0.4, "status": "stated_code_differs", "affects_claims": ["C3", "C4", "C6"], "evidence": []},
-    {"id": "A10", "knob": "move_margin", "layer": "config", "paper_value": "unstated (no such mechanism in the paper)", "code_default": "0.4",
-     "candidate_values": ["0.0", "0.15"], "prior_score": 0.5, "status": "unstated", "affects_claims": ["C3", "C4"], "evidence": []},
-    {"id": "A11", "knob": "write_buffer", "layer": "config", "paper_value": "2 MB", "code_default": "2 MiB",
-     "candidate_values": [], "prior_score": 0.1, "status": "stated_matches", "affects_claims": [],
-     "evidence": [{"kind": "paper", "ref": "p.15", "quote": "We set the memory buffer size to 2MB, the size ratio to 10, and the default Bloom filter bits-per-key to 8"}]},
-    {"id": "A12", "knob": "bits_per_key", "layer": "config", "paper_value": "8", "code_default": "8.0",
-     "candidate_values": [], "prior_score": 0.1, "status": "stated_matches", "affects_claims": [],
-     "evidence": [{"kind": "paper", "ref": "p.15", "quote": "the default Bloom filter bits-per-key to 8"}]},
-    {"id": "A13", "knob": "ops_per_mission", "layer": "workload", "paper_value": "50000", "code_default": "50000",
-     "candidate_values": [], "prior_score": 0.1, "status": "stated_matches", "affects_claims": [],
-     "evidence": [{"kind": "paper", "ref": "p.16", "quote": "The mission size is set to 50000 operations"}]},
-    {"id": "A14", "knob": "host_memory_and_device", "layer": "environment", "paper_value": "256GB DDR4, 1TB NVMe SSD, Xeon Gold 6326", "code_default": "n/a (reproduction: 16 vCPU, 15 GB RAM, NVMe under WSL2)",
-     "candidate_values": [], "prior_score": 0.6, "status": "stated_code_differs", "affects_claims": ["C2", "C3", "C5", "C7"],
-     "evidence": [{"kind": "paper", "ref": "p.15", "quote": "256GB DDR4 main memory, and 1TB NVMe SSD"}]}
+    {
+      "id": "A1",
+      "knob": "num_keys",
+      "layer": "dataset",
+      "paper_value": "100000000",
+      "code_default": "100000000",
+      "candidate_values": [
+        "20000000",
+        "100000000"
+      ],
+      "prior_score": 0.85,
+      "status": "stated_matches",
+      "affects_claims": [
+        "C4",
+        "C5",
+        "C7"
+      ],
+      "evidence": [
+        {
+          "kind": "paper",
+          "ref": "p.16",
+          "quote": "we initially bulk load the empty database with 100 million random sampled key-value entries"
+        },
+        {
+          "kind": "measurement",
+          "ref": "RESULTS_LOG.md (balanced ground truth)",
+          "quote": "4 levels at 20 GB against the paper's 5-6 at 100 GB"
+        }
+      ],
+      "review_note": "Driver default is 100M, but every final Fig. 6 run used 20M (wsl_tuner.sh:27, go20.sh:22), so status is stated_code_differs. Mattered most of all: at 6M keys (fits in RAM) read-heavy K=1 vs K=10 was flat (81.4 vs 81.4 us/op); the K trade-off appeared only at 20M (data > 16 GB RAM).",
+      "reproduction_value": "20000000"
+    },
+    {
+      "id": "A2",
+      "knob": "rate_limit_mb",
+      "layer": "environment",
+      "paper_value": "unstated",
+      "code_default": "0",
+      "candidate_values": [
+        "30",
+        "60"
+      ],
+      "prior_score": 0.8,
+      "status": "unstated",
+      "affects_claims": [
+        "C3",
+        "C5",
+        "C7"
+      ],
+      "evidence": [
+        {
+          "kind": "code",
+          "ref": "driver/ruskey_bench.cc:1284",
+          "quote": "--rate_limit_mb N        cap compaction bandwidth at N MB/s (0 = off)"
+        },
+        {
+          "kind": "measurement",
+          "ref": "WHERE_WE_ARE.md",
+          "quote": "With the cap, K=1 stalls nearly four times as much as K=10."
+        }
+      ],
+      "review_note": "Final runs leave it off. It mattered at 500K keys: 30 MB/s gave K=1 152.4 us/op with 3187 s of write stalls (RESULTS_LOG.md:1844); dropped once data reached 20 GB."
+    },
+    {
+      "id": "A3",
+      "knob": "direct_io",
+      "layer": "config",
+      "paper_value": "true",
+      "code_default": "false",
+      "candidate_values": [
+        "true"
+      ],
+      "prior_score": 0.6,
+      "status": "stated_code_differs",
+      "affects_claims": [
+        "C2",
+        "C3",
+        "C5"
+      ],
+      "evidence": [
+        {
+          "kind": "paper",
+          "ref": "p.15",
+          "quote": "we enable direct I/Os for read and write"
+        }
+      ],
+      "review_note": "Driver default is false, but all final runs pass --direct_io (run_experiments.py:259, wsl_monkey.sh, adapt_curve.py), so it effectively matches. Caveat: under WSL2, O_DIRECT doesn't bypass the host's cache (same run: read-heavy lookups 10.6 us vs write-heavy 394.8 us, RESULTS_LOG.md:2570).",
+      "reproduction_value": "true"
+    },
+    {
+      "id": "A4",
+      "knob": "target_file_size_mb",
+      "layer": "config",
+      "paper_value": "unstated",
+      "code_default": "64",
+      "candidate_values": [
+        "2",
+        "64"
+      ],
+      "prior_score": 0.55,
+      "status": "unstated",
+      "affects_claims": [
+        "C3",
+        "C4"
+      ],
+      "evidence": [],
+      "review_note": "Driver default is 64 (ruskey_bench.cc:1275), but final runs use 8 MB (wsl_tuner.sh:71, wsl_monkey.sh) and older runs used 2 MB. Matters: GapFinder's own run moved K10/K5 from 0.87 to 2.74 at 64 MB.",
+      "reproduction_value": "8"
+    },
+    {
+      "id": "A5",
+      "knob": "block_cache_mb",
+      "layer": "config",
+      "paper_value": "unstated",
+      "code_default": "32",
+      "candidate_values": [
+        "8",
+        "0"
+      ],
+      "prior_score": 0.5,
+      "status": "unstated",
+      "affects_claims": [
+        "C2",
+        "C5"
+      ],
+      "evidence": [],
+      "review_note": "Driver default is 32 (ruskey_bench.cc:151), but final runs use 256 (wsl_tuner.sh:28, go20.sh:22). Filter and index blocks sit outside the cache. The 32 -> 256 effect at 20 GB was never isolated.",
+      "reproduction_value": "256"
+    },
+    {
+      "id": "A6",
+      "knob": "background_jobs",
+      "layer": "config",
+      "paper_value": "unstated",
+      "code_default": "4",
+      "candidate_values": [
+        "1",
+        "8"
+      ],
+      "prior_score": 0.45,
+      "status": "unstated",
+      "affects_claims": [
+        "C3",
+        "C5"
+      ],
+      "evidence": [],
+      "review_note": "Final runs use 4. An old 1/4/8 sweep (500K keys, pre-rewrite engine) didn't change the best K."
+    },
+    {
+      "id": "A7",
+      "knob": "zero_result_ratio",
+      "layer": "workload",
+      "paper_value": "unstated",
+      "code_default": "0.0",
+      "candidate_values": [
+        "0.5"
+      ],
+      "prior_score": 0.4,
+      "status": "unstated",
+      "affects_claims": [
+        "C2",
+        "C5"
+      ],
+      "evidence": [],
+      "review_note": "Driver default is 0.0, but final runs use 1.0: every lookup misses (wsl_tuner.sh:29, go20.sh:22). Paper: unstated for the experiments, but its cost model analyses the zero-result case (p.13). Mattered: with hit lookups, read-heavy showed no K effect (commit 51c95df).",
+      "reproduction_value": "1.0"
+    },
+    {
+      "id": "A8",
+      "knob": "propagate_during_learning",
+      "layer": "config",
+      "paper_value": "false (other levels frozen while training, sec. 5.2.1)",
+      "code_default": "true",
+      "candidate_values": [
+        "false"
+      ],
+      "prior_score": 0.5,
+      "status": "stated_code_differs",
+      "affects_claims": [
+        "C3",
+        "C4",
+        "C6"
+      ],
+      "evidence": [],
+      "review_note": "Paper value confirmed (sec. 5.2.1: 'The compaction policies of other levels remain unchanged throughout this process'). But it is a no-op in the final runs: --mode cost (wsl_tuner.sh:73) bypasses Lerp; see the new tuner_mode row."
+    },
+    {
+      "id": "A9",
+      "knob": "greedy_critic",
+      "layer": "config",
+      "paper_value": "false (DDPG actor)",
+      "code_default": "true",
+      "candidate_values": [
+        "false"
+      ],
+      "prior_score": 0.4,
+      "status": "stated_code_differs",
+      "affects_claims": [
+        "C3",
+        "C4",
+        "C6"
+      ],
+      "evidence": [],
+      "review_note": "No-op in the final runs (cost mode, not DDPG); see the new tuner_mode row."
+    },
+    {
+      "id": "A10",
+      "knob": "move_margin",
+      "layer": "config",
+      "paper_value": "unstated (no such mechanism in the paper)",
+      "code_default": "0.4",
+      "candidate_values": [
+        "0.0",
+        "0.15"
+      ],
+      "prior_score": 0.5,
+      "status": "unstated",
+      "affects_claims": [
+        "C3",
+        "C4"
+      ],
+      "evidence": [],
+      "review_note": "No-op in the final runs. It mattered earlier: 0.4 vetoed every move; 0.15 found and held K=10 (commit 805fb50)."
+    },
+    {
+      "id": "A11",
+      "knob": "write_buffer",
+      "layer": "config",
+      "paper_value": "2 MB",
+      "code_default": "2 MiB",
+      "candidate_values": [],
+      "prior_score": 0.1,
+      "status": "stated_matches",
+      "affects_claims": [],
+      "evidence": [
+        {
+          "kind": "paper",
+          "ref": "p.15",
+          "quote": "We set the memory buffer size to 2MB, the size ratio to 10, and the default Bloom filter bits-per-key to 8"
+        }
+      ]
+    },
+    {
+      "id": "A12",
+      "knob": "bits_per_key",
+      "layer": "config",
+      "paper_value": "8",
+      "code_default": "8.0",
+      "candidate_values": [],
+      "prior_score": 0.1,
+      "status": "stated_matches",
+      "affects_claims": [],
+      "evidence": [
+        {
+          "kind": "paper",
+          "ref": "p.15",
+          "quote": "the default Bloom filter bits-per-key to 8"
+        }
+      ],
+      "review_note": "The paper's Fig. 6 uses uniform 8 bits/key; Monkey with 4 bits/key is Fig. 8's setting (p.15, p.18). Final repro Fig. 6 runs used Monkey 4 bits/key (wsl_monkey.sh, run_experiments.py:117), so status is stated_code_differs. Mattered: write-heavy K=1 minus K=10 went from +7.4 (uniform) to +16.1 us/op (Monkey) (RESULTS_LOG.md:2464, 2527).",
+      "reproduction_value": "4"
+    },
+    {
+      "id": "A13",
+      "knob": "ops_per_mission",
+      "layer": "workload",
+      "paper_value": "50000",
+      "code_default": "50000",
+      "candidate_values": [],
+      "prior_score": 0.1,
+      "status": "stated_matches",
+      "affects_claims": [],
+      "evidence": [
+        {
+          "kind": "paper",
+          "ref": "p.16",
+          "quote": "The mission size is set to 50000 operations"
+        }
+      ],
+      "review_note": "Driver default is 50000, but final runs used 40,000 (wsl_tuner.sh:70, adapt_curve.py:42, wsl_monkey.sh), so status is stated_code_differs. Effect not tested.",
+      "reproduction_value": "40000"
+    },
+    {
+      "id": "A14",
+      "knob": "host_memory_and_device",
+      "layer": "environment",
+      "paper_value": "256GB DDR4, 1TB NVMe SSD, Xeon Gold 6326",
+      "code_default": "n/a (reproduction: 16 vCPU, 15 GB RAM, NVMe under WSL2)",
+      "candidate_values": [],
+      "prior_score": 0.6,
+      "status": "stated_code_differs",
+      "affects_claims": [
+        "C2",
+        "C3",
+        "C5",
+        "C7"
+      ],
+      "evidence": [
+        {
+          "kind": "paper",
+          "ref": "p.15",
+          "quote": "256GB DDR4 main memory, and 1TB NVMe SSD"
+        }
+      ],
+      "review_note": "Repro detail: WSL2 Ubuntu 24.04, 16 cores, 15 GB RAM (host 32 GB), ext4 on a virtual disk on NTFS. Mattered: the trade-off needs data larger than RAM, and host caching is the suspected reason balanced settles at K=10."
+    },
+    {
+      "id": "A15",
+      "knob": "missions",
+      "layer": "config",
+      "paper_value": "2000 (p.16)",
+      "code_default": null,
+      "reproduction_value": "final runs: 150 per fixed arm, 480 for the tuner",
+      "candidate_values": [],
+      "prior_score": 0.5,
+      "status": "stated_code_differs",
+      "affects_claims": [],
+      "evidence": [],
+      "review_note": "Mattered: on read-heavy the tuner averaged 23.2 us/op vs 10.1 for fixed K=1, because exploration isn't paid back within 480 missions (RESULTS_LOG.md:2620)."
+    },
+    {
+      "id": "A16",
+      "knob": "tuner_mode",
+      "layer": "config",
+      "paper_value": "Lerp (DDPG): tune Level 1, other levels unchanged, then propagate (sec. 5.2.1)",
+      "code_default": null,
+      "reproduction_value": "final runs: `--mode cost` (online-fitted cost model, settle 30, average 60), one K on every level (wsl_tuner.sh:73)",
+      "candidate_values": [],
+      "prior_score": 0.5,
+      "status": "stated_code_differs",
+      "affects_claims": [],
+      "evidence": [],
+      "review_note": "Mattered: on write-heavy DDPG chose K=4; the cost model chose K=10 (commit 3aed1be)."
+    },
+    {
+      "id": "A17",
+      "knob": "flsm_sealed_run_merge",
+      "layer": "config",
+      "paper_value": "p.16 (RocksDB version): sealed runs merge gradually through file compactions triggered by other runs; sec. 4.2: a full level merges all runs to the next level",
+      "code_default": null,
+      "reproduction_value": "rocksdb d36167568: a full level merges into the next level's active run",
+      "candidate_values": [],
+      "prior_score": 0.5,
+      "status": "stated_code_differs",
+      "affects_claims": [],
+      "evidence": [],
+      "review_note": "Mattered: before this rewrite the tuner trace was inverted on write-heavy (K=1 72.8 vs K=10 84.6 us/op, RESULTS_LOG.md:2189); K=1 write amp fell from 54.1 to 8.37."
+    },
+    {
+      "id": "A18",
+      "knob": "baseline_start_state",
+      "layer": "config",
+      "paper_value": "bulk load into an empty DB; RusKey starts at leveling (p.16); the baselines' starting shape is unstated",
+      "code_default": null,
+      "reproduction_value": "one pristine tree bulk-loaded at K=1 (20.7 GB), copied for every arm (wsl_monkey.sh)",
+      "candidate_values": [],
+      "prior_score": 0.5,
+      "status": "unstated",
+      "affects_claims": [],
+      "evidence": [],
+      "review_note": "Effect not tested."
+    },
+    {
+      "id": "A19",
+      "knob": "wal_and_compression",
+      "layer": "config",
+      "paper_value": "unstated",
+      "code_default": null,
+      "reproduction_value": "WAL off (ruskey_bench.cc:590), no compression (ruskey_bench.cc:296)",
+      "candidate_values": [],
+      "prior_score": 0.5,
+      "status": "unstated",
+      "affects_claims": [],
+      "evidence": [],
+      "review_note": "Effect not tested."
+    },
+    {
+      "id": "A20",
+      "knob": "key_value_size",
+      "layer": "config",
+      "paper_value": "128 B key, 896 B value (p.16)",
+      "code_default": null,
+      "reproduction_value": "128 / 896",
+      "candidate_values": [],
+      "prior_score": 0.5,
+      "status": "stated_matches",
+      "affects_claims": [],
+      "evidence": [],
+      "review_note": ""
+    }
   ]
 }
