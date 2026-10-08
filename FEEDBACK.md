@@ -111,4 +111,18 @@ live service.
   the meaning of `elapsed_time` in the docs, and only discovered this by spending.
 - **Suggestion:** Document the price per CPU-second and the unit of `cost`; rename or document
   `elapsed_time`; show sandbox spend on the billing page; let OCI import cover heavy builds cheaply.
-- *To confirm:* whether `cost` is USD (compare with the console balance).
+- **Confirmed 2026-10-08:** the console's usage page lists only Token Factory inference ($1.58);
+  ~$7.82 of reported sandbox `cost` doesn't appear anywhere in billing. So during the Beta the field
+  reports a price that isn't charged. That's good for users, but undocumented and alarming: we nearly
+  shrank our experiments 20x to stay inside a budget that wasn't being spent.
+- **Suggestion:** label `cost` as "estimated, not billed during Beta" in the API and docs.
+
+### 11. Billing: inference usage exceeded what the API responses reported (~10%)
+- **Product:** Token Factory inference / billing
+- **Issue:** Summing `usage` from every response gave $1.42; the console billed $1.58 (Ultra input
+  0.63M tokens billed vs 0.55M seen in responses). Most likely long Ultra calls that timed out on the
+  client were still processed and billed, with no usage reported back.
+- **Impact:** Client-side budget tracking undercounts; a hard cap based on response usage can be
+  exceeded.
+- **Suggestion:** expose a per-key usage endpoint (or request IDs in billing) so clients can reconcile.
+  We now record failed calls at their estimated input cost and reconcile against the console.

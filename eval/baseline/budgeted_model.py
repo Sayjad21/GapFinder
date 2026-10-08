@@ -35,7 +35,13 @@ class BudgetedLitellmModel(LitellmModel):
         max_out = {**self.config.model_kwargs, **kwargs}.get("max_tokens", self.tier.max_tokens)
         worst = (budget.estimate_prompt_tokens(messages) * self.tier.price_in + max_out * self.tier.price_out) / 1e6
         budget.check(worst, f"baseline {self.tier.name} call")
-        response = super()._query(messages, **kwargs)
+        try:
+            response = super()._query(messages, **kwargs)
+        except Exception as exc:  # may have been billed without a response: record the input cost
+            est = budget.estimate_prompt_tokens(messages) * self.tier.price_in / 1e6
+            budget.record("llm_unconfirmed", est, tier=self.tier.name, model=self.tier.model_id,
+                          source="baseline", error=type(exc).__name__)
+            raise
         usage = getattr(response, "usage", None)
         p_tok = getattr(usage, "prompt_tokens", 0) or 0
         c_tok = getattr(usage, "completion_tokens", 0) or 0

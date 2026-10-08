@@ -245,6 +245,9 @@ class Router:
                     continue
                 if _is_fatal(exc):  # bad key, no funds, unknown model: retrying won't help
                     raise
+                # the request may have been processed and billed even though no answer came back
+                budget.record("llm_unconfirmed", prompt_est * t.price_in / 1e6, tier=tier, model=t.model_id,
+                              error=type(exc).__name__)
                 last_exc = exc
                 await asyncio.sleep(min(2**attempt, 20))
                 continue

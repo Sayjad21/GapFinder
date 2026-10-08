@@ -191,3 +191,29 @@ def test_tagged_project_cap(monkeypatch):
     budget.check(0.4, "ok")
     with pytest.raises(budget.BudgetExceeded):
         budget.check(0.6, "over the project cap")
+
+
+def test_sandbox_cost_has_its_own_guard_not_the_billing_cap(monkeypatch):
+    from gapfinder.models import budget
+
+    monkeypatch.setenv("GF_SPEND_CAP_USD", "1.0")
+    monkeypatch.setenv("GF_SANDBOX_GUARD_USD", "10")
+    budget.record("sandbox", 5.0)  # reported, not billed
+    budget.check(0.5, "llm call")  # the billing cap ignores sandbox-reported cost
+    budget.check(0.0, "sandbox run", kind="sandbox")
+    budget.record("sandbox", 6.0)
+    with pytest.raises(budget.BudgetExceeded):
+        budget.check(0.0, "sandbox run", kind="sandbox")
+
+
+async def test_failed_call_is_recorded_as_unconfirmed(tmp_path):
+    from gapfinder.models import budget
+
+    async def boom(*a):
+        raise TimeoutError("read timeout")
+
+    r = Router(transport=boom, cache=ResponseCache(tmp_path))
+    with pytest.raises(TimeoutError):
+        await r.complete("nano", [{"role": "user", "content": "x" * 3000}])
+    unconfirmed = [e for e in budget.entries() if e["kind"] == "llm_unconfirmed"]
+    assert len(unconfirmed) == 4 and budget.spent_usd() > 0

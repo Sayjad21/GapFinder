@@ -6,8 +6,14 @@ input price + max_tokens x output price) to what has already been spent, and
 refuse the call if that would cross GF_SPEND_CAP_USD. So the cap can't be
 overrun by a single call, only approached.
 
-Prices come from config.tiers(). They're list prices from the plan; check the
-ledger total against the console balance after the first real run.
+Prices come from config.tiers() (live prices from /v1/models).
+
+Billing as observed on 2026-10-08 (console vs ledger): Nemotron inference is billed;
+Sandboxes are NOT billed during the Beta even though every run reports a `cost`. So the cap
+GF_SPEND_CAP_USD covers billed kinds only (llm, reconcile), and reported sandbox cost has its
+own guard, GF_SANDBOX_GUARD_USD, in case billing starts. Calls that fail after being sent are
+recorded at their estimated input cost ("llm_unconfirmed"): the console showed ~10% more
+inference than the ledger, most likely from billed calls that timed out client-side.
 """
 
 from __future__ import annotations
@@ -21,6 +27,8 @@ from pathlib import Path
 from gapfinder.config import settings
 
 DEFAULT_CAP_USD = 5.0
+DEFAULT_SANDBOX_GUARD_USD = 60.0
+BILLED_KINDS = {"llm", "llm_unconfirmed", "reconcile"}
 _lock = threading.Lock()
 
 
@@ -44,7 +52,13 @@ def entries() -> list[dict]:
 
 
 def spent_usd() -> float:
-    return sum(e.get("cost_usd", 0.0) for e in entries())
+    """Money actually billed (inference), as far as the ledger knows."""
+    return sum(e.get("cost_usd", 0.0) for e in entries() if e.get("kind") in BILLED_KINDS)
+
+
+def sandbox_reported_usd() -> float:
+    """What sandbox runs report as `cost` (not billed during the Beta)."""
+    return sum(e.get("cost_usd", 0.0) for e in entries() if e.get("kind") == "sandbox")
 
 
 def record(kind: str, cost_usd: float, **detail) -> None:
@@ -76,13 +90,24 @@ def tag_spent_usd(tag: str) -> float:
     return sum(e.get("cost_usd", 0.0) for e in entries() if e.get("tag") == tag)
 
 
-def check(worst_case_usd: float, what: str) -> None:
+def check(worst_case_usd: float, what: str, kind: str = "llm") -> None:
+    if kind == "sandbox":
+        guard = float(os.environ.get("GF_SANDBOX_GUARD_USD", DEFAULT_SANDBOX_GUARD_USD))
+        if sandbox_reported_usd() + worst_case_usd > guard:
+            raise BudgetExceeded(f"refusing {what}: sandbox runs have reported ${sandbox_reported_usd():.2f}, "
+                                 f"over the ${guard:.2f} guard (GF_SANDBOX_GUARD_USD)")
+        _check_tag(worst_case_usd, what)
+        return
     spent, cap = spent_usd(), cap_usd()
     if spent + worst_case_usd > cap:
         raise BudgetExceeded(
             f"refusing {what}: spent ${spent:.4f} + worst case ${worst_case_usd:.4f} would exceed the "
             f"${cap:.2f} cap (GF_SPEND_CAP_USD). Raise the cap deliberately if this spend is intended."
         )
+    _check_tag(worst_case_usd, what)
+
+
+def _check_tag(worst_case_usd: float, what: str) -> None:
     tag, tag_cap = os.environ.get("GF_SPEND_TAG"), os.environ.get("GF_TAG_CAP_USD")
     if tag and tag_cap and tag_spent_usd(tag) + worst_case_usd > float(tag_cap):
         raise BudgetExceeded(
@@ -96,4 +121,5 @@ def summary() -> dict:
         k = f"{e['kind']}:{e.get('tier', '')}".rstrip(":")
         by_kind[k] = by_kind.get(k, 0.0) + e.get("cost_usd", 0.0)
     return {"spent_usd": round(spent_usd(), 6), "cap_usd": cap_usd(),
+            "sandbox_reported_usd": round(sandbox_reported_usd(), 6),
             "by_kind": {k: round(v, 6) for k, v in sorted(by_kind.items())}}

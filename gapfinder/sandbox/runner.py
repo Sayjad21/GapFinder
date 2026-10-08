@@ -62,7 +62,7 @@ class Orchestrator:
                     files: dict[str, bytes] | None = None) -> RunResult:
         last: Exception | None = None
         for attempt in range(self.infra_retries + 1):
-            budget.check(0.0, "sandbox run")  # sandbox cost isn't known up front: stop once the cap is reached
+            budget.check(0.0, "sandbox run", kind="sandbox")  # cost unknown up front: stop at the guard
             try:
                 async with self.sem:
                     self.running += 1
