@@ -142,7 +142,8 @@ class GapSearch:
         need = n - len(ok)
         if need > 0:
             if self.cfg.max_runs is not None and self.runs_used + need > self.cfg.max_runs:
-                raise RunBudgetExceeded(f"run budget of {self.cfg.max_runs} reached")
+                raise RunBudgetExceeded(f"run budget of {self.cfg.max_runs} reached "
+                                        f"(wanted {need} more run(s) of {dict(changes) or 'naive'} for {label!r})")
             self.runs_used += need
             have.extend(await self.orch.fanout([changes] * need, [label] * need))
             ok = [b for b in have if b.status == BranchStatus.succeeded]
@@ -484,6 +485,21 @@ class GapSearch:
             c = unverified[0]
             res.notes.append(f"closest configuration not verified: {c} (gap {self.gap(t, c):+.1%}); "
                              "the budget ran out first, so no attribution is made")
+
+    def closest_overall(self, top: int = 5, min_runs: int = 2) -> list[dict]:
+        """Configurations closest to the paper across ALL claims at once (mean |gap|), for the report.
+        Labels judge one claim at a time; this shows when one change moves several claims together."""
+        rows = []
+        for key in self._runs:
+            c = dict(key)
+            n = len([b for b in self._runs[key] if b.status == BranchStatus.succeeded])
+            gaps = {t.claim_id: self.gap(t, c) for t in self.targets}
+            if n < min_runs or any(g is None for g in gaps.values()):
+                continue
+            rows.append({"changes": c, "runs": n, "gaps": gaps,
+                         "mean_abs_gap": sum(abs(g) for g in gaps.values()) / len(gaps)})
+        rows.sort(key=lambda r: (r["mean_abs_gap"], len(r["changes"])))
+        return rows[:top]
 
     def seed(self, events: list[dict]) -> int:
         """Resume: reuse branch results from an earlier run's event log (same spec and checkpoints)."""

@@ -26,6 +26,7 @@ class GapReport:
     cost: dict
     unmapped_assumptions: list[str] = field(default_factory=list)
     untestable: list[tuple[str, str]] = field(default_factory=list)
+    closest: list[dict] = field(default_factory=list)
     generated: str = field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M"))
 
     @classmethod
@@ -33,7 +34,8 @@ class GapReport:
         return cls(paper=paper, artifact=search.spec.name, results=results,
                    noise={m: b.to_dict() for m, b in search.bands.items()}, naive=dict(search.naive),
                    runs=search.runs_used, setup_runs=search.orch.cost.setup_runs, cost=search.orch.cost.summary(),
-                   unmapped_assumptions=search.unmapped, untestable=list(search.untestable))
+                   unmapped_assumptions=search.unmapped, untestable=list(search.untestable),
+                   closest=search.closest_overall())
 
     @property
     def partial(self) -> bool:
@@ -50,6 +52,7 @@ class GapReport:
                 "partial": self.partial, "runs": self.runs, "setup_runs": self.setup_runs, "cost": self.cost,
                 "naive": self.naive, "noise": self.noise, "unmapped_assumptions": self.unmapped_assumptions,
                 "untestable": [{"knob": k, "value": v} for k, v in self.untestable],
+                "closest_overall": self.closest,
                 "claims": [claim(r) for r in self.results]}
 
     def to_markdown(self) -> str:
@@ -91,6 +94,19 @@ class GapReport:
                         f"(result checkpoint `{x['result_checkpoint']}`; {len(r.replay)} repeat(s) recorded)"]
             if r.notes:
                 out += ["", "Notes:"] + [f"- {n}" for n in r.notes]
+        if self.closest:
+            ids = list(self.closest[0]["gaps"])
+            out += ["", "## Closest configurations across all claims",
+                    "Not an attribution: the labels above judge one claim at a time and require the held-out "
+                    "claims not to get worse. This table shows which measured changes bring several claims "
+                    "toward the paper together (gap per claim, mean of absolute gaps).", "",
+                    "| Configuration | Runs | " + " | ".join(ids) + " | Mean |gap| |",
+                    "|---|---|" + "---|" * len(ids) + "---|"]
+            naive = {r.target.claim_id: r.gap_before for r in self.results}
+            for row in self.closest:
+                cfg = ", ".join(f"`{k}={v}`" for k, v in row["changes"].items()) or "naive (reproduction as run)"
+                out.append(f"| {cfg} | {row['runs']} | " + " | ".join(_pct(row["gaps"][i]) for i in ids)
+                           + f" | {row['mean_abs_gap'] * 100:.1f}% |")
         if self.untestable:
             out += ["", "## Not testable within the budget",
                     "Candidate values above the harness spec's cost limits (e.g. the paper's full scale). "
