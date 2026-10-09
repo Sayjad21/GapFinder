@@ -1,6 +1,7 @@
 # Tool feedback log (running)
 
-Every rough edge goes here as it happens. At submission it becomes the
+Every rough edge goes here as it happens. The structured version for the
+submission form is [docs/FEEDBACK_SUBMISSION.md](docs/FEEDBACK_SUBMISSION.md). At submission it becomes the
 structured feedback: product, issue, steps to reproduce, impact, suggestion.
 **Only issues actually hit go in.** Entries marked *unverified at runtime*
 were found by reading code or docs and still need confirmation against the
@@ -23,8 +24,8 @@ live service.
   and writes their own adapter (we did, for other reasons).
 - **Suggestion:** Update the page with the tested version pair, and either
   accept a `client=` kwarg upstream or document passing `contree_config`.
-- *Unverified at runtime* (no Beta access yet): import and config construction
-  only.
+- *Verified 2026-10-10:* the import works with that version pair, and
+  `ContreeEnvironment.__init__` always builds `ContreeSync(config=...)` (no client argument).
 
 ### 2. Sandboxes docs: auth environment variables are not on the overview or branching pages
 - **Product:** Sandboxes docs / contree-sdk
