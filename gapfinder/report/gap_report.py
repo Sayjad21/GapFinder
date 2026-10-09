@@ -27,6 +27,8 @@ class GapReport:
     unmapped_assumptions: list[str] = field(default_factory=list)
     untestable: list[tuple[str, str]] = field(default_factory=list)
     closest: list[dict] = field(default_factory=list)
+    triaged: list[dict] = field(default_factory=list)
+    setup_check: dict | None = None
     generated: str = field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M"))
 
     @classmethod
@@ -35,7 +37,8 @@ class GapReport:
                    noise={m: b.to_dict() for m, b in search.bands.items()}, naive=dict(search.naive),
                    runs=search.runs_used, setup_runs=search.orch.cost.setup_runs, cost=search.orch.cost.summary(),
                    unmapped_assumptions=search.unmapped, untestable=list(search.untestable),
-                   closest=search.closest_overall())
+                   closest=search.closest_overall(), triaged=list(search.triaged),
+                   setup_check=search.setup_check)
 
     @property
     def partial(self) -> bool:
@@ -53,6 +56,8 @@ class GapReport:
                 "naive": self.naive, "noise": self.noise, "unmapped_assumptions": self.unmapped_assumptions,
                 "untestable": [{"knob": k, "value": v} for k, v in self.untestable],
                 "closest_overall": self.closest,
+                "triaged_failures": self.triaged,
+                "setup_check": self.setup_check,
                 "claims": [claim(r) for r in self.results]}
 
     def to_markdown(self) -> str:
@@ -61,6 +66,8 @@ class GapReport:
                f"({self.setup_runs} build/load setups) · sandbox ${self.cost.get('sandbox_usd', 0):.4f}"]
         if self.partial:
             out += ["", "> **Partial report:** the run or dollar budget ran out before every claim was verified."]
+        if self.setup_check:
+            out += ["", f"> **Setup check:** {self.setup_check['note']}."]
         out += ["", "| Claim | Label | Gap before | Gap after | Noise band | Explained by |", "|---|---|---|---|---|---|"]
         for r in self.results:
             label = r.attribution.confidence_label if r.attribution else "Reproduced"
@@ -107,6 +114,12 @@ class GapReport:
                 cfg = ", ".join(f"`{k}={v}`" for k, v in row["changes"].items()) or "naive (reproduction as run)"
                 out.append(f"| {cfg} | {row['runs']} | " + " | ".join(_pct(row["gaps"][i]) for i in ids)
                            + f" | {row['mean_abs_gap'] * 100:.1f}% |")
+        if self.triaged:
+            out += ["", "## Failed hypotheses (triaged by Nemotron 3 Super)"]
+            for x in self.triaged:
+                tail = (f"; retried as `{x['knob']}={x['retried']}`" if x.get("retried") else
+                        f"; suggested `{x['suggestion']}`, already measured" if x.get("suggestion") else "")
+                out.append(f"- `{x['knob']}={x['value']}`: {x['kind']}, {x['why'].rstrip('. ')}{tail}")
         if self.untestable:
             out += ["", "## Not testable within the budget",
                     "Candidate values above the harness spec's cost limits (e.g. the paper's full scale). "

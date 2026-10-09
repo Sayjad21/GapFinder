@@ -86,15 +86,18 @@ class Orchestrator:
                 self._add(Node(cid, None, "source"), tag="source")
             return cid
 
-    async def stage(self, stage: str, changes: dict[str, str]) -> str:
-        """Checkpoint for `stage` (source|built|loaded) under the build/dataset part of `changes`."""
+    async def stage(self, stage: str, changes: dict[str, str], fresh: bool = False) -> str:
+        """Checkpoint for `stage` (source|built|loaded) under the build/dataset part of `changes`.
+        `fresh`: run this stage again on the shared parent, as an independent replicate."""
         if stage == "source":
             return await self.source()
+        if fresh and stage == "loaded" and self.spec.load is None:
+            return await self.stage("built", changes, fresh=True)  # no load stage: replicate the build
         layers = BUILD_LAYERS if stage == "built" else DATASET_LAYERS
         relevant = self.spec.changes_for_layers(changes, layers)
         key = (stage, tuple(sorted(relevant.items())))
-        async with self._lock(key):
-            if not self.no_fork and (cid := self.tree.find_stage(stage, relevant)):
+        async with (asyncio.Lock() if fresh else self._lock(key)):
+            if not (self.no_fork or fresh) and (cid := self.tree.find_stage(stage, relevant)):
                 return cid
             prev = "source" if stage == "built" else "built"
             parent = await self.stage(prev, changes)  # in no_fork mode this rebuilds too
@@ -109,13 +112,13 @@ class Orchestrator:
             new_changes = {k: v for k, v in relevant.items() if self.spec.knobs[k].layer in (
                 {Layer.build.value} if stage == "built" else {Layer.dataset.value})}
             node = Node(res.checkpoint, parent, stage, new_changes, command=cmd,
-                        cost_usd=res.resources.cost_usd, elapsed_s=res.resources.elapsed_s)
-            self._add(node, tag=None if relevant or self.no_fork else stage)
+                        cost_usd=res.resources.cost_usd, elapsed_s=res.resources.elapsed_s, replicate=fresh)
+            self._add(node, tag=None if relevant or self.no_fork or fresh else stage)
             return res.checkpoint
 
     # ------------------------------------------------------------ branches
     async def run_branch(self, changes: dict[str, str], *, label: str | None = None,
-                         files: dict[str, bytes] | None = None) -> Branch:
+                         files: dict[str, bytes] | None = None, fresh_setup: bool = False) -> Branch:
         """Run one branch. `files` (e.g. a config fix proposed by a model) pass the diff guard first:
         anything outside the spec's allowed_paths is algorithm code and the branch is rejected unrun."""
         bid = f"B{next(self._ids):04d}"
@@ -127,7 +130,7 @@ class Orchestrator:
             self.events.emit("branch_finished", branch=branch.model_dump())
             return branch
         # build/dataset changes are handled by stage(): it keys checkpoints on them
-        parent = await self.stage("loaded", changes)
+        parent = await self.stage("loaded", changes, fresh=fresh_setup)
         cmd, env = self.spec.render(self.spec.run, changes)
         branch = Branch(id=bid, parent_checkpoint=parent, knob_changes=changes, command=cmd, run_tag=run_tag,
                         status=BranchStatus.running, note=label)
@@ -171,9 +174,12 @@ class Orchestrator:
         self.events.emit("cost", **self.cost.summary())
         return branch
 
-    async def fanout(self, change_sets: list[dict[str, str]], labels: list[str] | None = None) -> list[Branch]:
+    async def fanout(self, change_sets: list[dict[str, str]], labels: list[str] | None = None,
+                     fresh_setup: bool = False) -> list[Branch]:
+        """`fresh_setup`: each branch gets its own new build/load instead of forking the shared one."""
         labels = labels or [None] * len(change_sets)
-        return list(await asyncio.gather(*(self.run_branch(c, label=l) for c, l in zip(change_sets, labels))))
+        return list(await asyncio.gather(*(self.run_branch(c, label=l, fresh_setup=fresh_setup)
+                                           for c, l in zip(change_sets, labels))))
 
     async def calibrate_noise(self, n: int = 5, changes: dict[str, str] | None = None,
                               floor_frac: float = 0.0) -> tuple[dict[str, NoiseBand], list[Branch]]:

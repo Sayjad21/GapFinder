@@ -55,6 +55,10 @@ class SearchConfig:
     screen_top_k: int = 24  # assumptions screened, by prior
     candidates_per_knob: int = 2
     noise_repeats: int = 5
+    # >1: that many of the naive noise runs each get a fresh build/load. A setup that isn't
+    # reproducible (e.g. a database load whose layout depends on timing) adds its own variance,
+    # which runs forked from one shared setup never see.
+    noise_setups: int = 1
     screen_repeats: int = 1  # >1 guards against batch effects (one run per config in a crowded batch)
     confirm_repeats: int = 3
     effect_threshold: float = 1.0  # noise units needed to survive screen/confirm
@@ -103,11 +107,14 @@ def _norm_knob(k: str) -> str:
 
 class GapSearch:
     def __init__(self, orch: Orchestrator, targets: list[Target], assumptions: list[Assumption],
-                 cfg: SearchConfig | None = None, evidence=None, claims: list | None = None):
+                 cfg: SearchConfig | None = None, evidence=None, claims: list | None = None, router=None):
         """`evidence`: optional EvidenceSearch (web) consulted when paper and code don't back a value.
         `claims`: the ledger's claims, so a paper value can be tied to the experiment it belongs to."""
         self.orch, self.targets, self.cfg = orch, targets, cfg or SearchConfig()
         self.evidence = evidence
+        self.router = router  # optional: Nemotron 3 Super triages failed hypotheses
+        self.setup_check: dict | None = None  # filled when noise_setups > 1
+        self.triaged: list[dict] = []
         self.claim_figure = {c.id: c.figure_or_table for c in (claims or [])}
         self.target_figures = {t.figure for t in targets if t.figure}
         self.spec = orch.spec
@@ -135,19 +142,27 @@ class GapSearch:
         self.naive: dict[str, float] = {}
 
     # ------------------------------------------------------------ measuring
-    async def measure(self, changes: Changes, n: int = 1, label: str = "") -> list[Branch]:
+    async def measure(self, changes: Changes, n: int = 1, label: str = "", fresh: bool = False) -> list[Branch]:
         key = frozenset(changes.items())
         have = self._runs.setdefault(key, [])
         ok = [b for b in have if b.status == BranchStatus.succeeded]
-        need = n - len(ok)
+        need, fails = n - len(ok), len(have) - len(ok)
+        if need > 0 and fails:
+            # a configuration that keeps failing (e.g. a value the program rejects) is not re-run on
+            # every call: one retry for a transient failure, none once it failed twice and never ran
+            need = 0 if not ok and fails >= 2 else max(0, min(need, n + 1 - len(have)))
         if need > 0:
             if self.cfg.max_runs is not None and self.runs_used + need > self.cfg.max_runs:
                 raise RunBudgetExceeded(f"run budget of {self.cfg.max_runs} reached "
                                         f"(wanted {need} more run(s) of {dict(changes) or 'naive'} for {label!r})")
             self.runs_used += need
-            have.extend(await self.orch.fanout([changes] * need, [label] * need))
+            have.extend(await self.orch.fanout([changes] * need, [label] * need, fresh_setup=fresh))
             ok = [b for b in have if b.status == BranchStatus.succeeded]
         return ok
+
+    def measure_ok(self, changes: Changes) -> list[Branch]:
+        """Successful runs already made at a configuration (no new runs)."""
+        return [b for b in self._runs.get(frozenset(changes.items()), []) if b.status == BranchStatus.succeeded]
 
     def value(self, changes: Changes, metric: str) -> float | None:
         vals = [b.parsed_metrics[metric] for b in self._runs.get(frozenset(changes.items()), [])
@@ -169,7 +184,10 @@ class GapSearch:
                 if b.status == BranchStatus.succeeded and t.metric in b.parsed_metrics]
         if not changes or len(vals) < 3:
             return self.band(t)
-        return noise_band(t.metric, vals, floor_frac=self.cfg.noise_floor_frac).band / abs(t.paper_value)
+        own = noise_band(t.metric, vals, floor_frac=self.cfg.noise_floor_frac).band / abs(t.paper_value)
+        if self.setup_check and self.setup_check["reproducible"] is False:
+            return max(own, self.band(t))  # its repeats share one setup; setups themselves vary this much
+        return own
 
     def closes(self, t: Target, changes: Changes) -> bool:
         g = self.gap(t, changes)
@@ -183,7 +201,12 @@ class GapSearch:
 
     # -------------------------------------------------------------- driver
     async def calibrate(self) -> None:
-        runs = await self.measure({}, self.cfg.noise_repeats, "noise")
+        n = self.cfg.noise_repeats
+        k = max(1, min(self.cfg.noise_setups, n))
+        runs = await self.measure({}, n - k + 1, "noise")
+        if k > 1:  # the rest each on a fresh setup: does the build/load itself reproduce?
+            runs = await self.measure({}, n, "noise (fresh setup)", fresh=True)
+            self._check_setups(runs, k)
         if len(runs) < 3:
             raise RuntimeError(f"naive configuration failed: only {len(runs)} successful runs")
         for t in self.targets:
@@ -191,6 +214,19 @@ class GapSearch:
             nb = noise_band(t.metric, vals, floor_frac=self.cfg.noise_floor_frac)
             self.bands[t.metric], self.naive[t.metric] = nb, nb.median
             self.orch.events.emit("noise_band", **nb.to_dict())
+
+    def _check_setups(self, runs: list[Branch], k: int) -> None:
+        parents = {b.parent_checkpoint for b in runs}
+        if not getattr(self.orch.backend, "content_addressed", False):
+            ok, msg = None, (f"{k} independent setups measured; reproducibility not checked "
+                             "(this backend's checkpoint IDs don't name their content)")
+        elif len(parents) == 1:
+            ok, msg = True, f"setup is reproducible: {k} independent setups gave one identical checkpoint"
+        else:
+            ok, msg = False, (f"setup is NOT reproducible: {k} identical setups gave {len(parents)} different "
+                              "checkpoints, so the noise band includes setup-to-setup variation")
+        self.setup_check = {"setups": k, "distinct_checkpoints": len(parents), "reproducible": ok, "note": msg}
+        self.orch.events.emit("note", msg=msg)
 
     async def run(self) -> list[ClaimResult]:
         await self.calibrate()
@@ -260,14 +296,15 @@ class GapSearch:
         hyps = [h for h in self.hypotheses() if self._renderable(h, res)]
 
         # 1. screen: one knob per branch, one run each
-        await asyncio.gather(*(self.measure(h.changes, self.cfg.screen_repeats, f"screen {h.knob}={h.value}")
-                               for h in hyps))
+        await _all(*(self.measure(h.changes, self.cfg.screen_repeats, f"screen {h.knob}={h.value}")
+                     for h in hyps))
         tried.update(frozenset(h.changes.items()) for h in hyps)
+        hyps += await self._triage_failures(hyps, tried)
         score = {h: self.units(t, h.changes) for h in hyps}
         res.screen = [{"knob": h.knob, "value": h.value, "assumption": h.assumption_id,
                        "units": round(score[h], 2), "gap": self.gap(t, h.changes)} for h in hyps]
         # strong leads from the ledger skip pruning: one noisy screen run shouldn't discard them
-        survivors = [h for h in hyps if score[h] >= thr or self._strong_lead(h)]
+        survivors = [h for h in hyps if score[h] >= thr or (self._strong_lead(h) and score[h] > float("-inf"))]
         for h in hyps:
             self.orch.events.emit("survivor" if h in survivors else "pruned", claim=t.claim_id,
                                   knob=h.knob, value=h.value, units=round(score[h], 2), round="screen")
@@ -275,7 +312,7 @@ class GapSearch:
 
         # 2. confirm: survivors get repeats; effects that fade are pruned
         reps = self.confirm_repeats(t)
-        await asyncio.gather(*(self.measure(h.changes, reps, "confirm") for h in survivors))
+        await _all(*(self.measure(h.changes, reps, "confirm") for h in survivors))
         confirmed = [h for h in survivors if self.units(t, h.changes) >= thr]
         self.orch.events.emit("round", name="confirm", claim=t.claim_id, confirmed=len(confirmed))
 
@@ -300,10 +337,10 @@ class GapSearch:
             c = {a.knob: a.value, b.knob: b.value}
             if c not in combos:
                 combos.append(c)
-        await asyncio.gather(*(self.measure(c, 1, "combine") for c in combos))
+        await _all(*(self.measure(c, 1, "combine") for c in combos))
         tried.update(frozenset(c.items()) for c in combos)
         good_combos = [c for c in combos if self.units(t, c) >= thr]
-        await asyncio.gather(*(self.measure(c, reps, "confirm-combo") for c in good_combos))
+        await _all(*(self.measure(c, reps, "confirm-combo") for c in good_combos))
         self.orch.events.emit("round", name="combine", claim=t.claim_id, tried=len(combos), kept=len(good_combos))
 
         # candidates: confirmed singles and combos, closest to the paper first
@@ -422,6 +459,40 @@ class GapSearch:
         """Noisy metrics (run-to-run CV above 5%) get two extra repeats."""
         return self.cfg.confirm_repeats + (2 if self.bands[t.metric].cv > 0.05 else 0)
 
+    async def _triage_failures(self, hyps: list[Hypothesis], tried: set) -> list[Hypothesis]:
+        """Super reads why a hypothesis's runs all failed; an invalid value gets one corrected retry."""
+        if self.router is None:
+            return []
+        from gapfinder.search.triage import triage
+
+        retry = []
+        for h in hyps:
+            runs = self._runs.get(frozenset(h.changes.items()), [])
+            if not runs or any(b.status == BranchStatus.succeeded for b in runs):
+                continue
+            if any(x["knob"] == h.knob and x["value"] == h.value for x in self.triaged):
+                continue  # already triaged (e.g. while explaining another claim)
+            try:
+                tr = await triage(self.router, h.knob, h.value, self.spec.knobs[h.knob].default, runs[-1])
+            except Exception as exc:  # triage is best-effort
+                self.triaged.append({"knob": h.knob, "value": h.value, "kind": "other", "why": f"triage failed: {exc}"})
+                continue
+            rec = {"knob": h.knob, "value": h.value, "kind": tr.kind, "why": tr.why, "suggestion": tr.suggestion}
+            self.triaged.append(rec)
+            self.orch.events.emit("note", msg=f"triage {h.knob}={h.value}: {tr.kind} ({tr.why[:120]})")
+            s = (tr.suggestion or "").strip()
+            fixed = Hypothesis(h.knob, s, h.assumption_id)
+            if (tr.kind == "invalid_value" and s and s != self.spec.knobs[h.knob].default
+                    and frozenset(fixed.changes.items()) not in tried and self.spec.knobs[h.knob].affordable(s)
+                    and self._renderable(fixed, ClaimResult(target=self.targets[0], status="", gap_before=0, band=0))):
+                retry.append(fixed)
+                rec["retried"] = s
+        if retry:
+            await _all(*(self.measure(h.changes, self.cfg.screen_repeats, f"screen {h.knob}={h.value} (triaged)")
+                         for h in retry))
+            tried.update(frozenset(h.changes.items()) for h in retry)
+        return retry
+
     def _stated_values(self, knob: str) -> list[str]:
         """Paper values for `knob` that apply to the targets' figures. An entry tied only to claims of
         other figures (e.g. Monkey for Figure 8 when Figure 6 is explained) doesn't count."""
@@ -462,6 +533,8 @@ class GapSearch:
         best: ClaimResult | None = None
         rejected: list[str] = []
         for c in measured[: self.cfg.verify_candidates]:
+            if len(self.measure_ok(c)) < self.confirm_repeats(t):
+                continue  # a screen run alone is not a confirmation: the full search would repeat it first
             try:
                 trial = await self._verify(t, c, res)  # raises if it would need a new run
             except (RunBudgetExceeded, budget.BudgetExceeded):
@@ -483,7 +556,8 @@ class GapSearch:
         unverified = [c for c in measured[: self.cfg.verify_candidates] if not any(str(c) in r for r in rejected)]
         if unverified:
             c = unverified[0]
-            res.notes.append(f"closest configuration not verified: {c} (gap {self.gap(t, c):+.1%}); "
+            res.notes.append(f"closest configuration not verified: {c} (gap {self.gap(t, c):+.1%}, "
+                             f"{len(self.measure_ok(c))} of {self.confirm_repeats(t)} confirmation runs); "
                              "the budget ran out first, so no attribution is made")
 
     def closest_overall(self, top: int = 5, min_runs: int = 2) -> list[dict]:
@@ -520,6 +594,17 @@ class GapSearch:
         except ValueError as exc:
             res.notes.append(f"skipped {h.knob}={h.value!r}: {exc}")
             return False
+
+
+async def _all(*coros):
+    """Measure in parallel. If one measurement hits the run or dollar budget, the others (already
+    started and paid for) still finish and are recorded before the error is raised; a plain gather
+    would leave them running unattended and lose their results when the search ends."""
+    out = await asyncio.gather(*coros, return_exceptions=True)
+    for x in out:
+        if isinstance(x, BaseException):
+            raise x
+    return out
 
 
 def _stated_value(paper_value: str) -> str | None:

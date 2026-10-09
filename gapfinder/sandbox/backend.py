@@ -87,11 +87,16 @@ class LocalBackend(SandboxBackend):
     `emulate_dedup=True` reproduces the documented Contree behaviour where the
     same command from the same image returns the cached result, so the
     RUN_TAG logic can be tested without network access.
+    `content_ids=True` names each checkpoint after its content, as Sandboxes do: two runs that
+    leave identical files get the same ID (the setup-reproducibility check relies on it).
     """
 
+    content_addressed = False
     name = "local"
 
-    def __init__(self, root: str | Path, *, emulate_dedup: bool = False, shell: str | None = None):
+    def __init__(self, root: str | Path, *, emulate_dedup: bool = False, shell: str | None = None,
+                 content_ids: bool = False):
+        self.content_addressed = content_ids
         self.root = Path(root)
         self.images = self.root / "images"
         self.images.mkdir(parents=True, exist_ok=True)
@@ -162,6 +167,8 @@ class LocalBackend(SandboxBackend):
         elapsed = time.monotonic() - start
         if disposable:
             await asyncio.to_thread(shutil.rmtree, dest, True)
+        elif self.content_addressed:
+            cid = await asyncio.to_thread(self._by_content, dest)
         result = RunResult(
             parent=parent,
             checkpoint=None if disposable else cid,
@@ -174,6 +181,20 @@ class LocalBackend(SandboxBackend):
         if self.emulate_dedup:
             self._dedup[key] = result
         return result
+
+    def _by_content(self, d: Path) -> str:
+        h = hashlib.sha256()
+        for p in sorted(d.rglob("*")):
+            if p.is_file():
+                h.update(p.relative_to(d).as_posix().encode() + b"\0" + p.read_bytes() + b"\0")
+        cid = str(uuidlib.UUID(bytes=h.digest()[:16]))
+        try:
+            d.rename(self.images / cid)
+        except OSError:  # that content exists already (perhaps from a concurrent run): keep one copy
+            if not (self.images / cid).is_dir():
+                raise
+            shutil.rmtree(d, True)
+        return cid
 
     async def read_file(self, checkpoint, path) -> bytes:
         p = self._dir(checkpoint) / path.removeprefix(WORK_DIR + "/").lstrip("/")
@@ -231,6 +252,7 @@ def _find_bash() -> str:
 class ContreeBackend(SandboxBackend):
     """Token Factory Sandboxes via contree-sdk (auth: NEBIUS_API_KEY + NEBIUS_PROJECT_ID)."""
 
+    content_addressed = True  # checkpoint IDs name the filesystem's content
     name = "contree"
 
     def __init__(self, client=None, *, truncate_output_at: int = 1024 * 1024):

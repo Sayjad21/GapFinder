@@ -24,6 +24,15 @@ def _write(path: Path, obj) -> None:
     print(f"wrote {path}")
 
 
+def _router_if_configured():
+    """Nemotron triage of failed branches, if an inference key is configured."""
+    if not settings().token_factory_api_key:
+        return None
+    from gapfinder.models.router import Router
+
+    return Router()
+
+
 def _adopt(orch, pairs: list[str]) -> None:
     """--adopt built=<uuid> --adopt loaded=<uuid>: reuse checkpoints instead of rebuilding."""
     parent = None
@@ -142,8 +151,9 @@ async def cmd_search(args) -> int:
 
         raw_c = json.loads(Path(args.claims).read_text())
         ledger_claims = [Claim(**c) for c in (raw_c["claims"] if isinstance(raw_c, dict) else raw_c)]
-    search = GapSearch(orch, targets, assumptions, SearchConfig(max_runs=args.max_runs, screen_repeats=args.screen_repeats),
-                       evidence=evidence, claims=ledger_claims)
+    search = GapSearch(orch, targets, assumptions, SearchConfig(max_runs=args.max_runs, screen_repeats=args.screen_repeats,
+                                                              noise_setups=args.noise_setups),
+                       evidence=evidence, claims=ledger_claims, router=_router_if_configured())
     for path in args.resume or []:  # reuse earlier runs' branch results (no re-running, no re-paying)
         lines = Path(path).read_text(encoding="utf-8").splitlines()
         print(f"resumed {search.seed([json.loads(x) for x in lines if x.strip()])} branch results from {path}")
@@ -194,6 +204,8 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--paper", help="paper name for the report title")
     ps.add_argument("--max-runs", type=int, default=None, help="branch-run budget")
     ps.add_argument("--screen-repeats", type=int, default=1, help="runs per hypothesis in the screen round")
+    ps.add_argument("--noise-setups", type=int, default=1,
+                    help="naive noise runs on that many independent builds/loads (checks the setup reproduces)")
     ps.add_argument("--claims", help="claim_ledger.json from `gapfinder ledger` (ties paper values to figures)")
     ps.add_argument("--resume", action="append", help="events.jsonl of an earlier search on the same spec "
                     "(repeatable): reuse its branch results")

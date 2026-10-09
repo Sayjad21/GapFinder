@@ -251,3 +251,83 @@ def test_paper_values_are_experiment_specific_and_duplicates_merge(tmp_path):
     hyps = [(h.knob, h.value) for h in s.hypotheses()]
     assert ("beta", "2.0") in hyps
     assert hyps.index(("alpha", "2.0")) < hyps.index(("alpha", "50.0"))
+
+
+async def test_super_triages_an_invalid_value_and_retries_it(tmp_path):
+    from gapfinder.models.router import ResponseCache, Router
+
+    async def transport(model, messages, max_tokens, response_format):
+        assert "nemotron-3-super" in model  # triage is Super's job
+        return {"choices": [{"message": {"content": '{"kind": "invalid_value", "suggestion": "2.0", '
+                                                    '"why": "--alpha expects a float"}'}}],
+                "usage": {"prompt_tokens": 50, "completion_tokens": 20}}
+
+    m = await paper(tmp_path, {"alpha": "2.0"})
+    bad = [A("A1", "alpha", ["two"], supported=["2.0"], prior=0.9)]  # 'two' crashes argparse
+    s = GapSearch(orch(tmp_path), targets(m), bad, SearchConfig(),
+                  router=Router(transport=transport, cache=ResponseCache(tmp_path / "c")))
+    [r] = await s.run()
+    assert s.triaged and s.triaged[0]["kind"] == "invalid_value" and s.triaged[0]["retried"] == "2.0"
+    assert r.changes == {"alpha": "2.0"}
+
+
+async def test_budget_exhausted_single_screen_run_is_not_labelled(tmp_path):
+    """Regression (RusKey ablation): one lucky screen run and no budget left -> no label from it."""
+    s1, [r1] = await search(tmp_path, {"alpha": "2.0"})
+    assert r1.changes == {"alpha": "2.0"}
+    keep, seen = [], False
+    for ev in s1.orch.events.read():  # keep the noise runs and ONE run of the right value
+        ch = ev["branch"]["knob_changes"] if ev.get("type") == "branch_finished" else {}
+        if ch and (ch != {"alpha": "2.0"} or seen):
+            continue
+        seen = seen or ch == {"alpha": "2.0"}
+        keep.append(ev)
+    m = await paper(tmp_path, {"alpha": "2.0"})
+    s2 = GapSearch(orch(tmp_path, "resumed"), targets(m), ALL, SearchConfig())
+    s2.cfg.max_runs = s2.seed(keep)
+    [r2] = await s2.run()
+    assert r2.status == "partial" and r2.attribution.confidence_label == "Unexplained"
+    assert any("1 of" in n and "confirmation runs" in n for n in r2.notes)
+
+
+async def test_a_value_that_always_fails_is_not_rerun_on_every_call(tmp_path):
+    m = await paper(tmp_path, {"alpha": "2.0"})
+    s = GapSearch(orch(tmp_path), targets(m), ALL, SearchConfig())
+    for _ in range(4):  # e.g. screened, then asked for again while explaining another claim
+        assert await s.measure({"alpha": "two"}, 1, "screen") == []
+    assert await s.measure({"alpha": "two"}, 5, "confirm") == []  # more repeats asked: still not re-run
+    assert len(s._runs[frozenset({"alpha": "two"}.items())]) == 2 and s.runs_used == 2
+    # and a value with no successful run never survives the screen, even as a strong ledger lead
+    lead = [A("A1", "alpha", ["two"], supported=["two"], prior=0.95)]
+    s2 = GapSearch(orch(tmp_path, "lead"), targets(m), lead, SearchConfig())
+    [r] = await s2.run()
+    assert r.screen and all(x["knob"] != "alpha" or x["units"] == float("-inf") for x in r.screen)
+    assert not any(e["type"] == "survivor" for e in s2.orch.events.read())
+
+
+async def test_budget_stop_leaves_no_branch_unrecorded(tmp_path):
+    """Regression (RusKey ablation): runs in flight when the budget ran out were never recorded."""
+    s, [r] = await search(tmp_path, {"alpha": "2.0"}, max_runs=8)
+    assert r.status == "partial"
+    ev = list(s.orch.events.read())
+    created = {e["branch"]["id"] for e in ev if e["type"] == "branch_created"}
+    finished = {e["branch"]["id"] for e in ev if e["type"] == "branch_finished"}
+    assert created and created == finished
+
+
+@pytest.mark.parametrize("flaky", [False, True])
+async def test_noise_setups_check_whether_the_load_reproduces(tmp_path, flaky):
+    """Content-addressed checkpoints: identical loads dedup to one ID; a load that writes
+    something different each time (timing, random state) gives a new ID per load."""
+    m = await paper(tmp_path, {"alpha": "2.0"})
+    spec = HarnessSpec.load_yaml(TOY)
+    if flaky:
+        spec.load.command += " && head -c 16 /dev/urandom > data/stamp"
+    o = Orchestrator(LocalBackend(tmp_path / "sbx", content_ids=True), spec, EventLog(tmp_path / "e.jsonl"))
+    s = GapSearch(o, targets(m), ALL, SearchConfig(noise_setups=3))
+    await s.calibrate()
+    assert s.setup_check["reproducible"] is (not flaky)
+    assert s.setup_check["distinct_checkpoints"] == (3 if flaky else 1)
+    shared = o.tree.find_stage("loaded", {})
+    # the shared load stays shared (a reproducible load dedups, so then all five share it)
+    assert [b.parent_checkpoint for b in s._runs[frozenset()]].count(shared) == (3 if flaky else 5)

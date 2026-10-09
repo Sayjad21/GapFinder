@@ -33,6 +33,7 @@ class Node:
     command: str | None = None
     cost_usd: float = 0.0
     elapsed_s: float = 0.0
+    replicate: bool = False  # an extra, independent setup (noise check): never replaces the shared one
 
 
 class CheckpointTree:
@@ -44,19 +45,27 @@ class CheckpointTree:
         """Sandbox checkpoint IDs are content-addressed: a run that changes nothing on disk returns
         its parent's ID. Such a no-op node isn't stored again (it would be its own parent);
         the existing node just also serves as this stage's checkpoint."""
+        if node.id in self.nodes and node.stage != "branch" and self.nodes[node.id].stage == node.stage:
+            return self.nodes[node.id]  # the same setup again (a reproducible one dedups to the same ID)
         if node.parent == node.id or (node.id in self.nodes and node.stage != "branch"
                                       and self.nodes[node.id].stage != node.stage):
             existing = self.nodes.get(node.id)
             if existing is not None:
                 if node.stage in ("source", "built", "loaded"):
                     key = (node.stage, _freeze({**self._lineage_changes(node.id, build_only=True), **node.changes}))
-                    self.stage_index[key] = node.id
+                    self._index(key, node)
                 return existing
             node.parent = None
         self.nodes[node.id] = node
         if node.stage in ("source", "built", "loaded"):
-            self.stage_index[(node.stage, _freeze(self._lineage_changes(node.id, build_only=True)))] = node.id
+            self._index((node.stage, _freeze(self._lineage_changes(node.id, build_only=True))), node)
         return node
+
+    def _index(self, key: tuple, node: Node) -> None:
+        if node.replicate:
+            self.stage_index.setdefault(key, node.id)
+        else:
+            self.stage_index[key] = node.id
 
     def _lineage_changes(self, nid: str, build_only: bool = False) -> dict[str, str]:
         chain, cur, seen = [], self.nodes.get(nid), set()
