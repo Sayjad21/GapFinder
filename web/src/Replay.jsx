@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { api, pct, LABEL_CLASS } from "./api.js";
-import { ROUNDS, chipClass, initialState, reduce } from "./replay.js";
+import { STATIC, api, pct, LABEL_CLASS } from "./api.js";
+import { ROUNDS, chipClass, initialState, play, reduce } from "./replay.js";
 
 const SPEEDS = [1, 4, 16];
 
@@ -10,6 +10,13 @@ function useReplay(runId, speed, epoch) {
   useEffect(() => {
     if (!runId) return;
     dispatch("reset");
+    if (STATIC) {
+      let stop = () => {}, dead = false;
+      api.events(runId).then((evs) => {
+        if (!dead) stop = play(evs, speed, (e) => dispatch(e), () => dispatch({ type: "done" }));
+      }).catch(() => dispatch({ type: "done" }));
+      return () => { dead = true; stop(); };
+    }
     const es = new EventSource(api.replayUrl(runId, speed));
     es.addEventListener("gf", (m) => dispatch(JSON.parse(m.data)));
     es.addEventListener("done", () => { dispatch({ type: "done" }); es.close(); });
@@ -46,13 +53,13 @@ function ClaimBars({ claims, state }) {
             <div className="track">
               <div className="window" style={{ left: x(target.paper_value - band), width: `calc(${x(target.paper_value + band)} - ${x(target.paper_value - band)})` }} title="paper ± noise band" />
               {naive !== undefined && <div className="bar naive" style={{ width: x(naive) }} title={`naive ${naive}`} />}
-              {best && <div className={`bar best ${inside ? "inside" : ""}`} style={{ width: x(best.v) }} title={`best so far ${best.v}`} />}
+              {best && <div className={`bar best ${inside ? "inside" : ""}`} style={{ width: x(best.v) }} title={`closest single run so far ${best.v}`} />}
               <div className="paper" style={{ left: x(target.paper_value) }} title={`paper ${target.paper_value}`} />
             </div>
             <div className="claim-legend">
               <span>paper <b>{target.paper_value}</b></span>
               <span className="lg naive">naive {naive?.toFixed?.(3) ?? "…"}</span>
-              <span className="lg best">best {best ? `${best.v} (${Object.entries(best.b.knob_changes).map(([k, v]) => `${k}=${v}`).join(", ")})` : "…"}</span>
+              <span className="lg best" title="the single measured run closest to the paper so far; labels need confirmed repeats">closest run {best ? `${best.v} (${Object.entries(best.b.knob_changes).map(([k, v]) => `${k}=${v}`).join(", ")})` : "…"}</span>
             </div>
           </div>
         );

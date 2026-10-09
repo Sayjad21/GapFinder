@@ -10,6 +10,12 @@ then forks one branch per hypothesis from that exact checkpoint. The output
 is a Gap Report: per-claim attributions with evidence, noise bands, and
 replayable checkpoint IDs. It says "unexplained" when it should.
 
+**Judges: open <https://sayjad21.github.io/GapFinder/> and press 16×.** It replays a recorded
+RusKey run (no login, no cost). Then open **Gap Report** for the verdicts and **Scoreboard** for
+GapFinder against a standard coding agent. Every number links to a log in this repo.
+
+![Replay of a RusKey run: the checkpoint tree, claim bars against the paper, and the budget](docs/img/replay.png)
+
 > Status (2026-10-09): runs end to end in Token Factory Sandboxes on a real systems paper
 > (RusKey, Figure 6). GapBench-mini dev set: 4/4 with no false attributions. The held-out
 > test tasks are being written by a teammate who doesn't share them with the developers.
@@ -26,6 +32,22 @@ replayable checkpoint IDs. It says "unexplained" when it should.
 | Fork vs no-fork, same search, 22 branches each | Forking: 8 database loads instead of 22, setup cost $1.88 instead of $5.21 (-64%), total $4.48 instead of $8.07 (-45%). | [ablation_ruskey.json](eval/results/ablation_ruskey.json) |
 
 ## How it works
+
+```mermaid
+flowchart LR
+  P[Paper PDF] --> L["Claim ledger<br/>Nemotron 3 Ultra + Super filter"]
+  R[Artifact repo] --> M[Repo map: flags, defaults, file:line]
+  M --> A["Assumption space<br/>Nemotron 3 Ultra"]
+  L --> A
+  A --> S
+  subgraph SB [Token Factory Sandboxes]
+    direction LR
+    SRC[source] --> B[built] --> LD[loaded] --> S["one fork per hypothesis<br/>screen, confirm, combine, bisect"]
+  end
+  S --> V["verify: counterfactual,<br/>held-out claims, evidence"]
+  V --> G[Gap Report + replay]
+  S -. failed runs .-> T["triage<br/>Nemotron 3 Super"] -.-> S
+```
 
 1. **Claim ledger** (Nemotron 3 Ultra, then a Super filter). Every result the paper claims (numbers,
    comparisons, trends), with a quote that must string-match the PDF. Quotes that don't match are dropped, not repaired.
@@ -82,6 +104,12 @@ already handle.
 
 ## Honest limitations
 
+- CPU only: Sandboxes VMs have 4 vCPUs and 3.9 GB, so GPU papers and the paper's full data scale
+  are out of reach.
+- The harness spec (how to build, load and run the artifact, and which knobs exist) is drafted
+  from the repo map but needs a human to confirm it.
+- Timing metrics are noisy in shared VMs. GapFinder compares ratios measured inside one VM, uses
+  noise bands from repeats, and confirms with more repeats when a metric's CV is above 5%.
 - The dev set has 4 tasks, built by the same people who built GapFinder. The test set is the
   real measure, and isn't run yet.
 - Ledger precision was measured on the paper the prompts were developed on.
@@ -120,7 +148,11 @@ npm --prefix web ci && npm --prefix web run build      # once
 It lands on **Replay**, which plays a recorded run (from `demo/runs/`) at 1x, 4x or 16x and costs
 nothing. The other tabs are the **Gap Report** cards (with replay commands) and the **Scoreboard**
 (GapBench arms, per-task answers). Live mode stays off and refuses politely until an access code
-is configured. Browser test: `pytest -m e2e tests/e2e`.
+is configured. Browser test: `pytest -m e2e tests/e2e` (it checks both sites below).
+
+The public site is a static build of the same UI, made by
+[pages.yml](.github/workflows/pages.yml) on every push: `scripts/export_static.py` writes what the
+API would serve, and the browser replays the events itself, with no server and no keys.
 
 ## Scope rule
 

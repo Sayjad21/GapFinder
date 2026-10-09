@@ -4,12 +4,25 @@ export async function getJSON(path) {
   return r.json();
 }
 
-export const api = {
+// VITE_STATIC=1 builds the server-free site (GitHub Pages): data comes from files written by
+// scripts/export_static.py, and replay runs in the browser instead of over SSE.
+export const STATIC = import.meta.env.VITE_STATIC === "1";
+const enc = encodeURIComponent;
+
+export const api = STATIC ? {
+  runs: () => getJSON("data/runs.json"),
+  run: (id) => getJSON(`data/runs/${enc(id)}.json`),
+  scoreboard: () => getJSON("data/scoreboard.json"),
+  events: (id) => getJSON(`data/runs/${enc(id)}/events.json`),
+  reportMdUrl: (id) => `data/runs/${enc(id)}/report.md`,
+  runJsonUrl: (id) => `data/runs/${enc(id)}.json`,
+} : {
   runs: () => getJSON("/api/runs"),
-  run: (id) => getJSON(`/api/runs/${encodeURIComponent(id)}`),
+  run: (id) => getJSON(`/api/runs/${enc(id)}`),
   scoreboard: () => getJSON("/api/scoreboard"),
-  replayUrl: (id, speed) => `/api/runs/${encodeURIComponent(id)}/replay?speed=${speed}`,
-  reportMdUrl: (id) => `/api/runs/${encodeURIComponent(id)}/report.md`,
+  replayUrl: (id, speed) => `/api/runs/${enc(id)}/replay?speed=${speed}`,
+  reportMdUrl: (id) => `/api/runs/${enc(id)}/report.md`,
+  runJsonUrl: (id) => `/api/runs/${enc(id)}`,
 };
 
 export const pct = (x) => (x === null || x === undefined ? "n/a" : `${x >= 0 ? "+" : ""}${(x * 100).toFixed(1)}%`);

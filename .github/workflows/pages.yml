@@ -1,0 +1,39 @@
+name: pages
+# The judges' replay site: a static build of the web UI plus the recorded runs, no server and no
+# keys. One-time setup: repo Settings -> Pages -> Source: "GitHub Actions".
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv venv --python 3.11 .venv && uv pip install --python .venv -e .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm --prefix web ci
+      - run: cd web && VITE_STATIC=1 npx vite build --outDir dist-static
+      - run: .venv/bin/python scripts/export_static.py web/dist-static/data
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist-static
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

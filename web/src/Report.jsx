@@ -64,6 +64,27 @@ function Card({ c }) {
   );
 }
 
+function Closest({ r }) {
+  const ids = r.claims.map((c) => c.target.claim_id).concat(
+    Object.keys(r.closest_overall[0].gaps || {}).filter((k) => !r.claims.some((c) => c.target.claim_id === k)));
+  return (
+    <div className="sub closest">
+      <h5>Closest configurations across all claims</h5>
+      <p className="small">Not an attribution: labels judge one claim at a time. This shows which measured changes move
+        several claims toward the paper together.</p>
+      <div className="scroll"><table>
+        <thead><tr><th>Configuration</th><th>Runs</th>{ids.map((k) => <th key={k}>{k}</th>)}<th>Mean |gap|</th></tr></thead>
+        <tbody>{r.closest_overall.map((row, i) => (
+          <tr key={i}>
+            <td><code>{Object.entries(row.changes || {}).map(([k, v]) => `${k}=${v}`).join(", ") || "naive"}</code></td>
+            <td>{row.runs}</td>{ids.map((k) => <td key={k}>{pct(row.gaps?.[k])}</td>)}<td>{(row.mean_abs_gap * 100).toFixed(1)}%</td>
+          </tr>
+        ))}</tbody>
+      </table></div>
+    </div>
+  );
+}
+
 export default function Report({ run }) {
   const r = run?.report;
   if (!r) return <p>Loading…</p>;
@@ -73,11 +94,24 @@ export default function Report({ run }) {
         <h2>Gap Report: {r.paper}</h2>
         <p className="small">
           Artifact <code>{r.artifact}</code> · {r.runs} branch runs ({r.setup_runs} build/load setups) · generated {r.generated}
-          {" · "}<a href={api.reportMdUrl(run.id)}>Markdown</a> · <a href={`/api/runs/${encodeURIComponent(run.id)}`}>JSON</a>
+          {" · "}<a href={api.reportMdUrl(run.id)}>Markdown</a> · <a href={api.runJsonUrl(run.id)}>JSON</a>
         </p>
         {r.partial && <p className="warn">Partial report: the run or dollar budget ran out before every claim was verified.</p>}
+        {r.setup_check && <p className={r.setup_check.reproducible === false ? "warn" : "small"}>Setup check: {r.setup_check.note}.</p>}
       </div>
       {r.claims.map((c) => <Card key={c.target.claim_id} c={c} />)}
+      {r.closest_overall?.length > 0 && <Closest r={r} />}
+      {r.triaged_failures?.length > 0 && (
+        <div className="sub"><h5>Failed hypotheses (triaged by Nemotron 3 Super)</h5><ul>
+          {r.triaged_failures.map((x, i) => (
+            <li key={i}><code>{x.knob}={x.value}</code>: {x.kind}, {x.why}
+              {x.retried ? <> · retried as <code>{x.retried}</code></> : x.suggestion ? <> · suggested <code>{x.suggestion}</code>, already measured</> : null}</li>
+          ))}
+        </ul></div>
+      )}
+      {r.untestable?.length > 0 && (
+        <p className="small">Not testable within the budget: {r.untestable.map(({ knob, value }) => <code key={`${knob}=${value}`}>{knob}={value}</code>)}</p>
+      )}
       {r.unmapped_assumptions?.length > 0 && (
         <p className="small">Not testable with this harness: {r.unmapped_assumptions.map((k) => <code key={k}>{k}</code>)}</p>
       )}

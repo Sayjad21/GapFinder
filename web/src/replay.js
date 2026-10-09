@@ -1,5 +1,26 @@
 // Folds the recorded event stream into what the replay screen draws.
 
+// Same timing rule as the server's SSE replay (gapfinder/api/server.py): original spacing / speed,
+// with idle gaps capped at MAX_IDLE_S.
+export const MAX_IDLE_S = 2.0;
+
+// Plays recorded events in the browser (static site). Returns a function that stops playback.
+export function play(events, speed, onEvent, onDone) {
+  let i = 0, timer = null, stopped = false;
+  const step = () => {
+    while (!stopped && i < events.length) {
+      onEvent(events[i]);
+      const t = events[i].t, next = events[i + 1]?.t;
+      i += 1;
+      const wait = t != null && next != null ? Math.min((next - t) / speed, MAX_IDLE_S) : 0;
+      if (wait > 0.005) { timer = setTimeout(step, wait * 1000); return; }
+    }
+    if (!stopped) onDone();
+  };
+  timer = setTimeout(step, 0);
+  return () => { stopped = true; clearTimeout(timer); };
+}
+
 export const ROUNDS = ["noise", "screen", "confirm", "combine", "bisect", "counterfactual", "other"];
 
 export function roundOf(note) {
