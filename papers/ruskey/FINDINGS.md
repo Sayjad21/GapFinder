@@ -1,8 +1,81 @@
 # RusKey Figure 6 in Token Factory Sandboxes
 
-**Status (2026-10-09):** two runs. The second (below, "Final-regime run") is the main result: it starts
-from what the reproduction actually ran for its Figure 6 and uses Figure 6 values digitized from
-the paper. The first run (further down) used earlier settings and by-eye paper values.
+**Status (2026-10-09):** three runs. The final-regime run (127 branches) is the main search. Read it
+together with the correction directly below: the database load turned out not to be reproducible,
+which changes two of that run's observations. The first run (further down) used earlier settings
+and by-eye paper values.
+
+## Correction (2026-10-09): the database load is not reproducible
+
+The fork vs no-fork ablation reloaded the database for every branch, which exposed this. Every load
+runs the same command (`load.sh`, 2M keys) on the same binary (checkpoint `98e3e854`). We then
+measured the naive configuration on 12 separate loads, across four runs. The loads gave 12 different
+checkpoint IDs, and the Figure 6 ratios moved with them
+([load_variance.json](../../eval/results/ruskey_load_variance.json)):
+
+| Naive configuration | C5 K10/K5 | C5b K1/K5 | C3 WH K1/K10 |
+|---|---|---|---|
+| paper (Figure 6, digitized) | 1.48 | 1.34 | 3.05 |
+| the 127-branch run's load (5 runs) | 0.83 | **0.52** | **3.46** |
+| 11 other loads: range | 0.82-1.11 | 0.99-1.38 | 0.76-2.27 |
+| all 12 loads: median | 0.92 | 1.21 | 1.74 |
+
+The search's noise band came from 5 runs forked from one load, and the spread across loads is far
+larger. The 127-branch run happened to get a load that is an outlier on two of the three ratios.
+For that run, this means:
+
+1. **Its labels stand.** Both balanced claims are Unexplained; nothing was attributed.
+2. **"The reproduction's regime already reproduces the write-heavy ratio (3.46 vs 3.05)" only holds
+   for that one load.** Across loads the median is 1.74. The held-out claim is not reproduced in
+   general.
+3. **"8 bits/key brings both balanced claims to the paper" is withdrawn as stated.** `bits_per_key` is
+   a load setting, so its runs came from a different load than the naive runs they were compared
+   with. C5b at 8 bits/key (1.28) is inside the naive range across loads (0.99-1.38), so there's no
+   evidence of an effect. C5 at 8 bits/key (1.45) is above that range (0.82-1.11), so it remains a
+   lead, but it was measured on a single load.
+
+In the final-regime table below, the `bits_per_key` and `monkey` rows (load settings) were each
+measured on a load of their own. The `background_jobs` and `zero_result_ratio` rows forked from the
+naive row's load, so they compare like with like, but only for that load.
+
+**What changed in GapFinder:** `--noise-setups N` puts N of the naive noise runs on independent
+loads. Sandboxes name a checkpoint after its content, so identical loads would dedup to one ID;
+different IDs show the load is not reproducible. The noise band then includes the load-to-load
+spread, and no candidate is judged against a narrower band than that.
+
+**The search with 5 independent loads** (30 branches; report: [search_setups/gap_report.md](search_setups/gap_report.md);
+sandbox cost reported $6.00, billed $0):
+
+| Claim | Gap before | Noise band | Label |
+|---|---|---|---|
+| C5 balanced K10/K5 | -30.8% | ±8.6% | Unexplained. `bits_per_key=8` came closest (-16.8%) on 1 of the 5 runs a confirmation needs, so no label. |
+| C5b balanced K1/K5 | -12.4% | ±15.9% | Reproduced: the gap is inside the noise once load-to-load variation counts. The band is wide, so this means "not distinguishable from the paper at 2M keys", not a tight match. |
+
+The run printed: "setup is NOT reproducible: 5 identical setups gave 5 different checkpoints". The
+held-out write-heavy ratio is 43% below the paper (1.73 vs 3.05).
+
+## Fork vs no-fork ablation (2026-10-09)
+
+The same bounded search ran twice (spec, ledger and targets identical; budget 30 runs). Each arm
+recorded 22 branches ([ablation_ruskey.json](../../eval/results/ablation_ruskey.json),
+[ablation/](ablation/)):
+
+| | With forking | Without (reload per branch) |
+|---|---|---|
+| Database loads | 8 (the naive one, plus one per load setting tested) | 22 |
+| Setup time, summed | 188 s | 519 s |
+| Setup cost (reported) | $1.88 | $5.21 |
+| Total cost (reported) | $4.48 | $8.07 |
+| Wall time | 229 s | 306 s |
+
+Forking cut setup cost by 64% and total cost by 45%. The arms' labels differed (single screen
+runs, each on a different database), and both rested on one unconfirmed run. GapFinder now
+requires the full confirmation repeats before labelling after the budget runs out. Labelled again
+from the recorded runs only, both arms give Unexplained for both claims, as the 127-branch run
+did. The ablation also exposed two bugs, both fixed:
+- **Unconfirmed labels:** a single screen run could produce a label after the budget ran out.
+- **Lost runs:** 8 branches still in flight when the budget stopped the fork arm were never
+  recorded. In-flight runs now finish and are recorded first.
 
 ## Final-regime run (2026-10-09): the main result
 
