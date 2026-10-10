@@ -2,6 +2,11 @@
 
 Oct 2, 2026 · @Sayjad Rahman
 
+> **Planning document, written before any code.** Numbers in this plan and in
+> [STRATEGY.pdf](STRATEGY.pdf) (gaps closed, run times, budgets, scores) are targets or
+> illustrations, not results. Measured results, each with its log, are in the
+> [README](../README.md#results) and [eval/results/](../eval/results/).
+
 ## Snapshot
 
 Completion is milestone-based. Each milestone ends at an exit gate, and the next milestone starts only when that gate passes.
