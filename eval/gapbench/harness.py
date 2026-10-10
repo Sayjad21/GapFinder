@@ -5,6 +5,8 @@
 Arms:
     gapfinder           ledger (Ultra) on the mini-paper + artifact, then the full search
     gapfinder-noverify  same, without counterfactual/held-out/plausibility checks
+    gapfinder-noevidence same, with the evidence step off (a closing value is at most "Fits but unsupported")
+    gapfinder-random    same hypothesis space and budget, shuffled with --seed: no ledger ranking, no strong-lead skip
     baseline-super      mini-swe-agent + Nemotron 3 Super, same inputs, same cap
     baseline-ultra      mini-swe-agent + Nemotron 3 Ultra
 
@@ -41,7 +43,15 @@ from gapfinder.sandbox.runner import Orchestrator  # noqa: E402
 from gapfinder.sandbox.spec import HarnessSpec  # noqa: E402
 
 GB = ROOT / "eval" / "gapbench"
-ARMS = ("gapfinder", "gapfinder-noverify", "baseline-super", "baseline-ultra")
+ARMS = ("gapfinder", "gapfinder-noverify", "gapfinder-noevidence", "gapfinder-random",
+        "baseline-super", "baseline-ultra")
+# SearchConfig overrides per GapFinder arm; the ledger, budget and hypothesis space are the same for all
+ARM_CONFIG = {
+    "gapfinder": {},
+    "gapfinder-noverify": {"verify": False},
+    "gapfinder-noevidence": {"evidence_gate": False},
+    "gapfinder-random": {"rank": "random"},
+}
 
 
 def load_task(task_dir: Path):
@@ -56,7 +66,7 @@ def claims_table(targets: list[dict]) -> str:
     return "\n".join(f"{t['claim_id']}: {t['metric']} = {t['paper_value']:g}" for t in targets)
 
 
-async def run_gapfinder(task_dir: Path, out: Path, verify: bool, backend: str, use_cache: bool) -> dict:
+async def run_gapfinder(task_dir: Path, out: Path, overrides: dict, backend: str, use_cache: bool) -> dict:
     from gapfinder.ingest.pdf import load_paper
     from gapfinder.ingest.repo_map import build_repo_map
     from gapfinder.ledger.assumptions import build_assumption_space, ground_assumptions
@@ -75,7 +85,7 @@ async def run_gapfinder(task_dir: Path, out: Path, verify: bool, backend: str, u
     (out / "assumptions.json").write_text(json.dumps([a.model_dump() for a in assumptions], indent=1))
     (out / "claims.json").write_text(json.dumps([c.model_dump() for c in claims], indent=1))
     orch = Orchestrator(make_backend(backend), spec, EventLog(out / "events.jsonl"), cost=CostMeter())
-    search = GapSearch(orch, [Target(**t) for t in targets], assumptions, SearchConfig(verify=verify, max_runs=200),
+    search = GapSearch(orch, [Target(**t) for t in targets], assumptions, SearchConfig(max_runs=200, **overrides),
                        router=router)
     results = await search.run()
     GapReport.from_search(search, results, paper=task["id"]).write(out)
@@ -98,9 +108,13 @@ def run_baseline(task_dir: Path, out: Path, tier: str, backend_kind: str, cap: f
     orch = Orchestrator(backend, spec, EventLog(out / "events.jsonl"))
     naive = asyncio.run(orch.run_branch({}))
     helper, env_vars = spec.render(spec.run, {})
+    # same repo-map text GapFinder's ledger step gets (see the note at the top of prompt.md)
+    from gapfinder.ingest.repo_map import build_repo_map
+
+    repo_map = build_repo_map(Path(spec.base.removeprefix("local:"))).summary(max_files=300, max_flags=500)
     prompt = (ROOT / "eval" / "baseline" / "prompt.md").read_text(encoding="utf-8").split("-->", 1)[1].format(
         helper=helper.replace('"${PYTHON:-python3}"', "python3"), budget=f"${cap:.2f} and {steps} steps",
-        paper_excerpt=paper_path.read_text(encoding="utf-8"), claims_table=claims_table(targets),
+        paper_excerpt=paper_path.read_text(encoding="utf-8"), repo_map=repo_map, claims_table=claims_table(targets),
         naive_numbers=json.dumps(naive.parsed_metrics))
     env = SandboxEnvironment(backend, naive.parent_checkpoint, timeout=300, env=env_vars)
     templates = yaml.safe_load((Path(minisweagent.__file__).parent / "config" / "mini.yaml").read_text())["agent"]
@@ -136,6 +150,7 @@ def main() -> int:
     p.add_argument("--cap", type=float, default=0.5, help="dollar cap for this arm on this task")
     p.add_argument("--steps", type=int, default=40, help="baseline step limit")
     p.add_argument("--backend", default="local")
+    p.add_argument("--seed", type=int, default=0, help="gapfinder-random: shuffle seed")
     p.add_argument("--fresh", action="store_true", help="GapFinder: bypass the LLM cache (independent repeats)")
     a = p.parse_args()
     task, *_ = load_task(a.task_dir)
@@ -148,7 +163,8 @@ def main() -> int:
     spent0 = budget.spent_usd()
     try:
         if a.arm.startswith("gapfinder"):
-            res = asyncio.run(run_gapfinder(a.task_dir, out, a.arm == "gapfinder", a.backend, not a.fresh))
+            res = asyncio.run(run_gapfinder(a.task_dir, out, {**ARM_CONFIG[a.arm], "seed": a.seed}, a.backend,
+                                            not a.fresh))
         else:
             res = run_baseline(a.task_dir, out, a.arm.split("-")[1], a.backend, a.cap, a.steps)
     except Exception as exc:  # a crashed run is scored as a failure, never silently dropped

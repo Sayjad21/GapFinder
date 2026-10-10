@@ -56,7 +56,7 @@ def main(backend_kind: str, tier: str, cost_limit: float, step_limit: int) -> No
     agent = DefaultAgent(model, env, **{**templates, "step_limit": step_limit, "cost_limit": cost_limit})
     task = (ROOT / "eval" / "baseline" / "prompt.md").read_text(encoding="utf-8").split("-->", 1)[1].format(
         helper="python bench.py", budget=f"{step_limit} steps",
-        paper_excerpt=TOY_PAPER, claims_table="C1: score = 68.3\nC2: write_amp = 7.0",
+        paper_excerpt=TOY_PAPER, repo_map="(not given in this spike)", claims_table="C1: score = 68.3\nC2: write_amp = 7.0",
         naive_numbers=json.dumps(naive.parsed_metrics))
     t0 = time.monotonic()
     try:

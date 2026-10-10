@@ -1,6 +1,12 @@
 <!-- The baseline task prompt, published word for word (fairness rule 2).
      {paper_excerpt}, {claims_table}, {naive_numbers}, {helper} and {budget}
-     are filled identically for every arm. -->
+     are filled identically for every arm.
+
+     Change (P1-1 item 2): the baseline now also gets {repo_map}, the same repo-map text
+     GapFinder's ledger step receives (`RepoMap.summary(max_files=300, max_flags=500)` from
+     gapfinder/ingest/repo_map.py: build files, scripts, config files, every flag with its default
+     and file:line, the file tree, the README start). Before, the baseline saw only the paper text,
+     so a GapFinder win could come from the repo map rather than the method. -->
 
 You are working in a sandbox. Your current working directory holds a research
 artifact: its source code, already built, with its dataset already loaded.
@@ -18,6 +24,9 @@ Rules:
 
 ## Paper excerpt (experimental setup)
 {paper_excerpt}
+
+## Repo map of the artifact (build files, scripts, config files, flags with defaults)
+{repo_map}
 
 ## Paper's claims
 {claims_table}

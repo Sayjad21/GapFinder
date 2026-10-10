@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import random
 import statistics
 from dataclasses import dataclass, field
 
@@ -77,6 +78,19 @@ class SearchConfig:
     # None turns the test off and leaves only the noise-band rule
     effect_alpha: float | None = 0.05
     verify: bool = True  # ablation: False labels any gap-closing config "Explained" without checks
+    # ablation: False skips the plausibility/evidence step (no ledger-evidence match, no web call), so a
+    # closing value is at most "Fits but unsupported"; only the experiments carry the verdict
+    evidence_gate: bool = True
+    # "ledger": the ledger's priors order the hypotheses and strong leads skip pruning.
+    # "random": the random-search arm. Same hypothesis space and budget, but the order comes from
+    # random.Random(seed), `_strong_lead()` is always False, and the combine round ranks knobs by a
+    # seeded random number instead of the ledger prior.
+    rank: str = "ledger"
+    seed: int = 0
+
+    def __post_init__(self):
+        if self.rank not in ("ledger", "random"):
+            raise ValueError(f"rank must be 'ledger' or 'random', not {self.rank!r}")
 
 
 @dataclass(frozen=True)
@@ -254,6 +268,11 @@ class GapSearch:
         self.orch.events.emit("note", msg=msg)
 
     async def run(self) -> list[ClaimResult]:
+        rank = self.cfg.rank if self.cfg.rank == "ledger" else f"RANDOM (seed {self.cfg.seed})"
+        self.orch.events.emit("note", msg=f"search config: evidence gate {'on' if self.cfg.evidence_gate else 'OFF'}, "
+                                          f"rank {rank}",
+                              evidence_gate=self.cfg.evidence_gate, verify=self.cfg.verify,
+                              rank=self.cfg.rank, seed=self.cfg.seed)
         await self.calibrate()
         results = []
         for t in self.targets:
@@ -276,6 +295,9 @@ class GapSearch:
                               for v in stated):
                 continue
             open_knobs.append((k, a, stated))
+        rng = random.Random(self.cfg.seed)
+        if self.cfg.rank == "random":
+            rng.shuffle(open_knobs)  # the top-k cut must not keep the ledger's favourites
         for knob, a, stated in open_knobs[: self.cfg.screen_top_k]:
             spec_knob = self.spec.knobs[knob]
             default = spec_knob.default
@@ -292,6 +314,8 @@ class GapSearch:
                     self.untestable.append((knob, v))
             for v in affordable[: self.cfg.candidates_per_knob]:
                 out.append(Hypothesis(knob, v, a.id))
+        if self.cfg.rank == "random":
+            rng.shuffle(out)
         return out
 
     async def explain(self, t: Target) -> ClaimResult:
@@ -358,7 +382,7 @@ class GapSearch:
         best_value: dict[str, Hypothesis] = {}
         for h in sorted(hyps, key=lambda h: -score[h]):
             best_value.setdefault(h.knob, h)
-        prior = {k: self.assumptions[k].prior_score for k in best_value}
+        prior = {k: self._prior(k) for k in best_value}
         top = sorted(best_value.values(), key=lambda h: (-score[h], -prior[h.knob], h.knob))[: self.cfg.combine_top]
         # knobs that matter only together score ~0 alone, so also pair the ledger's highest-prior knobs
         for h in sorted(best_value.values(), key=lambda h: (-prior[h.knob], h.knob))[: self.cfg.combine_prior_top]:
@@ -444,6 +468,9 @@ class GapSearch:
                                           "ok": after is not None and held_out_ok(before, after, self.band(other))}
         # 5c. plausibility: the value needs evidence, not just a good fit
         for knob, value in changes.items() if self.cfg.verify else ():
+            if not self.cfg.evidence_gate:
+                r.plausibility[knob] = Plausibility(False, "evidence gate off: no evidence was looked for")
+                continue
             naive = self.spec.knobs[knob].default
             r.plausibility[knob] = plausible(self.assumptions.get(knob), value, naive)
             a = self.assumptions.get(knob)
@@ -456,7 +483,10 @@ class GapSearch:
 
         cf_ok = all(v["ok"] for v in r.counterfactual.values())
         ho_ok = all(v["ok"] for v in r.held_out.values())
-        plaus_ok = all(p.supported for p in r.plausibility.values())
+        # with the gate off nothing is ever supported, even when verify=False leaves no plausibility rows
+        plaus_ok = self.cfg.evidence_gate and all(p.supported for p in r.plausibility.values())
+        if not self.cfg.evidence_gate:
+            r.notes.append("evidence gate off: no evidence was checked, so this cannot be labelled Explained")
         reduced = (abs(r.gap_before) - abs(r.gap_after) >= self.cfg.partial_frac * abs(r.gap_before)
                    and self.units(t, changes) >= thr)
         if closes(changes) and cf_ok and ho_ok:
@@ -544,12 +574,22 @@ class GapSearch:
             out.append(a.paper_value)
         return out
 
+    def _prior(self, knob: str) -> float:
+        """The ledger's prior; in the random arm a seeded random number, so no ledger ranking is used."""
+        if self.cfg.rank == "random":
+            return random.Random(f"{self.cfg.seed}:{knob}").random()
+        return self.assumptions[knob].prior_score
+
     def _strong_lead(self, h: Hypothesis) -> bool:
+        if self.cfg.rank == "random":
+            return False  # no ledger leads: every hypothesis must survive the screen on its own effect
         a = self.assumptions.get(h.knob)
         return a is not None and (a.prior_score >= self.cfg.confirm_prior_min
                                   or a.status == AssumptionStatus.stated_code_differs.value)
 
     def _supported(self, changes: Changes) -> bool:
+        if not self.cfg.evidence_gate:
+            return False  # candidates are not ordered by evidence either
         return all(plausible(self.assumptions.get(k), v, self.spec.knobs[k].default).supported
                    for k, v in changes.items())
 

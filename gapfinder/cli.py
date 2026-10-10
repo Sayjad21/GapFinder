@@ -139,9 +139,10 @@ async def cmd_search(args) -> int:
     orch = Orchestrator(make_backend(args.backend), spec, events, cost=CostMeter(cap_usd=args.cap),
                         concurrency=args.concurrency, no_fork=args.no_fork)
     _adopt(orch, args.adopt)
-    events.emit("run_started", spec=spec.model_dump(), mode="search", no_fork=args.no_fork)
+    events.emit("run_started", spec=spec.model_dump(), mode="search", no_fork=args.no_fork,
+                evidence_gate=not args.no_evidence_gate, rank=args.rank, seed=args.seed)
     evidence = None
-    if args.evidence_anchor:  # web evidence for values the paper and code don't back (Tavily)
+    if args.evidence_anchor and not args.no_evidence_gate:  # web evidence for values the paper and code don't back (Tavily)
         from gapfinder.search.evidence import EvidenceSearch
 
         evidence = EvidenceSearch(args.paper or spec.name, anchors=[args.evidence_anchor])
@@ -153,7 +154,9 @@ async def cmd_search(args) -> int:
         ledger_claims = [Claim(**c) for c in (raw_c["claims"] if isinstance(raw_c, dict) else raw_c)]
     search = GapSearch(orch, targets, assumptions, SearchConfig(max_runs=args.max_runs, screen_repeats=args.screen_repeats,
                                                               noise_setups=args.noise_setups,
-                                                              reproduce_tol=args.reproduce_tol),
+                                                              reproduce_tol=args.reproduce_tol,
+                                                              evidence_gate=not args.no_evidence_gate,
+                                                              rank=args.rank, seed=args.seed),
                        evidence=evidence, claims=ledger_claims, router=_router_if_configured())
     for path in args.resume or []:  # reuse earlier runs' branch results (no re-running, no re-paying)
         lines = Path(path).read_text(encoding="utf-8").splitlines()
@@ -214,6 +217,13 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--resume", action="append", help="events.jsonl of an earlier search on the same spec "
                     "(repeatable): reuse its branch results")
     ps.add_argument("--evidence-anchor", help="enable web evidence; sources must mention this name (e.g. RusKey)")
+    ps.add_argument("--no-evidence-gate", action="store_true",
+                    help="ablation: skip the evidence step (no web/Tavily call); a closing value is at most "
+                         "'Fits but unsupported'")
+    ps.add_argument("--rank", choices=("ledger", "random"), default="ledger",
+                    help="hypothesis order: the ledger's priors (default) or the random-search arm "
+                         "(shuffled with --seed, no strong-lead skip)")
+    ps.add_argument("--seed", type=int, default=0, help="seed for --rank random")
     ps.add_argument("--no-fork", action="store_true", help="ablation: rebuild and reload for every branch")
     ps.add_argument("--backend", default=None)
     ps.add_argument("--concurrency", type=int, default=settings().max_concurrency)

@@ -4,6 +4,8 @@ import { api } from "./api.js";
 const ARM_NAMES = {
   gapfinder: "GapFinder",
   "gapfinder-noverify": "GapFinder, no verification",
+  "gapfinder-noevidence": "GapFinder, evidence step off",
+  "gapfinder-random": "GapFinder, random search order",
   "baseline-super": "mini-swe-agent + Nemotron 3 Super",
   "baseline-ultra": "mini-swe-agent + Nemotron 3 Ultra",
 };

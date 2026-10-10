@@ -343,3 +343,90 @@ async def test_within_a_wide_band_is_inconclusive_not_reproduced(tmp_path):
     assert r2.changes == {} and s2.runs_used == s2.cfg.noise_repeats  # no search inside a band this wide
     md = GapReport.from_search(s2, [r2], paper="toy").to_markdown()
     assert "| Inconclusive |" in md and "too wide" in md
+
+
+# search switches: the evidence gate ---------------------------------------------------------
+async def test_evidence_gate_off_never_reaches_explained_and_makes_no_evidence_call(tmp_path):
+    from gapfinder.search.evidence import EvidenceSearch
+
+    calls = []
+
+    async def fake(payload):  # the web source that would upgrade the overfit-trap value if it were asked
+        calls.append(payload)
+        return {"results": [{"url": "https://example.org/errata", "title": "errata",
+                             "content": "Erratum: all runs used alpha 50.0, not the value in the paper."}]}
+
+    def ev(d):
+        return EvidenceSearch("toy", transport=fake, cache_dir=tmp_path / d)
+
+    # alpha=2.0 is backed by the ledger's evidence: Explained with the gate on, only a fit without it
+    m = await paper(tmp_path, {"alpha": "2.0"})
+    on = GapSearch(orch(tmp_path, "on"), targets(m), ALL, SearchConfig(), evidence=ev("tv-on"))
+    [r_on] = await on.run()
+    assert r_on.attribution.confidence_label == "Explained"
+    off = GapSearch(orch(tmp_path, "off"), targets(m), ALL, SearchConfig(evidence_gate=False), evidence=ev("tv-off"))
+    [r_off] = await off.run()
+    assert r_off.changes == {"alpha": "2.0"}  # the experiments still find it
+    assert r_off.attribution.confidence_label == "Fits but unsupported"
+    assert not r_off.plausibility["alpha"].supported and "gate off" in r_off.plausibility["alpha"].reason
+    assert any("evidence gate off" in n for n in r_off.notes)
+    # the web-evidence case: asked with the gate on, never with it off
+    m50 = await paper(tmp_path, {"alpha": "50.0"})
+    s_on = GapSearch(orch(tmp_path, "on50"), targets(m50), ALL, SearchConfig(), evidence=ev("tv-on50"))
+    [r_on50] = await s_on.run()
+    assert r_on50.attribution.confidence_label == "Explained" and calls
+    calls.clear()
+    s_off = GapSearch(orch(tmp_path, "off50"), targets(m50), ALL, SearchConfig(evidence_gate=False),
+                      evidence=ev("tv-off50"))
+    [r_off50] = await s_off.run()
+    assert not calls
+    assert r_off50.attribution.confidence_label == "Fits but unsupported"
+    assert any(e["type"] == "note" and e.get("evidence_gate") is False for e in s_off.orch.events.read())
+    assert not any(e["type"] == "note" and e.get("evidence_gate") is False for e in s_on.orch.events.read())
+
+
+async def test_evidence_gate_off_also_holds_without_verification(tmp_path):
+    """verify=False labels any closing config Explained; with the gate off it cannot."""
+    s, [r] = await search(tmp_path, {"alpha": "2.0"}, verify=False, evidence_gate=False)
+    assert r.changes == {"alpha": "2.0"} and r.attribution.confidence_label == "Fits but unsupported"
+
+
+# search switches: the random-search arm ------------------------------------------------------
+def _hyps(tmp_path, name, **cfg):
+    o = Orchestrator(LocalBackend(tmp_path / f"sbx-{name}"), HarnessSpec.load_yaml(TOY), EventLog(tmp_path / f"{name}.jsonl"))
+    s = GapSearch(o, [Target("C1", "score", 68.3)], ALL, SearchConfig(**cfg))
+    return s, [(h.knob, h.value) for h in s.hypotheses()]
+
+
+def test_random_rank_is_deterministic_for_a_seed_and_differs_from_the_ledger_order(tmp_path):
+    s_led, ledger = _hyps(tmp_path, "led")
+    s_rnd, a1 = _hyps(tmp_path, "a1", rank="random", seed=0)
+    _, a2 = _hyps(tmp_path, "a2", rank="random", seed=0)
+    assert a1 == a2 == [(h.knob, h.value) for h in s_rnd.hypotheses()]  # the same on every call
+    assert sorted(a1) == sorted(ledger) and len(a1) > 2  # same hypothesis space
+    assert ledger[0] == ("alpha", "2.0")  # the ledger puts its highest prior first
+    assert a1 != ledger  # no ledger order
+    orders = {tuple(_hyps(tmp_path, f"s{k}", rank="random", seed=k)[1]) for k in range(1, 6)} | {tuple(a1)}
+    assert len(orders) > 1  # another seed, another order
+    alpha = next(h for h in s_led.hypotheses() if h.knob == "alpha")
+    assert s_led._strong_lead(alpha)  # a prior of 0.9 is a strong lead in the ledger order
+    assert not any(s_rnd._strong_lead(h) for h in s_rnd.hypotheses())
+
+
+async def test_random_rank_still_searches_and_skips_no_strong_leads(tmp_path):
+    (tmp_path / "led").mkdir()
+    s, [r] = await search(tmp_path, {"alpha": "2.0"}, rank="random", seed=3)
+    assert r.changes == {"alpha": "2.0"}  # the experiments find the cause without the ledger's order
+    _, [r_led] = await search(tmp_path / "led", {"alpha": "2.0"})
+    assert sorted((x["knob"], x["value"]) for x in r.screen) == sorted((x["knob"], x["value"]) for x in r_led.screen)
+    assert [x["knob"] for x in r.screen] != [x["knob"] for x in r_led.screen]  # same space, different order
+    # every survivor earned it by its own screen effect, none by a ledger lead
+    survivors = [e for e in s.orch.events.read() if e["type"] == "survivor" and e["round"] == "screen"]
+    assert survivors and all(e["units"] >= s.cfg.effect_threshold for e in survivors)
+    note = next(e for e in s.orch.events.read() if e["type"] == "note" and e.get("rank"))
+    assert note["rank"] == "random" and note["seed"] == 3
+
+
+def test_search_config_rejects_an_unknown_rank():
+    with pytest.raises(ValueError):
+        SearchConfig(rank="alphabetical")
