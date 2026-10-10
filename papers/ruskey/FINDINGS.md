@@ -54,6 +54,34 @@ sandbox cost reported $6.00, billed $0):
 The run printed: "setup is NOT reproducible: 5 identical setups gave 5 different checkpoints". The
 held-out write-heavy ratio is 43% below the paper (1.73 vs 3.05).
 
+## Are forked runs comparable to fresh loads? (2026-10-10)
+
+Recorded data only, no new runs ([ruskey_fork_comparability.json](../../eval/results/ruskey_fork_comparability.json);
+`python eval/load_variance.py <runs> --comparability-out ...`). Naive configuration, same command everywhere.
+"Forked" = the 10 runs forked from the two loads that have 5 naive runs each (the 127-branch run's load and
+the ablation's fork arm). "Fresh" = the 10 loads that have one naive run each (ablation no-fork arm and the
+5-setup run). Band = fresh median +/- 2 MAD.
+
+| Ratio | Forked: median (MAD), min-max | Fresh: median (MAD), min-max | Fresh band | Forked load medians | Inside band |
+|---|---|---|---|---|---|
+| C5 K10/K5 | 0.833 (0.019), 0.77-1.00 | 0.930 (0.083), 0.82-1.11 | 0.77-1.10 | 0.835, 0.818 | 2 of 2 |
+| C5b K1/K5 | 0.766 (0.254), 0.50-1.31 | 1.219 (0.053), 0.99-1.38 | 1.11-1.33 | 0.523, 1.093 | 0 of 2 |
+| C3 WH K1/K10 | 1.064 (0.311), 0.63-3.64 | 1.737 (0.170), 1.15-2.27 | 1.40-2.08 | 3.46, 0.764 | 0 of 2 |
+
+**Conclusion: the forked runs do not fall inside the across-setup band for C5b and C3.** They are
+comparable on C5 only. Runs forked from one load cluster tightly (within-load MAD 0.01-0.18), so they
+measure that one load, not the spread across loads. What this does and doesn't show:
+- It does show that a noise band from forked repeats is too narrow, as the correction above says.
+- It doesn't prove that forking itself shifts results. We have only two forked loads, and they sit at
+  opposite extremes (C5b 0.52 is below every fresh load; C3 3.46 is above every fresh load, and the
+  other forked load, 0.76, is below). That is what two draws from a wide load-to-load distribution
+  look like. Separating a fork effect from load luck needs several fork groups on separate loads, each
+  with a fresh run on the same load.
+- Until that is measured, forked and fresh-load numbers are not interchangeable.
+
+Local run directories under `runs/` (not in git) were checked; they add no independent naive loads
+beyond the committed logs (same load IDs, or the earlier 500K-key regime).
+
 ## Fork vs no-fork ablation (2026-10-09)
 
 The same bounded search ran twice (spec, ledger and targets identical; budget 30 runs). Each arm
