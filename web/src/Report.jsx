@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { api, pct, LABEL_CLASS } from "./api.js";
 
+const NR = "not recorded";
+const num = (x) => (x === null || x === undefined ? NR : String(Number(Number(x).toPrecision(4))));
+const signed = (x) => (x === null || x === undefined ? NR : `${x >= 0 ? "+" : ""}${Number(Number(x).toPrecision(4))}`);
+const knobs = (d) => Object.entries(d || {}).map(([k, v]) => `${k}=${v}`).join(", ") || "naive";
+const LEADS_SHOWN = 5;
+
 function Copy({ text }) {
   const [done, setDone] = useState(false);
   return (
@@ -10,59 +16,148 @@ function Copy({ text }) {
   );
 }
 
+function Q({ q, children }) {
+  return <div className="sub q"><h5>{q}</h5>{children}</div>;
+}
+
+function Effect({ e }) {
+  const ci = e.ci;
+  return (
+    <p className="effect">
+      Effect: candidate <b>{num(e.candidate)}</b> minus naive <b>{num(e.naive)}</b> = <b>{signed(e.diff)}</b>
+      {ci ? <>, {Math.round((1 - e.alpha) * 100)}% bootstrap interval [{signed(ci[0])}, {signed(ci[1])}]
+        {e.excludes_zero === false && <b className="warn"> (includes 0)</b>}</> : <>, bootstrap interval {NR}</>}
+      {" "}({e.n_candidate ?? NR} candidate runs vs {e.n_naive ?? NR} naive runs)
+    </p>
+  );
+}
+
+function Experiment({ x, effect }) {
+  if (!x) return <p className="small">{NR}</p>;
+  if (!x.found) return <p>None: {x.note}.</p>;
+  const cmd = x.command ? `${Object.entries(x.env || {}).map(([k, v]) => `${k}=${v}`).join(" ")} ${x.command}`.trim() : null;
+  const vals = (x.branches || []).map((b) => b.value).filter((v) => v !== null && v !== undefined);
+  return (
+    <>
+      <p>
+        Branch: {x.branches?.length
+          ? x.branches.map((b) => <code key={b.id}>{b.id}</code>)
+          : <span className="small">id {NR}{x.repeats ? ` (${x.repeats} runs)` : ""}</span>}
+      </p>
+      <div className="scroll"><table className="cfg">
+        <thead><tr><th>Config</th><th>Naive</th><th>Changed to</th></tr></thead>
+        <tbody>{x.config.map((k) => (
+          <tr key={k.knob}><td><code>{k.knob}</code></td><td>{k.naive === null || k.naive === undefined ? NR : <code>{k.naive}</code>}</td><td><code>{k.candidate}</code></td></tr>
+        ))}</tbody>
+      </table></div>
+      {cmd ? (
+        <>
+          <p className="small">Command: fork checkpoint <code>{x.parent_checkpoint}</code> and run</p>
+          <pre>{cmd}<Copy text={cmd} /></pre>
+        </>
+      ) : <p className="small">Command: {NR}</p>}
+      <p>Output: <code>{x.metric}</code> {vals.length ? vals.map(num).join(", ") : `values ${NR}`}
+        {" "}· gap after <b>{pct(x.gap_after)}</b>
+        {x.result_checkpoint && <> · result checkpoint <code>{x.result_checkpoint}</code></>}</p>
+      {effect && <Effect e={effect} />}
+    </>
+  );
+}
+
+function Paper({ p }) {
+  if (!p) return <p className="small">{NR}</p>;
+  const where = [p.page ? `p. ${p.page}` : null, p.figure].filter(Boolean).join(", ");
+  return (
+    <>
+      {p.recorded
+        ? <blockquote>{p.quote}</blockquote>
+        : <p className="small">Quote {NR} (the report has no linked ledger claim).</p>}
+      <p className="small">{p.recorded ? (where || `location ${NR}`) : "Value used"}: <code>{p.metric}</code> = {num(p.paper_value)}
+        {p.unit ? ` ${p.unit}` : ""}{p.headline ? " (headline claim)" : ""}</p>
+    </>
+  );
+}
+
+function Measured({ m }) {
+  if (!m) return <p className="small">{NR}</p>;
+  const sc = m.setup_check;
+  return (
+    <ul>
+      <li>Naive median <b>{num(m.median)}</b> over {m.n ?? NR} runs; repeats: {m.repeats?.length ? m.repeats.map(num).join(", ") : NR}</li>
+      <li>Spread: {m.min !== null && m.min !== undefined ? `range ${num(m.min)} to ${num(m.max)}, ` : ""}noise band ±{num(m.band)} (2 x MAD)
+        {m.cv !== null && m.cv !== undefined ? `, CV ${(m.cv * 100).toFixed(1)}%` : ""}</li>
+      <li className={sc?.reproducible === false ? "warn" : ""}>Setup check: {sc ? sc.note : "none in this report (the band comes from forks of one setup)"}</li>
+      <li>Discrepancy from the paper: <b>{pct(m.gap)}</b> (noise band ±{(m.band_rel * 100).toFixed(1)}% of the paper value)</li>
+    </ul>
+  );
+}
+
+const KIND = { reversal: "Counterfactual (reversal test)", held_out: "Held-out claim", evidence: "Evidence", effect: "Effect vs noise" };
+
+function Belief({ b }) {
+  if (!b) return <p className="small">{NR}</p>;
+  if (!b.checks.length) return <p>{b.note}</p>;
+  return (
+    <ul className="checks">
+      {b.checks.map((x, i) => (
+        <li key={i}>
+          <span className={`chk ${x.ok === true ? "pass" : x.ok === false ? "fail" : "na"}`}>{x.ok === true ? "PASS" : x.ok === false ? "FAIL" : "NOT CHECKED"}</span>
+          {" "}{KIND[x.kind] || x.kind}: {x.text.replace(/`/g, "")}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Unknown({ u }) {
+  if (!u) return <p className="small">{NR}</p>;
+  const leads = [...u.leads].sort((a, b) => (b.units || 0) - (a.units || 0));
+  return (
+    <ul>
+      <li>Untestable within the budget: {u.untestable.length ? u.untestable.map((x) => <code key={`${x.knob}=${x.value}`}>{x.knob}={x.value}</code>) : "none"}</li>
+      <li>Not settable with this harness: {u.unmapped.length ? u.unmapped.map((k) => <code key={k}>{k}</code>) : "none"}</li>
+      <li className={u.setup?.reproducible === false ? "warn" : ""}>Setup reproducibility: {u.setup ? u.setup.note : "not checked"}</li>
+      <li>Unconfirmed leads (moved the gap in the screen, not part of the explanation): {leads.length
+        ? <>{leads.slice(0, LEADS_SHOWN).map((x) => <span key={`${x.knob}=${x.value}`}><code>{x.knob}={x.value}</code> ({num(x.units)} noise units, gap {pct(x.gap)}) </span>)}
+          {leads.length > LEADS_SHOWN && <span className="small">and {leads.length - LEADS_SHOWN} more in the JSON</span>}</>
+        : "none"}</li>
+      <li>Near alternatives (closest across all claims): {u.alternatives.length ? (
+        <ul>{u.alternatives.map((a, i) => (
+          <li key={i}><code>{knobs(a.changes)}</code>: this claim {pct(a.gap)}, mean |gap| {(a.mean_abs_gap * 100).toFixed(1)}% ({a.runs} runs)</li>
+        ))}</ul>
+      ) : "none recorded"}</li>
+    </ul>
+  );
+}
+
+const CAUSE_NAME = { confirmed_cause: "Confirmed cause", plausible_explanation: "Plausible explanation (fits but unsupported)", interacting_factors: "Interacting factors" };
+
 function Card({ c }) {
   const a = c.attribution;
   const label = a?.confidence_label || "Reproduced";
-  const replay = c.replay?.[0];
-  const cmd = replay ? `${Object.entries(replay.env || {}).map(([k, v]) => `${k}=${v}`).join(" ")} ${replay.command}` : null;
+  const kind = c.cause?.kind;
   return (
-    <article className="card">
+    <article className={`card ${kind ? `cause-${kind}` : ""}`}>
       <header>
         <span className={`label ${LABEL_CLASS[label] || "muted"}`}>{label}</span>
         <h4>{c.target.claim_id} · {c.target.metric}</h4>
         <span className="paperval">paper {c.target.paper_value}</span>
       </header>
+      {kind && <p className={`cause ${kind}`}><b>{CAUSE_NAME[kind]}.</b> {c.cause.text.replace(/^[^:]*: /, "")}</p>}
       {c.status === "reproduced" ? (
         <p>Reproduces: the naive gap {pct(c.gap_before)} is inside the noise band ±{(c.band * 100).toFixed(1)}%.</p>
       ) : c.status === "inconclusive" ? (
         <p>Inconclusive: the naive gap {pct(c.gap_before)} is inside the noise band ±{(c.band * 100).toFixed(1)}%,
           but the band is too wide to call it a reproduction or to test explanations.</p>
       ) : (
-        <>
-          <p className="gap">gap <b>{pct(c.gap_before)}</b> → <b>{pct(c.gap_after)}</b> · noise ±{(c.band * 100).toFixed(1)}% · {c.hypotheses_tested} hypotheses tested</p>
-          {Object.keys(c.changes || {}).length > 0 && (
-            <p>Explained by {Object.entries(c.changes).map(([k, v]) => <code key={k}>{k}={v}</code>)}</p>
-          )}
-          {Object.keys(c.plausibility || {}).length > 0 && (
-            <div className="sub"><h5>Evidence</h5><ul>
-              {Object.entries(c.plausibility).map(([k, p]) => (
-                <li key={k}><code>{k}={c.changes[k]}</code> {p.supported ? "supported" : <b className="warn">unsupported</b>}: {p.reason}</li>
-              ))}
-            </ul></div>
-          )}
-          {Object.keys(c.counterfactual || {}).length > 0 && (
-            <div className="sub"><h5>Counterfactual (revert one knob; the gap must come back)</h5><ul>
-              {Object.entries(c.counterfactual).map(([k, v]) => (
-                <li key={k}>without <code>{k}</code>: gap {pct(v.gap_without)} {v.ok ? "✓" : "✗ did not return"}</li>
-              ))}
-            </ul></div>
-          )}
-          {Object.keys(c.held_out || {}).length > 0 && (
-            <div className="sub"><h5>Held-out claims (must not get worse beyond noise)</h5><ul>
-              {Object.entries(c.held_out).map(([cid, v]) => (
-                <li key={cid}>{cid}: {pct(v.gap_before)} → {pct(v.gap_after)} {v.ok ? "✓" : "✗ worse"}</li>
-              ))}
-            </ul></div>
-          )}
-          {cmd && (
-            <div className="sub"><h5>Replay this branch</h5>
-              <p className="small">Fork checkpoint <code>{replay.parent_checkpoint}</code> and run:</p>
-              <pre>{cmd}<Copy text={cmd} /></pre>
-            </div>
-          )}
-          {c.notes?.length > 0 && <div className="sub"><h5>Notes</h5><ul>{c.notes.map((n, i) => <li key={i}>{n}</li>)}</ul></div>}
-        </>
+        <p className="gap">gap <b>{pct(c.gap_before)}</b> → <b>{pct(c.gap_after)}</b> · noise ±{(c.band * 100).toFixed(1)}% · {c.hypotheses_tested} hypotheses tested</p>
       )}
+      <Q q="Which experiment changed it?"><Experiment x={c.experiment} effect={c.effect} /></Q>
+      <Q q="What did the paper report?"><Paper p={c.paper_claim} /></Q>
+      <Q q="What did we measure?"><Measured m={c.measured} /></Q>
+      <Q q="Why do we believe it?"><Belief b={c.belief} /></Q>
+      <Q q="What remains unknown?"><Unknown u={c.unknown} /></Q>
+      {c.notes?.length > 0 && <div className="sub"><h5>Notes</h5><ul>{c.notes.map((n, i) => <li key={i}>{n}</li>)}</ul></div>}
     </article>
   );
 }
@@ -84,6 +179,25 @@ function Closest({ r }) {
           </tr>
         ))}</tbody>
       </table></div>
+    </div>
+  );
+}
+
+function Provenance({ p }) {
+  if (!p) return <div className="sub provenance"><h5>Provenance</h5><p className="small">Not recorded: this report was written before provenance was kept.</p></div>;
+  const g = p.gapfinder || {};
+  const c = p.cost;
+  return (
+    <div className="sub provenance">
+      <h5>Provenance</h5>
+      <ul>
+        <li>GapFinder commit: {g.commit ? <><code>{g.commit}</code>{g.dirty && " (working tree had uncommitted changes)"}</> : `${NR} (no git checkout)`}</li>
+        <li>Models: {p.models ? Object.entries(p.models).map(([k, v]) => <span key={k}>{k} <code>{v}</code> </span>) : NR}</li>
+        <li>Prompt sha256: {p.prompt_sha256 && Object.keys(p.prompt_sha256).length
+          ? Object.entries(p.prompt_sha256).map(([k, v]) => <div key={k}>{k} <code>{v}</code></div>) : NR}</li>
+        <li>Harness spec sha256: {p.harness_spec_sha256 ? <code>{p.harness_spec_sha256}</code> : NR}</li>
+        <li>Cost: {c ? `Nemotron billed $${c.nemotron_billed_usd.toFixed(4)}, sandbox reported $${c.sandbox_reported_usd.toFixed(4)} (total $${c.total_usd.toFixed(4)}; ${c.scope})` : NR}</li>
+      </ul>
     </div>
   );
 }
@@ -118,6 +232,7 @@ export default function Report({ run }) {
       {r.unmapped_assumptions?.length > 0 && (
         <p className="small">Not testable with this harness: {r.unmapped_assumptions.map((k) => <code key={k}>{k}</code>)}</p>
       )}
+      <Provenance p={r.provenance} />
     </section>
   );
 }

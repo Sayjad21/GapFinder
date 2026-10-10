@@ -136,6 +136,7 @@ class GapSearch:
         self.router = router  # optional: Nemotron 3 Super triages failed hypotheses
         self.setup_check: dict | None = None  # filled when noise_setups > 1
         self.triaged: list[dict] = []
+        self.claims = {c.id: c for c in (claims or [])}  # carried into the Gap Report (quote, page)
         self.claim_figure = {c.id: c.figure_or_table for c in (claims or [])}
         self.target_figures = {t.figure for t in targets if t.figure}
         self.spec = orch.spec

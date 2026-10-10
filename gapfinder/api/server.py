@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 from gapfinder.config import REPO_ROOT
+from gapfinder.report.gap_report import upgrade_report
 
 WEB_DIST = REPO_ROOT / "web" / "dist"
 MAX_IDLE_S = 2.0  # replay compresses idle gaps longer than this (in replay time)
@@ -108,7 +109,7 @@ def get_run(run_id: str) -> dict:
     return {
         "id": run_id,
         "meta": _json(d / "meta.json") or {},
-        "report": _json(d / "gap_report.json"),
+        "report": _finite(upgrade_report(_json(d / "gap_report.json"))),  # old reports get the card fields
         "claims": _json(d / "claims.json"),
         "assumptions": _json(d / "assumptions.json"),
         "prediction": _json(d / "prediction.json"),
