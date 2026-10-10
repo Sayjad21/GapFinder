@@ -8,6 +8,7 @@ are flagged so the caller can re-run them.
 
 from __future__ import annotations
 
+import random
 import statistics
 from dataclasses import dataclass
 
@@ -53,6 +54,20 @@ def effect_in_noise_units(naive_gap: float, branch_gap: float, band: float) -> f
 
 def is_real_effect(baseline_values: list[float], branch_values: list[float], band: float) -> bool:
     return abs(statistics.median(branch_values) - statistics.median(baseline_values)) > band
+
+
+def bootstrap_diff_ci(base: list[float], cand: list[float], *, n: int = 2000, alpha: float = 0.05,
+                      seed: int = 0) -> tuple[float, float]:
+    """Percentile bootstrap interval for mean(cand) - mean(base), resampling each group separately.
+    Deterministic (fixed seed), so a search replays to the same verdict."""
+    if not base or not cand:
+        raise ValueError("need runs in both groups")
+    rng = random.Random(seed)
+    diffs = sorted(statistics.fmean(rng.choices(cand, k=len(cand))) - statistics.fmean(rng.choices(base, k=len(base)))
+                   for _ in range(n))
+    lo = diffs[int(alpha / 2 * (n - 1))]
+    hi = diffs[int((1 - alpha / 2) * (n - 1))]
+    return lo, hi
 
 
 def starved(involuntary_switches: list[int], factor: float = 3.0) -> list[bool]:

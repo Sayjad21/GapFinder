@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 from gapfinder.ledger.schemas import Assumption, AssumptionStatus, Attribution, Branch, BranchStatus, ConfidenceLabel
 from gapfinder.models import budget
-from gapfinder.sandbox.noise import NoiseBand, noise_band
+from gapfinder.sandbox.noise import NoiseBand, bootstrap_diff_ci, noise_band
 from gapfinder.sandbox.runner import Orchestrator
 from gapfinder.search.bisect import minimal_set
 from gapfinder.ledger.assumptions import derive_status
@@ -73,6 +73,9 @@ class SearchConfig:
     # inside a wider band is "Inconclusive": the measurements can't tell the paper's value from
     # values this far away
     reproduce_tol: float = 0.10
+    # a confirmed effect must also have a bootstrap interval on (candidate - naive) that excludes 0;
+    # None turns the test off and leaves only the noise-band rule
+    effect_alpha: float | None = 0.05
     verify: bool = True  # ablation: False labels any gap-closing config "Explained" without checks
 
 
@@ -192,6 +195,24 @@ class GapSearch:
         if self.setup_check and self.setup_check["reproducible"] is False:
             return max(own, self.band(t))  # its repeats share one setup; setups themselves vary this much
         return own
+
+    def effect_ci(self, t: Target, changes: Changes) -> tuple[float, float] | None:
+        """Bootstrap interval for (candidate - naive) on the target metric, from runs already made."""
+        base = [b.parsed_metrics[t.metric] for b in self.measure_ok({}) if t.metric in b.parsed_metrics]
+        cand = [b.parsed_metrics[t.metric] for b in self.measure_ok(changes) if t.metric in b.parsed_metrics]
+        if len(base) < 2 or len(cand) < 2:
+            return None
+        return bootstrap_diff_ci(base, cand, alpha=self.cfg.effect_alpha or 0.05)
+
+    def _significant(self, t: Target, changes: Changes) -> bool:
+        if self.cfg.effect_alpha is None:
+            return True
+        ci = self.effect_ci(t, changes)
+        ok = ci is not None and (ci[0] > 0 or ci[1] < 0)
+        if not ok:
+            self.orch.events.emit("note", msg=f"{t.claim_id}: {dict(changes)} not significant "
+                                              f"(bootstrap interval {ci and tuple(round(x, 4) for x in ci)} includes 0)")
+        return ok
 
     def closes(self, t: Target, changes: Changes) -> bool:
         g = self.gap(t, changes)
@@ -329,7 +350,7 @@ class GapSearch:
         # 2. confirm: survivors get repeats; effects that fade are pruned
         reps = self.confirm_repeats(t)
         await _all(*(self.measure(h.changes, reps, "confirm") for h in survivors))
-        confirmed = [h for h in survivors if self.units(t, h.changes) >= thr]
+        confirmed = [h for h in survivors if self.units(t, h.changes) >= thr and self._significant(t, h.changes)]
         self.orch.events.emit("round", name="confirm", claim=t.claim_id, confirmed=len(confirmed))
 
         # 3. combine: all confirmed together, plus pairs among the top screened knobs
@@ -360,7 +381,8 @@ class GapSearch:
         self.orch.events.emit("round", name="combine", claim=t.claim_id, tried=len(combos), kept=len(good_combos))
 
         # candidates: confirmed singles and combos, closest to the paper first
-        candidates = [h.changes for h in confirmed] + [c for c in good_combos if self.units(t, c) >= thr]
+        candidates = [h.changes for h in confirmed] + [c for c in good_combos if self.units(t, c) >= thr
+                                                         and self._significant(t, c)]
         # closes fully > closes at least half > the rest; evidence-backed first within each tier
         def tier(c: Changes) -> int:
             g, g0 = abs(self.gap(t, c)), abs(res.gap_before)
