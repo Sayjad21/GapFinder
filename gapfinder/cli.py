@@ -152,7 +152,8 @@ async def cmd_search(args) -> int:
         raw_c = json.loads(Path(args.claims).read_text())
         ledger_claims = [Claim(**c) for c in (raw_c["claims"] if isinstance(raw_c, dict) else raw_c)]
     search = GapSearch(orch, targets, assumptions, SearchConfig(max_runs=args.max_runs, screen_repeats=args.screen_repeats,
-                                                              noise_setups=args.noise_setups),
+                                                              noise_setups=args.noise_setups,
+                                                              reproduce_tol=args.reproduce_tol),
                        evidence=evidence, claims=ledger_claims, router=_router_if_configured())
     for path in args.resume or []:  # reuse earlier runs' branch results (no re-running, no re-paying)
         lines = Path(path).read_text(encoding="utf-8").splitlines()
@@ -204,6 +205,9 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--paper", help="paper name for the report title")
     ps.add_argument("--max-runs", type=int, default=None, help="branch-run budget")
     ps.add_argument("--screen-repeats", type=int, default=1, help="runs per hypothesis in the screen round")
+    ps.add_argument("--reproduce-tol", type=float, default=0.10,
+                    help="call a claim Reproduced only if the noise band is at most this fraction of the "
+                         "paper value; otherwise Inconclusive")
     ps.add_argument("--noise-setups", type=int, default=1,
                     help="naive noise runs on that many independent builds/loads (checks the setup reproduces)")
     ps.add_argument("--claims", help="claim_ledger.json from `gapfinder ledger` (ties paper values to figures)")

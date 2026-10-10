@@ -79,6 +79,11 @@ class GapReport:
             if r.status == "reproduced":
                 out.append(f"Reproduces: naive gap {_pct(r.gap_before)} is inside the noise band ±{r.band * 100:.1f}%.")
                 continue
+            if r.status == "inconclusive":
+                out.append(f"**Inconclusive** · naive gap {_pct(r.gap_before)} is inside the noise band "
+                           f"±{r.band * 100:.1f}%, but the band is too wide to call it a reproduction.")
+                out += [""] + [f"- {n}" for n in r.notes]
+                continue
             a = r.attribution
             out.append(f"**{a.confidence_label}** · gap {_pct(r.gap_before)} → {_pct(r.gap_after)} · "
                        f"{r.hypotheses_tested} hypotheses tested")

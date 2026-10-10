@@ -127,6 +127,7 @@ class ConfidenceLabel(str, Enum):
     fits_but_unsupported = "Fits but unsupported"
     unexplained = "Unexplained"
     inconsistency = "Paper-artifact inconsistency"
+    inconclusive = "Inconclusive"  # within noise, but the noise is too wide to tell values apart
 
 
 class Attribution(_Model):

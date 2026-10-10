@@ -24,6 +24,9 @@ function Card({ c }) {
       </header>
       {c.status === "reproduced" ? (
         <p>Reproduces: the naive gap {pct(c.gap_before)} is inside the noise band ±{(c.band * 100).toFixed(1)}%.</p>
+      ) : c.status === "inconclusive" ? (
+        <p>Inconclusive: the naive gap {pct(c.gap_before)} is inside the noise band ±{(c.band * 100).toFixed(1)}%,
+          but the band is too wide to call it a reproduction or to test explanations.</p>
       ) : (
         <>
           <p className="gap">gap <b>{pct(c.gap_before)}</b> → <b>{pct(c.gap_after)}</b> · noise ±{(c.band * 100).toFixed(1)}% · {c.hypotheses_tested} hypotheses tested</p>

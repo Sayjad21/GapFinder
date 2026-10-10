@@ -331,3 +331,15 @@ async def test_noise_setups_check_whether_the_load_reproduces(tmp_path, flaky):
     shared = o.tree.find_stage("loaded", {})
     # the shared load stays shared (a reproducible load dedups, so then all five share it)
     assert [b.parent_checkpoint for b in s._runs[frozenset()]].count(shared) == (3 if flaky else 5)
+
+
+
+async def test_within_a_wide_band_is_inconclusive_not_reproduced(tmp_path):
+    """Naive equals the paper here; with a band wider than the tolerance it can't count as a reproduction."""
+    s, [r] = await search(tmp_path, {})
+    assert r.status == "reproduced" and r.attribution is None  # band 1% <= 10% tolerance
+    s2, [r2] = await search(tmp_path, {}, reproduce_tol=0.001)
+    assert r2.status == "inconclusive" and r2.attribution.confidence_label == "Inconclusive"
+    assert r2.changes == {} and s2.runs_used == s2.cfg.noise_repeats  # no search inside a band this wide
+    md = GapReport.from_search(s2, [r2], paper="toy").to_markdown()
+    assert "| Inconclusive |" in md and "too wide" in md

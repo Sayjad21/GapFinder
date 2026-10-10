@@ -69,6 +69,10 @@ class SearchConfig:
     partial_frac: float = 0.5  # "partially explained" needs at least this share of the gap closed
     verify_candidates: int = 3  # best configurations taken through verification
     max_runs: int | None = None  # branch-run budget; None = unlimited
+    # "Reproduced" only when the noise band is at most this fraction of the paper value; a naive run
+    # inside a wider band is "Inconclusive": the measurements can't tell the paper's value from
+    # values this far away
+    reproduce_tol: float = 0.10
     verify: bool = True  # ablation: False labels any gap-closing config "Explained" without checks
 
 
@@ -273,8 +277,20 @@ class GapSearch:
         g0, band = self.gap(t, {}), self.band(t)
         res = ClaimResult(target=t, status="searched", gap_before=g0, band=band)
         if abs(g0) <= band:
-            res.status = "reproduced"
-            res.notes.append("naive run is within the noise band of the paper's value")
+            if band <= self.cfg.reproduce_tol:
+                res.status = "reproduced"
+                res.notes.append("naive run is within the noise band of the paper's value")
+            else:
+                res.status = "inconclusive"
+                res.attribution = self._attribution(t, {}, g0, ConfidenceLabel.inconclusive, [])
+                res.gap_after = g0
+                res.notes.append(f"naive gap {g0:+.1%} is inside the noise band (±{band:.1%}), but the band is "
+                                 f"wider than ±{self.cfg.reproduce_tol:.0%}: these measurements can't tell the "
+                                 "paper's value apart from clearly different ones, so neither a reproduction "
+                                 "nor an explanation can be claimed")
+            self.orch.events.emit("attribution", claim=t.claim_id, status=res.status,
+                                  label=res.attribution.confidence_label if res.attribution else None,
+                                  changes={}, gap_before=g0, gap_after=g0)
             return res
         tried: set[frozenset] = set()
         try:

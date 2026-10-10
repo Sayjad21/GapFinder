@@ -37,7 +37,7 @@ from gapfinder.sandbox.spec import HarnessSpec  # noqa: E402
 
 GB = ROOT / "eval" / "gapbench"
 CONFIDENT = {"Explained", "Paper-artifact inconsistency", "Partially explained", "Attributed"}
-NOT_AN_ANSWER = {"Unexplained", "Reproduced", "missing"}
+NOT_AN_ANSWER = {"Unexplained", "Reproduced", "Inconclusive", "missing"}  # abstentions
 
 
 def _norm_knob(k: str) -> str:

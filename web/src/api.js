@@ -34,4 +34,5 @@ export const LABEL_CLASS = {
   "Partially explained": "warn",
   Unexplained: "muted",
   Reproduced: "muted",
+  Inconclusive: "warn",
 };
