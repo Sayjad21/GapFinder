@@ -59,6 +59,29 @@ passed. Keys go in `.env`, which is git-ignored, never committed and never paste
 Ask S for them. They are the Token Factory key (also used for Sandboxes), the Nebius project ID
 and the Tavily key.
 
+### Money safety: do this before any paid or sandbox run (S, in the Nebius console)
+
+Sandboxes **looked** free when we checked the console on 2026-10-08: the usage page billed only
+Nemotron inference, and none of the sandbox "cost" appeared. That is an observation, not a
+promise; the docs don't publish Beta pricing. The only ways to lose real money are:
+- Nebius starting to bill sandboxes (end of the Beta) without us noticing;
+- auto top-up on an attached card;
+- the API key being used elsewhere.
+
+Before anyone runs anything that touches Sandboxes or spends Nemotron credit:
+1. [ ] **Billing → usage:** confirm there are still no sandbox charges. Reported sandbox cost is
+   now **$55.40** in total.
+2. [ ] **Payment method:** check whether a card is attached, and **turn off auto top-up** if it
+   exists, so spending stops at the balance instead of charging the card.
+3. [ ] **Budget alert:** set one at a low amount, e.g. $10 above what is already spent.
+4. [ ] **Ask Nebius** (Discord, https://discord.gg/eXYTGhgnhK): "Is Sandboxes Beta usage free, and
+   how will we be told before billing starts?" Write the answer here.
+5. [ ] **Share keys only privately** (never in chat logs, commits or screenshots). If a key may
+   have leaked, rotate it in the console.
+
+**Until items 1-3 are done, run nothing on Sandboxes** (`--backend contree`). Local runs
+(`--backend local`, GapBench, the toy suite, `GF_CACHE_ONLY=1`) are free and fine.
+
 ### Money rules (strict)
 
 - **The whole project has about $50 of Token Factory credit, and only Nemotron inference is
@@ -67,9 +90,10 @@ and the Tavily key.
   Don't raise it without S's OK.
 - **Sandboxes are unbilled during the Beta**, but every run reports a `cost` of about $0.01 per
   CPU-second. We still track it:
-  - $48.67 has been reported so far;
+  - $55.40 has been reported so far (including $6.58 lost to one failed MC Dropout timing run);
   - `GF_SANDBOX_GUARD_USD` (default 60) refuses new sandbox runs past that total;
-  - **ask S before any run that would cross it.**
+  - **ask S before any run that would cross it.** Any further sandbox work needs the guard
+    raised, so it needs S's OK.
 - Tag every paid experiment: `GF_SPEND_TAG=<name>`. Check spend at any time:
   `python -c "from gapfinder.models import budget; print(budget.spent_usd(), budget.sandbox_reported_usd())"`.
 - `GF_CACHE_ONLY=1` reuses cached model answers and makes no paid call, so re-runs are free.
@@ -88,14 +112,47 @@ and the Tavily key.
   tunes GapFinder must never see them.
 - **Every number in the README, the video and Devpost needs a log in the repo.** If a run fails,
   record the failure.
-- **RusKey:** the source lives in WSL at `/root/ruskey`. The Desktop `ruskey` folder is a dead
-  copy; never use it. Never run two benchmarks at once in WSL. If a RusKey correctness test
-  fails, stop and report to S.
+- **RusKey:** the source lives only on S's machine, in WSL at `/root/ruskey`. The Desktop
+  `ruskey` folder is a dead copy; never use it. Never run two benchmarks at once in WSL. If a
+  RusKey correctness test fails, stop and report to S. See "Getting RusKey" below for what the
+  next developer needs.
 - RusKey's database load is **not reproducible**: the same command gives a different layout and
   different ratios each time. Any new RusKey search must use `--noise-setups 5`. See
   `papers/ruskey/FINDINGS.md`.
 
 ---
+
+### Getting RusKey (the source is only on S's PC)
+
+**You don't need the RusKey source for almost anything.** The built RusKey program (the
+stripped `ruskey_bench` driver and its libraries) was uploaded once into a Sandboxes snapshot in
+our Nebius project. Every RusKey search starts from that snapshot:
+`--adopt source=98e3e854-cf02-43c0-8cd2-5d5423de247a --adopt built=98e3e854-cf02-43c0-8cd2-5d5423de247a`.
+With the project's API key and project ID in `.env`, you can use it from any machine. Also put
+`GF_RUSKEY_SOURCE=98e3e854-cf02-43c0-8cd2-5d5423de247a` in `.env`: the RusKey specs read their
+`base` from it.
+
+| Work | Needs the RusKey source? | How |
+|---|---|---|
+| RusKey searches, the positive control, `--noise-setups` runs | No | adopt the snapshot above; the harness scripts are in `papers/ruskey/harness/` |
+| Re-labelling or analysing past RusKey runs | No | the event logs are in `papers/ruskey/` (`search_final/`, `search_setups/`, `ablation/`) |
+| The RusKey gold sets and ledger scoring | No | `papers/ruskey/gold_*.json`, `eval/ledger_eval.py`, frozen ledger in `papers/ruskey/ledger_v5/` |
+| Re-running the RusKey claim ledger (P1-3, setting recall) | **Yes**: the assumption step reads the code | S shares a copy privately (below) |
+| Rebuilding the RusKey binary (new driver or settings) | **Yes** | only S, in WSL: `scripts/prep_ruskey_bin.sh` |
+
+S's steps so the next developer is never blocked:
+1. [ ] **Keep the snapshot alive.** Untagged Sandboxes images can be cleaned up after about 180
+   days. Tag it once, which costs no compute:
+   `python -c "import asyncio; from gapfinder.config import settings; settings(); from gapfinder.sandbox.backend import ContreeBackend; asyncio.run(ContreeBackend().tag('98e3e854-cf02-43c0-8cd2-5d5423de247a', 'gf/ruskey/prebuilt'))"`
+2. [ ] **Back up the binary bundle privately.** In WSL, run
+   `bash scripts/prep_ruskey_bin.sh /root/ruskey /tmp/ruskey_bin`, then zip `/tmp/ruskey_bin`
+   and share it privately (e.g. Google Drive). **Never commit it to this public repo**: it's S's
+   research code. With it, the snapshot can be recreated by spike S3
+   (`tests/spikes/s3_build_ruskey.py`; see `tests/spikes/README.md`). S3 uploads the bundle and
+   prints new `GF_RUSKEY_SOURCE`, `GF_RUSKEY_BUILT` and `GF_RUSKEY_LOADED` IDs for `.env`; use
+   those in the `--adopt` flags instead of `98e3e854…`.
+3. [ ] **Only if the ledger must be re-run:** share the source privately, e.g. a **private**
+   GitHub repo with the friend added as a collaborator. Don't put it in this public repo.
 
 ### Who writes hidden tasks (no team member does)
 
@@ -201,8 +258,15 @@ when re-run.
     10x training epochs and with 2 hidden layers instead of 1.
   - Mukhoti, Stenetorp and Gal (2018, arXiv 1811.09385) say the dropout baseline was stopped
     early.
-  - The paper used 40 epochs and 1 hidden layer of 50 units. **Verify both against the PDF** and
-    quote the page in the answer key.
+  - **Verified from the PDF and the paper-era code** (see
+    [FEASIBILITY.md](eval/external/mc-dropout/FEASIBILITY.md)):
+    - the ICML paper (p.6) says "50 units" and "we used 10x more iterations", i.e. 400 epochs;
+    - the paper-era code (`a6259f1`) used `n_epochs*10` and one hidden layer.
+    - So the paper's setting is `--epochx 10 --hidden 1`, **not** 40 epochs, which an earlier
+      draft of this TODO said.
+    - Use the **ICML proceedings version** as the paper. The later arXiv version adds a Table 2
+      that states the effect outright.
+  - Claimed numbers (ICML Table 1, dropout RMSE): Concrete 5.23, Energy 1.66, Yacht 1.11.
 - **Expected outcome if GapFinder works:** it names `epochx` and/or `hidden`, probably as a
   "Paper-artifact inconsistency" (the paper states one value and the code defaults to another).
 - **Caveats** (write all of them in the answer key before running):
@@ -226,7 +290,43 @@ when re-run.
 - Risks: about 15-25 min per run on 4 CPUs (unverified); the 92.6% may not reappear with
   multi-threaded word2vec; the shuffle is a script line, not a flag.
 
-### Step 1: feasibility check on Candidate A (D). Do this before anything else.
+### Status: feasibility done, **blocked on S's decision**
+
+Results are in [eval/external/mc-dropout/FEASIBILITY.md](eval/external/mc-dropout/FEASIBILITY.md).
+- **Works:**
+  - `python:3.6-slim` runs in Sandboxes, and sandboxes have network access;
+  - the old stack installs in 65 s: numpy 1.13.3, scipy 1.1.0, Theano 0.8.2, Keras 2.2.0,
+    h5py 2.8.0, plus `g++`;
+  - it is checkpointed as `c6fbd1fc-a3aa-4aad-91c8-2ed7b35f65ff`.
+- **Blocks:**
+  - one hyperparameter setting costs about 650 CPU-seconds, because `net/net.py` makes
+    `T = 10000` separate `model.predict` calls;
+  - 13 settings run per split, so one split is about $85 of reported cost and the paper's 20
+    splits about $1,700.
+- **Lost:** $6.58 of reported time, on a run that crashed because our upload dropped the empty
+  `results/` folder. That bug is fixed (`_empty_dirs` in `gapfinder/sandbox/backend.py`).
+
+**Decision for S.** Options, with the recommended one first:
+1. **Recommended: a scaled run.**
+   - Use `T = 100` Monte Carlo samples instead of 10,000, and 3-5 splits instead of 20.
+   - The harness spec's `build` stage applies one fixed, documented patch before anything runs:
+     `sed -i 's/T = 10000/T = 100/' net/net.py`.
+   - **`T` must not be a knob**: GapFinder searches only the repo's real conditions, and itself
+     still edits no code.
+   - Report it as a scaled reproduction, like RusKey's 2M keys instead of 100M. 100 samples
+     estimate the predictive mean (RMSE) well; the test log-likelihood less so.
+   - First measure one grid setting with `T = 100` (expected: tens of seconds), then size
+     `--max-runs`.
+   - Needs: the money safety checks above, and the guard raised (e.g.
+     `GF_SANDBOX_GUARD_USD=80`).
+2. **Run it locally in Docker:** the same pins on `python:3.6-slim`, with GapFinder's local
+   backend inside a container. There's no sandbox cost, but it takes many hours of a laptop
+   and loses the "in Sandboxes" part.
+3. **Switch to Candidate B** (Paragraph Vector), or **do the RusKey positive control first.**
+
+Once S decides, continue with Step 1 item 5 (check there is a gap) and then Step 2.
+
+### Step 1: feasibility check on Candidate A (D). Items 1-4 done; see Status above.
 
 Cost: no Nemotron spend; a few cents of reported (unbilled) sandbox cost. Stop and tell S if any
 check fails.
@@ -362,7 +462,8 @@ past the $60 guard; S must approve and set `GF_SANDBOX_GUARD_USD` (e.g. 75).
    script's output or the sealed folder.
 4. D runs:
    `gapfinder search --spec papers/ruskey/ruskey_fig6_final.yaml --targets targets_control.json --assumptions papers/ruskey/ledger_v5/assumptions.json --claims papers/ruskey/ledger_v5/claim_ledger.json --backend contree --adopt source=98e3e854-cf02-43c0-8cd2-5d5423de247a --adopt built=98e3e854-cf02-43c0-8cd2-5d5423de247a --noise-setups 5 --max-runs 60`.
-   Upload the RusKey binary bundle first; see `scripts/prep_ruskey_bin.sh`.
+   No upload is needed: the `--adopt` snapshot already contains the RusKey binary (see "Getting
+   RusKey").
 5. Score: did it name the planted setting with a confirmed label? Record the result in
    `papers/ruskey/FINDINGS.md` and the README.
 
@@ -434,7 +535,7 @@ changes settings until one run matches the paper will fool itself. Already done:
 repeats, extra repeats when CV > 5%, `--noise-setups` with the content-addressed reproducibility
 check, and no labels from unconfirmed runs.
 
-1. **Add an "Inconclusive" verdict.** Today RusKey C5b is labelled "Reproduced" inside a ±16% band,
+1. **Done.** **Add an "Inconclusive" verdict.** Today RusKey C5b is labelled "Reproduced" inside a ±16% band,
    which overstates it.
    - Add `inconclusive = "Inconclusive"` to `ConfidenceLabel` in `gapfinder/ledger/schemas.py`
      (line 124).
@@ -446,7 +547,8 @@ check, and no labels from unconfirmed runs.
      the tolerance.
    - Update `gap_report.py`, `web/src/api.js` (`LABEL_CLASS`), `eval/gapbench/score.py` (as an
      abstention), and add tests in `tests/integration/test_search_toy.py`.
-2. **A significance test for effects**, alongside the 2×MAD rule.
+2. **Done** (dev set unchanged: 4/4, no false attributions; `eval/results/gapbench_dev_v6.json`).
+   **A significance test for effects**, alongside the 2×MAD rule.
    - Add `bootstrap_diff_ci(a, b, n=2000, alpha=0.05, seed=0)` to `gapfinder/sandbox/noise.py`.
    - Use it in the confirm round (`units()` and `closes()` in `engine.py`): a candidate's effect
      counts only if the interval on (candidate − naive) excludes zero.
@@ -687,3 +789,8 @@ Re-labelling a finished search from its recorded runs only, without any new run:
   values aren't re-run; Nemotron 3 Super triages failed branches.
 - Static replay site and Pages workflow (waits for the repo to go public and Pages to be
   enabled); structured feedback write-up; README with results and platform usage.
+- An "Inconclusive" verdict (`--reproduce-tol`, default ±10%) and a bootstrap test that every
+  confirmed effect must pass; GapBench dev v6 is still 4/4 with 0% false attribution.
+- MC Dropout feasibility: the environment works in Sandboxes; cost blocks it (see P0-1 Status).
+  Folder uploads now keep empty directories.
+- `docs/PLAN.md` says its numbers are planning targets, not results.

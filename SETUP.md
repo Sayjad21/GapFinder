@@ -64,8 +64,8 @@ Verify the keys (free):
 | Work | Needs RusKey source? | How |
 |---|---|---|
 | Search logic, Gap Report, UI, GapBench-mini, baseline | No | Toy artifact + local backend |
-| RusKey claim ledger and assumptions | No | Frozen results in `papers/ruskey/ledger_v3/`, gold drafts in `papers/ruskey/` |
-| RusKey sandbox experiments | No | Fork from the shared checkpoint tagged `gf/ruskey/loaded` in our Nebius project once it's built |
+| RusKey claim ledger and assumptions | No | Frozen results in `papers/ruskey/ledger_v5/`, signed-off gold sets in `papers/ruskey/` |
+| RusKey sandbox experiments | No | Fork from the prebuilt snapshot in our Nebius project: `--adopt source=98e3e854-cf02-43c0-8cd2-5d5423de247a --adopt built=98e3e854-cf02-43c0-8cd2-5d5423de247a`, with `GF_RUSKEY_SOURCE` set to the same ID in `.env` (see TODO.md, "Getting RusKey") |
 | Building RusKey into a sandbox (spike S3) | Yes | Sayjad runs it, from his machine |
 | Re-running the RusKey ledger from scratch | Yes | Sayjad runs it |
 
