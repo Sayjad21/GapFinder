@@ -135,4 +135,10 @@ Dry runs on throwaway seeds (generator checks) are not test runs and their tasks
 
 ## Amendments
 
-None yet.
+- 2026-10-11, after test run 1 (reporting only, no change to arms or scoring): until the second
+  (v1.0) test run, only aggregate scores are published (`eval/results/gapbench_test_v1_summary.json`).
+  Per-task rows, categories, `eval/gapbench/sealed/` and the seed are committed after the v1.0 run,
+  so the answers are not public while GapFinder could still change. `eval/gapbench/sealed.sha256`
+  pins them in the meantime. Any GapFinder change between the two runs is listed here.
+- Run 1 arms: gapfinder, baseline-super, gapfinder-noverify, gapfinder-random,
+  gapfinder-noevidence. baseline-ultra was not run (budget), decided before any run.

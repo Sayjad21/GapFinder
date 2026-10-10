@@ -16,16 +16,18 @@ GapFinder against a standard coding agent. Every number links to a log in this r
 
 ![Replay of a RusKey run: the checkpoint tree, claim bars against the paper, and the budget](docs/img/replay.png)
 
-> Status (2026-10-09): runs end to end in Token Factory Sandboxes on a real systems paper
-> (RusKey, Figure 6). GapBench-mini dev set: 4/4 with no false attributions. The held-out
-> test tasks will come from a sealed random generator and an independent AI author, not from the
-> team, and haven't been run yet.
+> Status (2026-10-11): runs end to end in Token Factory Sandboxes on a real systems paper
+> (RusKey, Figure 6). GapBench-mini dev set: 4/4 with no false attributions. Blind test run 1
+> (8 tasks from a sealed generator, seeded after the freeze tag `pre-tasks-1`): no confident wrong
+> answers in 24 runs, but only 4 of 8 tasks solved (see Results). Tasks from an independent AI
+> author and the MC Dropout external case are in progress.
 > Plan: [docs/PLAN.md](docs/PLAN.md) · spikes: [tests/spikes/](tests/spikes/README.md).
 
 ## Results
 
 | What | Result | Data |
 |---|---|---|
+| **GapBench-mini test, run 1:** 8 blind tasks drawn by a sealed generator from a seed created after the freeze, 3 runs each | **GapFinder: 0 of 24 runs confidently wrong** (95% CI 0-14%), and it abstained correctly in 9 of 9 runs with no cause. But it named the right cause in only 5 of 15 runs (4 of 8 tasks solved in the median run). Baseline (mini-swe-agent + Super): 14 of 24 confidently wrong (58%), 1 of 8 solved. Ablations: without verification, 29% confidently wrong. Random order and evidence-off found more causes (6 of 8 tasks), still with none confidently wrong, so on these tasks the ledger ranking and the evidence gate cost recall. 8 tasks is a small sample; this is not a conclusive win. | [gapbench_test_v1_summary.json](eval/results/gapbench_test_v1_summary.json) |
 | GapBench-mini dev, 4 tasks with a planted cause (or none) | **GapFinder 4/4, 0% false attribution**, median $0.04 a task. Baseline, mini-swe-agent on Nemotron 3 Super with the same environment and budget: 2/4, 50% false attribution, $0.07 a task. | [gapbench_dev_v5.json](eval/results/gapbench_dev_v5.json) |
 | Claim ledger on RusKey, against a gold set signed off by the paper's reproducer | Claim precision 1.00 (40/40, measured on the paper the prompts were tuned on), headline-claim recall 1.00, all-claim recall 0.93. Setting recall 0.67, **below the 0.80 bar**: the tuner's mode flags are missed. | [ledger_ruskey_v5.json](eval/results/ledger_ruskey_v5.json) |
 | RusKey Figure 6, end to end in Sandboxes | 127 branches from 13 database loads: nothing explains the balanced-workload claims at 2M keys (**Unexplained**). Counting load-to-load noise (next row), K1/K5 is within noise of the paper and K10/K5 is 31% short. | [FINDINGS.md](papers/ruskey/FINDINGS.md) |
