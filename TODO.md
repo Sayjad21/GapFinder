@@ -718,6 +718,9 @@ Also:
       no assistant attribution.
     - Add a one-command quick start to the README, and time it on a fresh machine (the plan's
       bar is under 15 minutes).
+    - **Done (option B chosen):** `python scripts/try_it.py` runs a dev task from `demo/cache/`
+      (the 9 model answers the four dev tasks use; no RusKey content, no Tavily entries, because
+      the GapBench harness doesn't use web evidence). Still open: time it on a fresh clone.
   - **C, hosted live mode:** a server with a run button, an access code, a dollar cap and a
     kill switch. It needs paid hosting outside the $50; only with S's approval.
 - **Public repo** with the MIT license badge visible at the top, setup instructions (SETUP.md)

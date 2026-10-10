@@ -138,6 +138,36 @@ gapfinder search --spec <paper>.yaml --targets targets.json --assumptions assump
     --claims claim_ledger.json --backend contree --noise-setups 5
 ```
 
+## Try it yourself (free, no keys)
+
+```bash
+python scripts/try_it.py                      # dev-ml-threshold, about 20 s
+python scripts/try_it.py --task dev-rl-schedule
+python scripts/try_it.py --list               # the four GapBench dev tasks
+```
+
+This runs a full GapFinder investigation on a GapBench dev task: the claim ledger, the assumption
+space, the search (screen, confirm, combine, bisect, verify) and the Gap Report, which it prints
+and saves to `runs/try_it/<task>/gap_report.md`. It needs no `.env`, no API key and no network.
+The Nemotron answers are the recorded ones in [demo/cache/](demo/cache/) (9 responses, 185 KB,
+model output only). The experiments themselves run for real on your machine with the local
+backend, so you need the install from [SETUP.md](SETUP.md) and, on Windows, Git for Windows.
+The script opens the cache read-only (`GF_CACHE_ONLY=1`): a call that isn't recorded stops the
+run instead of reaching an API, so it can't spend anything.
+
+Timed on the development machine (Windows 11, local backend, models replayed from the cache):
+dev-ml-threshold 16 s, dev-ml-normalize 13 s, dev-rl-schedule 22 s, dev-rl-nocause 41 s. We
+haven't timed a fresh clone on another machine yet; the plan's bar is under 15 minutes including
+the install. The two RL tasks train a small agent, so their numbers vary a little from run to
+run, and the verdict on `dev-rl-schedule` can flip between "Paper-artifact inconsistency" and
+"Unexplained" (the committed run in [eval/gapbench/runs/](eval/gapbench/runs/) is one draw).
+
+**Why option B** (TODO P1-4: A is replay only, B runs locally from cached answers, C is hosted
+live mode). A already exists and can't let anyone start anything. C needs paid hosting, an access
+code and a kill switch, and would put the $50 credit at risk. B lets a judge run the actual
+pipeline on a task in seconds, costs nothing, and shows the same search and verdicts the replay
+does. The cost is that it covers only the four dev tasks: running a new paper still needs keys.
+
 ## Web UI (replay mode)
 
 ```bash

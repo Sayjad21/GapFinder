@@ -26,6 +26,10 @@ Check that everything works. No keys needed, and it costs nothing:
 .venv/bin/gapfinder fanout --spec eval/toy/hidden_knob.yaml --knobs eval/toy/knobs.json --backend local
 ```
 
+To see a full investigation without any keys, run `python scripts/try_it.py`. It replays
+recorded model answers from `demo/cache/` and runs the experiments locally (see "Try it
+yourself" in the README).
+
 ## 2. Get the paper (free)
 
 Papers aren't committed. Download the exact arXiv version the gold set was
