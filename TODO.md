@@ -1,172 +1,689 @@
-# TODO: make GapFinder trustworthy (renewed 2026-10-10)
+# TODO: make GapFinder trustworthy (handover)
 
-**Goal:** show that GapFinder finds real causes on problems it did not create, says
-"Unexplained" or "Inconclusive" when it should, and beats an ordinary agent given the same tools.
-Make the evidence the product. No new agents, dashboards or model tiers until the P0 items are done.
+This file is written for whoever picks up the work next. Read section 0 before touching anything.
+Every item says why it matters, exactly what to do, which files change, what it costs, and when
+it counts as done.
 
-**Deadline:** Devpost says submissions close **2026-10-30**. Confirm the exact time and time zone
-on the Devpost page, and convert it to Dhaka time (UTC+6).
+**Goal:** show that GapFinder finds real causes on problems it didn't create. It must also say
+"Unexplained" or "Inconclusive" when it should, and beat an ordinary agent given the same tools.
+**The evidence is the product.** Add no new agents, dashboards or model tiers until every P0
+item is done.
 
-**Owners:** S = Sayjad, T = Tawhid, G = GapFinder development (done in this repo).
-Account and key setup is finished; that checklist is now [docs/ACCOUNT_SETUP.md](docs/ACCOUNT_SETUP.md).
+**Owners:** S = Sayjad (project lead, the RusKey reproduction author); D = the developer doing
+this handover. **No team member writes hidden tasks or answer keys.** They come from two
+sources outside the team: a **sealed random task generator** and an **independent AI task
+author** (see "Who writes hidden tasks" below).
 
 ---
+
+## 0. Read first: how things work here
+
+### What GapFinder is
+
+You give it a paper (PDF or text) and the paper's code repository.
+1. **Claim ledger.** Nemotron 3 Ultra extracts the paper's claims, and a Super pass filters out
+   non-results. Every quote must string-match the PDF.
+2. **Assumption space.** Ultra lists settings the results could depend on, each tied to a paper
+   quote or a `file:line` in the repo.
+3. **Harness spec.** A human-confirmed YAML says how to build, load and run the artifact, and
+   which knobs exist. Examples: `papers/ruskey/ruskey_fig6_final.yaml`,
+   `eval/gapbench/mlbench.yaml`.
+4. **Search** (`gapfinder/search/engine.py`). In Token Factory Sandboxes it builds and loads
+   once, then forks one branch per hypothesis. It works in rounds: screen, confirm, combine,
+   bisect, verify.
+   - **Verification:** revert each knob (the gap must come back), check held-out claims (they
+     must not get worse beyond noise), and require evidence that the authors used the value
+     (paper, code, web).
+5. **Gap Report** (`gapfinder/report/gap_report.py`). One card per claim, with a label:
+   Explained, Paper-artifact inconsistency, Partially explained, Fits but unsupported,
+   Unexplained, or Reproduced.
+
+### Where things are
+
+| Path | What |
+|---|---|
+| `gapfinder/` | the library: `ledger/`, `sandbox/` (backends, orchestrator, checkpoint tree, noise), `search/` (engine, verify, evidence, triage, bisect), `report/`, `api/server.py`, `cli.py` |
+| `eval/gapbench/` | GapBench-mini: artifacts (`artifacts/rlbench`, `artifacts/mlbench`), task folders, `harness.py`, `score.py`, `make_task.py`, `leakage.py`, `TEST_TASKS.md` |
+| `eval/baseline/` | the mini-swe-agent baseline (prompt, budgeted model, sandbox adapter) |
+| `eval/results/` | every scored result file; the web scoreboard reads the highest version |
+| `papers/ruskey/` | RusKey: gold sets, specs, harness scripts, every RusKey run, `FINDINGS.md` |
+| `demo/runs/` | runs the web UI replays |
+| `web/` | React UI; `VITE_STATIC=1` builds the server-free site |
+| `scripts/` | `check_env.py`, `fetch_paper.py`, `export_static.py`, RusKey packaging |
+| `docs/` | `PLAN.md` (original plan), `FEEDBACK_SUBMISSION.md`, `ACCOUNT_SETUP.md`, screenshots |
+
+### Setup
+
+Follow [SETUP.md](SETUP.md): Python 3.11 with uv, then `pytest -q`, which should show 97
+passed. Keys go in `.env`, which is git-ignored, never committed and never pasted anywhere.
+Ask S for them. They are the Token Factory key (also used for Sandboxes), the Nebius project ID
+and the Tavily key.
+
+### Money rules (strict)
+
+- **The whole project has about $50 of Token Factory credit, and only Nemotron inference is
+  billed.** $1.92 is spent so far.
+- `GF_SPEND_CAP_USD` in `.env` (currently 11) is a hard cap on billed spend across every process.
+  Don't raise it without S's OK.
+- **Sandboxes are unbilled during the Beta**, but every run reports a `cost` of about $0.01 per
+  CPU-second. We still track it:
+  - $48.67 has been reported so far;
+  - `GF_SANDBOX_GUARD_USD` (default 60) refuses new sandbox runs past that total;
+  - **ask S before any run that would cross it.**
+- Tag every paid experiment: `GF_SPEND_TAG=<name>`. Check spend at any time:
+  `python -c "from gapfinder.models import budget; print(budget.spent_usd(), budget.sandbox_reported_usd())"`.
+- `GF_CACHE_ONLY=1` reuses cached model answers and makes no paid call, so re-runs are free.
+- `GF_SANDBOX_CPU_LIMIT_S` (default 300) is a per-process CPU-time limit inside sandboxes. Raise
+  it only for a run you know needs more.
+
+### Git and honesty rules
+
+- **Commit identity:** `sayjad <2105021@cse.buet.ac.bd>`. Commit after each piece of progress,
+  with a message that says what changed and why.
+- **No AI-assistant attribution anywhere:** no co-author lines, no tool names in commit messages,
+  code comments or pushed files. Before each commit, check that the staged diff contains no keys,
+  no project ID, no `.env`, and no assistant attribution.
+- **Never open hidden answers** (`eval/gapbench/sealed/`, or any `answer.json` / `hidden` field of a
+  test task) before scoring. The person who
+  tunes GapFinder must never see them.
+- **Every number in the README, the video and Devpost needs a log in the repo.** If a run fails,
+  record the failure.
+- **RusKey:** the source lives in WSL at `/root/ruskey`. The Desktop `ruskey` folder is a dead
+  copy; never use it. Never run two benchmarks at once in WSL. If a RusKey correctness test
+  fails, stop and report to S.
+- RusKey's database load is **not reproducible**: the same command gives a different layout and
+  different ratios each time. Any new RusKey search must use `--noise-setups 5`. See
+  `papers/ruskey/FINDINGS.md`.
+
+---
+
+### Who writes hidden tasks (no team member does)
+
+Blind tests only count if whoever tunes GapFinder can't know the answers. Two sources replace a
+human task author, and they complement each other:
+- **The generator** draws tasks at random, so nobody chooses them: no selection bias.
+- **The AI author** writes tasks on purpose to fool GapFinder: adversarial pressure.
+
+Use both, and report them separately.
+
+#### Source 1: sealed random task generator (D builds it; the seed decides the tasks)
+
+1. **Build `eval/gapbench/gen_tasks.py` and commit it before anything is frozen.** Everything that
+   shapes the tasks is fixed in that commit, so it is pre-registered:
+   - **category quotas:** the six categories in the P0-2 table, e.g. 2 + 2 + 1 + 1 + 1 + 1 for 8
+     tasks;
+   - **artifacts:** `rlbench` and `mlbench`;
+   - **value pools per knob:** only plausible values, taken from the artifact's own argparse
+     `choices`, its help text, or common values (e.g. factors of 2, 5 and 10 around the
+     default). Never draw arbitrary numbers: a value nobody would write in a paper or code isn't
+     findable by anyone, and that makes the task unfair rather than hard;
+   - **paper templates:** a setup section that states every knob except the hidden one. For
+     `stated_code_differs`, it states the hidden value in words (e.g. "decays as 0.1/(1+t/50)").
+2. **Each draw, in order:** pick the category from the quota, then the artifact, then the hidden
+   knob or knobs and their values from the pools, all with `random.Random(seed)`. Then write the
+   paper and targets, and validate:
+   - run `make_task.py` (the gap must exceed 3 noise bands) and `leakage.py` (0 leaks), and redraw
+     on failure;
+   - for interaction tasks, also check that each knob alone does *not* close the gap;
+   - record how many draws were rejected, and why.
+3. **Keep the answers out of the task folders.**
+   - The generator writes each task's answer (`answer.json` and the hidden part of `task.yaml`)
+     to `eval/gapbench/sealed/<task>/`, which is git-ignored until the reveal.
+   - The task folder keeps only what GapFinder may see: paper text, targets, calibration.
+   - Extend `eval/gapbench/score.py` with `--answers eval/gapbench/sealed`, so scoring reads the
+     answers from there.
+4. **The seed comes after the freeze.**
+   - D tags GapFinder (`git tag pre-tasks-N && git push origin pre-tasks-N`).
+   - Then D generates the seed: `python -c "import secrets; print(secrets.token_hex(16))" > eval/gapbench/sealed/seed.txt`.
+   - Run the generator **without printing task details:** it should print only the number of
+     tasks and the sha256 of the sealed folder (a tarball of `sealed/`, sorted).
+   - Commit the task folders and `eval/gapbench/sealed.sha256`.
+   - D must not look at the generator's logs, `sealed/`, or its make_task output.
+5. **Dry runs are allowed** with a throwaway seed, to check that the generator produces valid
+   tasks. Delete those tasks before the real seed, and don't tune GapFinder on them after the
+   freeze.
+6. **After scoring,** commit `sealed/` and `seed.txt`. Anyone can then check the hash, re-run the
+   generator with the seed, and get exactly the same tasks.
+7. **Honest wording:** "tasks drawn at random by a generator, from a seed created after GapFinder
+   was frozen". Also state the limitation: we designed the generator's categories and value pools.
+   That's why the pools are committed before the freeze, and why the AI author's tasks are
+   reported alongside.
+
+#### Source 2: an independent AI task author
+
+An AI model that had no part in building GapFinder can write tasks on purpose to fool it. This
+counts as independent if all of these hold:
+
+1. **It is a coding agent with its own clone of the repo and a shell,** not a plain chat window.
+   Every task must pass `make_task.py` and `leakage.py`. A chat model can't run them, and whoever
+   pastes its answers in would then know them.
+2. **It is a different model from the one that built and tuned GapFinder.** Another session of
+   the same assistant shares its habits and tends to write tasks GapFinder already handles. Use
+   a model from another vendor, e.g. ChatGPT or another company's coding agent.
+3. **GapFinder is frozen before the tasks exist.** D tags the commit first
+   (`git tag pre-tasks-N && git push origin pre-tasks-N`; the same tag the generator uses), and
+   only then does the author commit tasks. Git history then proves no tuning followed. The author *may* read GapFinder's code and
+   README and try to fool it; that makes the test harder, not weaker.
+4. **D never opens the answers.** The author commits the tasks in one commit. D runs the
+   harness, which reads only the paper text and targets, and the scorer, without opening
+   `answer.json` or the `hidden` field of `task.yaml`.
+5. **Honest wording everywhere:** "tasks written by an independent AI model with no part in
+   building GapFinder", never "written by other people".
+
+Briefing for the author: [eval/gapbench/TEST_TASKS.md](eval/gapbench/TEST_TASKS.md), the
+category table in P0-2, the README (so it knows what it's trying to fool), and the instruction
+"hide one cause per task so that GapFinder misses it if it can be fooled; every task must
+still pass `make_task.py` and `leakage.py`."
 
 ## P0-1. Blind test on a real, independently documented reproduction gap
 
-The strongest evidence we can add: a paper we didn't build, whose gap someone else already
-diagnosed.
+**Why:** so far GapFinder has only been checked on tasks our own team built, which can be
+unconsciously easy. A paper whose gap was diagnosed by *other people* is the strongest evidence
+we can add. Matching a name is not enough: the predicted setting must actually move the result
+when re-run.
 
-**Candidate A: MC Dropout** (Gal & Ghahramani, ICML 2016, UCI regression, Table 1)
-- Repo: https://github.com/yaringal/DropoutUncertaintyExps
-- The author's README documents that results change with training length and depth. The current
-  defaults (`--epochx 500`, `--hidden 2`) differ from the paper (40 epochs, 1 hidden layer).
-- Caveats:
-  - A second cause (BayesOpt replaced by grid search) is a code change GapFinder can't test, so
-    the best possible result is partial.
-  - The defaults are very slow.
-  - It needs 2018-era Theano 0.8.2 and Keras 2.2.0.
-- Not fully blind: the operator (G) already knows the documented cause. Report it as
-  "semi-blind" and rely on the safeguards below.
+### Candidate A: MC Dropout (Gal & Ghahramani, ICML 2016, "Dropout as a Bayesian Approximation")
 
-**Candidate B (backup): Paragraph Vector on IMDB** (Le & Mikolov 2014; cause documented by
-Mesnil, Mikolov et al. 2015). The cause is hierarchical softmax plus unshuffled data. Slower,
-15-25 min per run, and the paper's 92.6% may not reappear.
+- **Repo:** https://github.com/yaringal/DropoutUncertaintyExps
+- **Checked by reading the current repo:**
+  - `experiment.py` takes `--dir` (dataset), `--epochx` (epoch multiplier, **default 500**) and
+    `--hidden` (hidden layers, **default 2**).
+  - Per-dataset settings are data files in `UCI_Datasets/<dir>/data/`. For Yacht:
+    `n_epochs.txt`=40, `n_splits.txt`=20, `dropout_rates.txt`=0.005 0.01 0.05 0.1,
+    `tau_values.txt`=0.25 0.5 0.75, `n_hidden.txt`=50.
+  - `net/net.py` hard-codes `T = 10000` Monte Carlo test passes. That's a cost, and we can't
+    change it without a code edit.
+  - It imports `scipy.misc.logsumexp`, which modern scipy has removed, and uses the old Keras
+    `nb_epoch` argument.
+  - The README says the experiments ran with **Theano 0.8.2 and Keras 2.2.0**.
+- **Documented cause:**
+  - The author's README (current, and at commit `a6259f1`) reports that results change with
+    10x training epochs and with 2 hidden layers instead of 1.
+  - Mukhoti, Stenetorp and Gal (2018, arXiv 1811.09385) say the dropout baseline was stopped
+    early.
+  - The paper used 40 epochs and 1 hidden layer of 50 units. **Verify both against the PDF** and
+    quote the page in the answer key.
+- **Expected outcome if GapFinder works:** it names `epochx` and/or `hidden`, probably as a
+  "Paper-artifact inconsistency" (the paper states one value and the code defaults to another).
+- **Caveats** (write all of them in the answer key before running):
+  - A second documented change, Bayesian optimisation replaced by grid search, is a code change
+    GapFinder can't test. A perfect GapFinder is therefore only partly correct here; score
+    partial credit.
+  - The README's "paper" column (Yacht 0.70, Energy 1.08) is a later re-run, **not** the
+    published Table 1. Decide which numbers count as "the paper's" (recommended: the published
+    Table 1, quoted from the PDF) and record the choice in the answer key.
+  - **Not fully blind:** this TODO already states the documented cause. Report the result as
+    "semi-blind". The safeguards below (sealed key, frozen code, spec generated from the repo
+    map) keep it honest, and the truly blind case (Step 6) comes later.
+- **Datasets to use:** Yacht, Energy, Concrete (308-1,030 rows; CPU-friendly).
 
-Steps:
-- [ ] **G: Feasibility check on Candidate A**, at no Nemotron cost. Check:
-  - whether the old software installs in a sandbox (Python 3.6 image? network for pip?);
-  - how long one small run takes;
-  - whether the repo's defaults give numbers clearly different from the paper's.
-  - Stop and report if any of these fail.
-- [ ] **G: Seal the answer before running.** Write the documented cause, its sources and the
-  scoring rule into `eval/external/<case>/answer_key.md`. Commit only its SHA-256 hash first,
-  then reveal the file after the run. Anyone can then check it wasn't changed afterwards.
-- [ ] **G: Freeze the system.** Tag the commit (e.g. `ext-eval-1`) and record the model IDs,
-  prompt hashes and budget. No GapFinder changes for this paper.
-- [ ] **G: Build the harness spec from GapFinder's own repo map** (all flags it finds), not by
-  hand-picking the answer's flags. Commit the spec before the run.
-- [ ] **G: Run once and record everything**, including a wrong attribution or "Unexplained".
-- [ ] **G: Reveal and score.** A matching name alone doesn't count: re-run the predicted
-  setting and confirm it actually moves the result.
-  - Report the documented cause as "documented", not "proven", unless our runs confirm the
-    effect.
-  - Score partial credit, e.g. found the epochs but not the depth.
-- [ ] **T: A truly blind second case.** T picks a paper and seals its answer; G never sees it
-  until scoring.
-- [ ] **G: Positive control on RusKey** (needs S's OK: about $5-10 of reported, unbilled sandbox
-  cost, which is above our $60 guard).
-  - T secretly changes one setting and records the "paper" numbers from that run.
-  - GapFinder must name the change.
-  - This tests whether GapFinder can find a real cause on the real system at all, which tells us
-    how much RusKey's "Unexplained" is worth.
+### Candidate B (backup): Paragraph Vector on IMDB (Le & Mikolov, ICML 2014)
 
-## P0-2. Hidden GapBench test tasks (T)
+- Reported 92.58% accuracy. Code: https://github.com/mesnilgr/iclr15 (`scripts/paragraph.sh`).
+- Documented cause: Mesnil, Mikolov, Ranzato and Bengio (ICLR 2015 workshop, arXiv 1412.5335)
+  say 92.6% appears only with hierarchical softmax (`-hs 1 -negative 0`) **and** unshuffled
+  training/test data; with shuffling they got 88.73%.
+- Risks: about 15-25 min per run on 4 CPUs (unverified); the 92.6% may not reappear with
+  multi-threaded word2vec; the shuffle is a script line, not a flag.
 
-- [ ] **T: Write the 8 hidden tasks**, chosen without optimising them for the current
-  implementation. Cover these categories:
+### Step 1: feasibility check on Candidate A (D). Do this before anything else.
 
-| Category | What it tests |
-|---|---|
-| Known cause, one detectable setting | Can it find the cause? |
-| Known cause, interacting settings | Can it handle two variables that only matter together? |
-| No supported explanation | Does it correctly abstain? |
-| Several plausible causes | Does it pick the true one over look-alikes? |
-| Measurement noise only | Does it avoid calling random variation a cause? |
-| Incomplete paper or artifact | Does it say its evidence is insufficient? |
+Cost: no Nemotron spend; a few cents of reported (unbilled) sandbox cost. Stop and tell S if any
+check fails.
 
-- [ ] **G: Pre-register the scoring rule** in `eval/gapbench/PROTOCOL.md` before the test set is
-  run: what counts as correct, partial, confidently wrong, a correct abstention, or a miss.
-- [ ] **G: Run all arms once in M4, and once more on the frozen v1.0. No more than that.**
-- [ ] **G: Report raw counts with uncertainty**, not just accuracy. For each arm:
-  - correct attributions, confident wrong answers, correct abstentions, missed causes;
-  - experiments used, wall time, cost;
-  - with 8 tasks, a 95% interval (e.g. Wilson) on each rate.
-  - Never claim a statistically conclusive win from 8 tasks.
-- [ ] **G: Run GapFinder 3 times per task** (the artifacts are noisy), and report how often its
-  answer changes between runs.
+1. **Find a working software pin locally first** (WSL or Docker, free). Use Python 3.6 with
+   Theano 0.8.2 and Keras 2.2.0, plus a numpy and scipy old enough that `scipy.misc.logsumexp`
+   exists (scipy < 1.3) and Theano 0.8.2 works. Try numpy 1.13-1.16 and scipy 1.1-1.2, and
+   record the exact set that imports `net/net.py` cleanly. Set `THEANO_FLAGS='device=cpu,floatX=float32'`.
+2. **Check that a sandbox can run that environment.** The Sandboxes backend can start from a
+   public Docker image by name (`ContreeBackend.base("python:3.6-slim")`). Write a throwaway
+   script, outside the repo, that does the following, and run it with
+   `GF_SPEND_TAG=mcdropout-feasibility`:
+   - create the base from `python:3.6-slim`;
+   - run `python --version; pip --version; nproc`;
+   - run `timeout 40 pip download --no-deps -d /tmp/x theano==0.8.2 keras==2.2.0` to find out
+     whether sandboxes have network access;
+   - use `disposable=True` and a short timeout.
+3. **If sandboxes have no network:**
+   - download the wheels locally (`pip download` for Linux/py3.6 with
+     `--platform manylinux1_x86_64 --python-version 36 --only-binary=:all:`);
+   - put them in an artifact folder with the repo;
+   - set the spec's base to `local:<folder>`, with `GF_CONTREE_LOCAL_IMAGE=python:3.6-slim`
+     (the backend uploads the folder into `/work`);
+   - install from those wheels in the spec's `build` stage with `pip install --no-index --find-links`.
+4. **Time one small run** in a sandbox:
+   - `python experiment.py --dir yacht --epochx 1 --hidden 1`, with `n_splits.txt` set to 2;
+   - record wall time and CPU-seconds;
+   - then time `--epochx 500 --hidden 2` (the defaults) on 1 split. That's the naive run, and it
+     may be slow: if a single split takes more than ~10 minutes, plan a scaled run (fewer
+     splits) and say so in the report, the way RusKey runs at 2M keys instead of 100M.
+5. **Check there is a gap.** Defaults vs the paper's Table 1 numbers: the gap must be larger than
+   the run-to-run noise (3 repeats). If the defaults land within noise of the paper, this case
+   can't test anything. Switch to Candidate B or to the RusKey positive control.
+6. **Write the result** in `eval/external/mc-dropout/FEASIBILITY.md`: software pins, network yes
+   or no, timings, the gap seen, and a go/no-go. Commit it.
 
-## P0-3. Noise as a first-class feature
+### Step 2: seal the answer before running (D writes it, S checks it)
 
-Partly done: noise bands from repeats, more repeats for noisy metrics, `--noise-setups` with the
-reproducibility check, and no labels from unconfirmed runs.
-- [ ] **G: Add an "Inconclusive" verdict.** Use it when the noise band is so wide that the paper's
-  value can't be told apart from a clearly different one. RusKey C5b now says "Reproduced" inside
-  a ±16% band, which overstates it.
-- [ ] **G: A significance test for effects**, alongside the 2×MAD rule:
-  - a bootstrap confidence interval on (candidate − naive);
-  - nothing counts as an effect unless the interval excludes zero.
-- [ ] **G: Turn the setup check on by default** for artifacts that have a load or build stage
-  (`noise_setups=3`). Do it only after measuring what it costs on GapBench and RusKey.
-- [ ] **G: Report effect sizes with their uncertainty** in the Gap Report, not only "gap before
-  → after".
+1. Create `eval/external/mc-dropout/answer_key.md` with:
+   - the paper's claimed numbers (dataset, metric, value, page);
+   - the documented cause, with exact settings and values and every source URL;
+   - what counts as full credit, partial credit and failure;
+   - all the caveats above.
+2. **Commit only its hash:** `sha256sum answer_key.md > answer_key.sha256`. Commit the
+   `.sha256` file and keep `answer_key.md` out of git (move it outside the repo) until Step 5.
+   Anyone can then check the key wasn't edited after the run.
 
-## P1-1. A fair baseline comparison
+### Step 3: freeze the system
 
-- [ ] **G: Equal budgets, written down:**
-  - the same model, paper, repo and sandbox tools;
-  - the same run and dollar caps;
-  - the same sealed answer key.
-- [ ] **G: Give the baseline the same evidence** (paper text, repo map) and the same tools,
-  except the capability being tested.
-- [ ] **G: Random-search arm.** The same hypothesis space and budget, with random order and no
-  ledger ranking. This shows whether the ranking adds anything.
-- [ ] **G: Ultra baseline arm** (needs S's OK on cost; probably under $2).
-- [ ] **G: Ablations in one table:** no-fork (done for RusKey), no-verification (exists),
-  random search, and no evidence gate.
+- Tag the commit: `git tag ext-eval-1 && git push origin ext-eval-1`.
+- Record the model IDs from `gapfinder/config.py`, the run and dollar budget you'll use, and the
+  sha256 of each prompt (`CLAIM_PROMPT`, `FILTER_PROMPT`, `ASSUMPTION_PROMPT`, `TRIAGE_PROMPT`)
+  in `eval/external/mc-dropout/FROZEN.md`.
+- **No GapFinder code or prompt changes for this case until it is scored.** If something blocks
+  the run (a crash, a missing parser), fix only that, and describe the fix in the results.
 
-## P1-2. The Gap Report answers five questions at the top of each card
+### Step 4: build the inputs without leaking the answer, then run once
 
-- [ ] **What did the paper report?** The claim, its quote and its page.
-- [ ] **What did we measure?** The naive value, its repeats and spread, and the discrepancy.
-- [ ] **Which experiment changed it?** The branch, command, config and output, as a link.
-- [ ] **Why do we believe it?** Reversal test, held-out claims, independent evidence.
-- [ ] **What remains unknown?** Untested assumptions, settings too large to test, alternative
-  explanations, and setup reproducibility.
-- [ ] Clearly separate **confirmed cause** (all checks pass), **plausible explanation** (fits,
-  unsupported) and **interacting factors**.
-- [ ] **Provenance on every report:** GapFinder commit, model IDs, prompt hashes, spec hash,
-  and cost (Nemotron and sandbox).
+1. Paper: get the PDF (arXiv 1506.02142), then run
+   `gapfinder ledger <paper.pdf> --repo https://github.com/yaringal/DropoutUncertaintyExps --out runs/mcd-ledger`.
+   This costs about $0.10-0.30 of Ultra, so run it once and keep the output.
+2. Repo map: `gapfinder repomap <local clone>`. **The harness spec exposes every flag the repo map
+   finds** (all argparse flags) plus the per-dataset data files as dataset knobs. Don't
+   hand-pick `epochx` and `hidden`. The data files can be set by a wrapper script that writes
+   the value into `UCI_Datasets/<dir>/data/<file>.txt` before running; add those paths to
+   `allowed_paths`.
+3. Output parsing:
+   - `experiment.py` writes results to `UCI_Datasets/<dir>/results/*.txt` and prints a summary;
+   - write a small wrapper (`harness/run_cell.sh`) that runs it and prints one `key=value` line
+     per metric (e.g. `rmse=…`), so the `kv` parser reads it;
+   - read lines 195-217 of `experiment.py` first to see what it prints.
+4. Targets: a JSON file like `papers/ruskey/targets_fig6.json`, with one claim per dataset
+   (Yacht RMSE as the target, Energy RMSE held out, for example). Commit the spec and targets
+   **before** the search.
+5. Run once:
+   `GF_SPEND_TAG=ext-mcd gapfinder search --spec <spec> --targets <targets> --assumptions runs/mcd-ledger/assumptions.json --claims runs/mcd-ledger/claim_ledger.json --backend contree --max-runs <N> --out eval/external/mc-dropout/run1`.
+   - Choose N from the feasibility timings.
+   - There is no load stage, so `--noise-setups` isn't needed.
+6. Keep everything, whatever the verdict: `gap_report.md`, `gap_report.json`, `events.jsonl`.
+7. **Rule out "it just read the README".** The repo's own README describes the epochs and layers
+   effect, and that text can reach GapFinder in two places: the evidence check, and the
+   hypothesis list Ultra writes from the repo. Run these arms as well, all with the same
+   budget, and pre-register them in `FROZEN.md`:
 
-## P1-3. Smarter search, but only if it measurably helps
+| Arm | What changes | What it shows |
+|---|---|---|
+| normal | nothing | the product as is |
+| evidence off | the evidence check is skipped | the experiments alone carry the verdict |
+| no README | the ledger runs on a clone with `README*`, `readme*` and `docs/` removed, and the evidence check is off | the cause was found without the documentation |
+| all flags, random | hypotheses are every repo-map flag with its candidate values, in random order (the P1-1 random arm) | the ranking isn't what found it |
 
-- [ ] **G: Adaptive ranking**, done as an experiment rather than a feature:
-  - update hypothesis priors from screen results;
-  - spend repeats on the most promising first;
-  - keep it only if it beats the current search on runs-to-answer against the random-search
-    arm.
-- [ ] **G: Improve setting recall** from 67% toward the 80% bar (the RusKey tuner's mode flags are
-  missed). Measure on the external paper too, so this isn't tuned to RusKey.
+   - The evidence-off switch doesn't exist yet: add `evidence_gate: bool = True` to
+     `SearchConfig` (`gapfinder/search/engine.py`) and a `--no-evidence-gate` flag to
+     `gapfinder search` (`gapfinder/cli.py`). When off, the plausibility step is skipped and a
+     closing value can be at most "Fits but unsupported".
+   - Cost: each extra ledger run is about $0.10-0.30 of Ultra; the searches add sandbox time only.
+   - Headline claim: the **strongest** arm that finds the cause, e.g. "found with no README and
+     random order".
 
-## P1-4. Submission requirements (official rules)
+### Step 5: reveal and score
 
-- [ ] **Working app:** replay site live on GitHub Pages. S: make the repo public near the
-  deadline, then Settings → Pages → Source: GitHub Actions.
-- [ ] **Public repo** with the MIT license visible, setup instructions, and a test build.
-- [ ] **Video:** public, under 3 minutes, with the audio explaining Token Factory and Nemotron
-  usage. S records it; G writes the script from real numbers only.
-- [ ] **NVIDIA open model on Token Factory:** done, Nemotron 3 Ultra, Super and Nano.
-- [ ] **Built during the submission period:** the README must say exactly what was built when.
-  GapFinder is new (git history from 2026-10-04); the RusKey reproduction is S's earlier work,
-  used as a test case.
-- [ ] **No illustrative numbers anywhere** (the old "38% to 4%", "11 minutes" targets): every
-  number in the README, video and Devpost text must have a log behind it.
-- [ ] **Feedback form:** from [docs/FEEDBACK_SUBMISSION.md](docs/FEEDBACK_SUBMISSION.md).
-- [ ] **Code freeze:** tag v1.0, deploy that tag, final eval on it, then submit with a margin.
+1. Put `answer_key.md` back, check `sha256sum -c answer_key.sha256`, and commit it.
+2. Score against the pre-written rule. Then **re-run the predicted setting** (3 repeats) and
+   confirm it moves the metric as claimed. A name match without the effect is not a success.
+3. Call the cause "documented" unless our own runs confirm the effect; then call it
+   "documented and confirmed here".
+4. Write `eval/external/mc-dropout/RESULT.md` (verdict per arm, partial credit, cost, what went
+   wrong), add a row to the README "Results" table, and add a replay to `demo/runs/`.
 
-## P2. Only after everything above
+### Step 6: a truly blind second case (the independent AI task author)
 
-- More paper types, more agents, more dashboard features, live mode on hosted infrastructure.
+The independent AI task author (rules in section 0) picks a paper with a documented
+condition-type cause, using the criteria above (public repo, runs on 4 CPUs / 3.9 GB, the cause
+is a setting not a code bug, documented by someone else). It writes the answer key and commits
+only its sha256, the same way as Step 2, and hands D the paper, the repo and the claimed
+numbers. D sees only the paper, the repo and the claimed numbers, never the
+cause. Run the same four arms as in Step 4.
+
+### Positive control on RusKey (needs S's OK first)
+
+**Why:** RusKey's real verdict is "Unexplained", which only means something if GapFinder *can*
+find a real cause on RusKey. Cost: about $5-10 of reported, unbilled sandbox cost, which takes us
+past the $60 guard; S must approve and set `GF_SANDBOX_GUARD_USD` (e.g. 75).
+
+1. **The setting is drawn at random, not chosen.** A small script (`papers/ruskey/gen_control.py`,
+   committed before the draw) lists the candidate changes from `papers/ruskey/ruskey_fig6_final.yaml`:
+   every knob's documented alternative values, kept within its `max`. It draws one with a fresh
+   seed, created after the freeze tag as in the generator above.
+2. The same script measures the drawn change on 5 independent loads (`--noise-setups 5` with that
+   change). It writes `targets_control.json`, whose `paper_value`s are those medians, and puts
+   the drawn setting and the measurement's event log in a git-ignored `papers/ruskey/sealed/`
+   folder. It prints only the sha256 of that folder; commit the hash. D must not read the
+   script's output or the sealed folder.
+4. D runs:
+   `gapfinder search --spec papers/ruskey/ruskey_fig6_final.yaml --targets targets_control.json --assumptions papers/ruskey/ledger_v5/assumptions.json --claims papers/ruskey/ledger_v5/claim_ledger.json --backend contree --adopt source=98e3e854-cf02-43c0-8cd2-5d5423de247a --adopt built=98e3e854-cf02-43c0-8cd2-5d5423de247a --noise-setups 5 --max-runs 60`.
+   Upload the RusKey binary bundle first; see `scripts/prep_ruskey_bin.sh`.
+5. Score: did it name the planted setting with a confirmed label? Record the result in
+   `papers/ruskey/FINDINGS.md` and the README.
 
 ---
 
-## Done so far (2026-10-04 to 2026-10-10)
+## P0-2. Hidden GapBench test tasks (generator and AI author write them; D runs them)
 
-- Claim ledger v5 on RusKey: precision 1.00, headline recall 1.00; setting recall 0.67 is below
-  the bar.
-- GapBench dev: GapFinder 4/4 with 0% false attribution; baseline 2/4 with 50%.
-- RusKey Figure 6 end to end in Sandboxes; fork vs no-fork ablation (-64% setup cost).
-- The setup-reproducibility check found that RusKey's database load is not reproducible.
-- No labels from unconfirmed runs; in-flight runs are recorded when the budget runs out;
-  Super triages failed branches.
-- Static replay site (waits for Pages to be enabled); structured feedback write-up.
+**Why:** 4 dev tasks built by our own team can't show generalisation. The hidden tasks are the
+main evaluation. Both sources from section 0 contribute:
+- **8 tasks from the sealed random generator:** unbiased selection;
+- **up to 10 "fool GapFinder" tasks from the independent AI author:** adversarial.
+
+Report the two sets separately and together. All of them use our two toy artifacts (rlbench,
+mlbench), so describe them as "blind tasks", not as outside papers.
+
+1. **Generate and write the tasks** under the rules in section 0. Both sources follow
+   [eval/gapbench/TEST_TASKS.md](eval/gapbench/TEST_TASKS.md) (template, `make_task.py`, which
+   rejects gaps under 3 noise bands, and `leakage.py`, which must print `0 leaks`) and cover these
+   categories, which extend that file's type list:
+
+| Category | How to build it | Correct outcome |
+|---|---|---|
+| Known cause, one setting | `single_unstated` or `stated_code_differs` | names the knob, confirmed |
+| Interacting settings | `interaction`: two knobs, neither enough alone | names both |
+| No supported explanation | `no_cause` with an `offset`, plus a held-out claim moving the other way | no confident attribution |
+| Several plausible causes | a decoy knob that also moves the target but breaks a held-out claim | the true knob, not the decoy |
+| Measurement noise only | the "paper" value is within the noise of the naive run | "Reproduced" or "Inconclusive", no attribution |
+| Incomplete paper or artifact | the true knob isn't exposed by the harness spec | "Unexplained", with the reason in the report |
+
+2. **Commit each source's tasks in one commit** (`Add generated GapBench test tasks`,
+   `Add AI-authored GapBench test tasks`), after the freeze tag. D must not open the answers.
+3. **D: before the first test run, write `eval/gapbench/PROTOCOL.md`**, a pre-registration. Commit
+   it before any test run. It covers:
+   - the arms (`gapfinder`, `gapfinder-noverify`, `baseline-super`, plus `gapfinder-random`
+     and `baseline-ultra` if added, see P1-1);
+   - the per-task dollar cap (`--cap 0.5`) and the baseline step limit (`--steps 40`);
+   - runs per task (3);
+   - the scoring rule for each category above: correct, partial, confidently wrong, correct
+     abstention, missed;
+   - the rule that the test set is run exactly twice, once now and once on frozen v1.0.
+4. **D: extend `eval/gapbench/score.py`:**
+   - read each task's category and report, per arm: correct attributions, confident wrong
+     answers, correct abstentions, missed causes, proportion of the gap closed (`gap_closed`
+     already exists), experiments used, wall time, cost;
+   - add a 95% Wilson interval for each rate;
+   - `CONFIDENT` is defined at line 39; add "Inconclusive" as an abstention once P0-3 adds it.
+5. **D: run** each arm 3 times per task:
+   `python eval/gapbench/harness.py eval/gapbench/tasks/<task> --arm <arm> --run <k> --cap 0.5`
+   (add `--fresh` for GapFinder so repeats don't reuse cached model answers). Then
+   `python eval/gapbench/score.py --split test --out eval/results/gapbench_test_v1.json`.
+   - Expected cost for 8 tasks: under $1 for GapFinder and about $1-2 for the Super baseline. With
+     10 extra tasks, roughly double it; still a few dollars.
+   - Report how often GapFinder's answer changes across its 3 runs.
+6. **D:** update the README Results table and the web Scoreboard (automatic from the results
+   file). Present raw counts with intervals; never claim a statistically conclusive win from
+   8 tasks.
+7. **D: trust matrix.** One small grid per arm: rows are what the truth was (a cause, or none);
+   columns are what the arm said (correct cause, wrong cause stated confidently, abstained,
+   missed). Put it in the README and on the Scoreboard tab (`web/src/Scoreboard.jsx`). It is just a
+   picture of the counts from step 4, but it shows in one glance whether the system knows when
+   to abstain.
+
+---
+
+## P0-3. Noise as a first-class feature
+
+**Why:** the RusKey finding (identical loads giving different results) shows that a system which
+changes settings until one run matches the paper will fool itself. Already done: noise bands from
+repeats, extra repeats when CV > 5%, `--noise-setups` with the content-addressed reproducibility
+check, and no labels from unconfirmed runs.
+
+1. **Add an "Inconclusive" verdict.** Today RusKey C5b is labelled "Reproduced" inside a ±16% band,
+   which overstates it.
+   - Add `inconclusive = "Inconclusive"` to `ConfidenceLabel` in `gapfinder/ledger/schemas.py`
+     (line 124).
+   - In `GapSearch` (`gapfinder/search/engine.py`, around line 276, where `res.status =
+     "reproduced"`), call it Reproduced only if the band is at most a tolerance:
+     `SearchConfig.reproduce_tol`, default 0.05 = ±5% of the paper value. Otherwise use
+     Inconclusive, with a note saying how wide the band is.
+   - Apply the same rule to a searched claim whose best candidate is within a band wider than
+     the tolerance.
+   - Update `gap_report.py`, `web/src/api.js` (`LABEL_CLASS`), `eval/gapbench/score.py` (as an
+     abstention), and add tests in `tests/integration/test_search_toy.py`.
+2. **A significance test for effects**, alongside the 2×MAD rule.
+   - Add `bootstrap_diff_ci(a, b, n=2000, alpha=0.05, seed=0)` to `gapfinder/sandbox/noise.py`.
+   - Use it in the confirm round (`units()` and `closes()` in `engine.py`): a candidate's effect
+     counts only if the interval on (candidate − naive) excludes zero.
+   - Test it on the toy suite and re-score the dev set. Expect the dev results not to get worse;
+     if they do, find out why before keeping the change.
+3. **Measure, then decide, whether `noise_setups=3` should be the default** for artifacts with a
+   build or load stage. It costs 2 extra setups per search: about $0.5 reported for RusKey, and
+   nothing for GapBench, which has no setup stage. Keep it opt-in if the cost isn't justified.
+4. **Report effect sizes with uncertainty** on each card: the candidate − naive difference, its
+   interval, and the number of runs.
+5. **Determinism X-ray:** a stage-by-stage version of the setup check.
+   - Run each setup stage (build, load) twice from the same parent, and compare the checkpoint
+     IDs. Identical IDs mean identical files.
+   - For stages whose IDs differ, find *which* files differ. There's no file-diff API that we
+     know of, so run a cheap command in each of the two checkpoints:
+     `find /work -type f -print0 | sort -z | xargs -0 sha256sum`. Then diff the two lists.
+   - Classify the result, because log files with timestamps differ on every run and would
+     otherwise make everything look non-deterministic:
+     - green: identical;
+     - amber: only volatile files differ (logs, lock files, timestamps; keep a pattern list in
+       the spec, e.g. `volatile: ["LOG*", "*.log", "LOCK"]`);
+     - red: data files differ.
+   - Separately, report whether the **measured result** differs across those setups (the
+     `--noise-setups` band). That's the part that matters for the verdict.
+   - Show it as a strip of pipeline stages, coloured, at the top of the Gap Report and in the
+     replay. Files: `gapfinder/search/engine.py` (`_check_setups`), `gapfinder/sandbox/runner.py`,
+     `gapfinder/report/gap_report.py`, `web/src/Report.jsx`, `web/src/Replay.jsx`.
+   - Cost: for RusKey, about 2 extra loads plus 4 tiny hashing runs (about $0.6 reported,
+     unbilled); free for GapBench, which has no setup stage.
+   - Don't claim "no other tool can do this"; say what it does and show it.
+6. **Check that forked runs are comparable.** Measure the naive configuration on a forked
+   checkpoint and on a fresh setup (this already exists in the RusKey runs; tabulate it in
+   `eval/load_variance.py` output). Forked runs should fall within the across-setup noise band.
+   If they don't, forking itself changes results; report that.
+
+---
+
+## P1-0. Minimal human input: GapFinder drafts its own harness spec
+
+**Why:** the Coding and Agentic Engineering track asks for an agent that plans, writes, tests and
+iterates on a real repository with minimal human input. Today a person writes the harness spec
+(how to build, load and run the artifact, which knobs exist, how to read the output). That is
+GapFinder's biggest manual step, and judges will notice it.
+
+1. Add `gapfinder spec-draft <repo> --out <spec.yaml>` (new module `gapfinder/spec_draft.py`, and
+   a subcommand in `gapfinder/cli.py`):
+   - inputs: the repo map (flags with defaults and `file:line`), build files (`setup.py`,
+     `requirements*.txt`, `pyproject.toml`, `CMakeLists.txt`, `Makefile`), the README's usage
+     section, and the paper's setup section from the ledger;
+   - one Nemotron call (Super first; Ultra if Super's draft fails twice) drafts `base`, `build`,
+     `load`, `run`, `knobs` (every repo-map flag, with layer and default), the output format
+     and `allowed_paths`;
+   - **smoke test in a sandbox:** build, one naive run, parse the metrics. On failure, pass the
+     error to the existing triage (`gapfinder/search/triage.py`) and redraft, at most 3 attempts;
+   - output the YAML plus a short report of what it tried. A human approves it, and approving
+     should be the only manual step. Print a diff if the human edits it.
+2. Evaluate it against the hand-written specs: `eval/gapbench/mlbench.yaml`,
+   `eval/gapbench/rlbench.yaml`, and the MC Dropout spec from P0-1. Record:
+   - whether the drafted spec runs without edits;
+   - how many knobs it found compared with the hand-written spec;
+   - how many attempts it took, and what it cost.
+3. Done when: the drafted spec runs unedited on at least 2 of the 3 artifacts. The README's
+   "How it works" and "Limitations" then say exactly how much human input is left.
+4. Cost: a few cents of Nemotron per draft, plus a few minutes of unbilled sandbox time.
+
+## P1-1. A fair baseline comparison
+
+1. Write down equal budgets in `PROTOCOL.md`: the same model, paper text, repo, sandbox tools,
+   run cap, dollar cap, wall-time cap and sealed answer key for every arm.
+2. Give the baseline the same evidence GapFinder gets: paper text plus the repo map output. The
+   baseline prompt is `eval/baseline/prompt.md`, and the change must be documented.
+3. **Random-search arm** (`gapfinder-random`): the same hypothesis space and budget, but in random
+   order, with no ledger ranking and no strong-lead skip.
+   - Add `rank: str = "ledger"` to `SearchConfig`; with `"random"`, shuffle `hypotheses()` with a
+     fixed seed and make `_strong_lead()` return False.
+   - Add the arm to `ARMS` in `eval/gapbench/harness.py` (line 44).
+   - This shows whether the ledger's ranking actually helps.
+4. **Ultra baseline arm** (`baseline-ultra`, already in `ARMS`): needs S's OK; probably under $2.
+5. **One ablation table** in the README: no-fork (done for RusKey, `eval/results/ablation_ruskey.json`),
+   no-verification (`gapfinder-noverify`), random search, and the evidence gate turned off.
+
+## P1-2. The Gap Report answers five questions at the top of each card
+
+Change both `gapfinder/report/gap_report.py` (Markdown and JSON) and `web/src/Report.jsx`.
+1. **What did the paper report?** The claim's quote and page. The ledger claims are passed to
+   `GapSearch` (`claims=`); carry them into the report.
+2. **What did we measure?** The naive median, its repeats and spread, the setup check, and the
+   discrepancy.
+3. **Which experiment changed it?** The branch, command, config and output, already in `replay`.
+   Make it the first thing after the label.
+4. **Why do we believe it?** The reversal test, held-out claims and evidence, labelled
+   pass/fail in one line each.
+5. **What remains unknown?** Untestable values, unmapped flags, the setup reproducibility
+   result, unconfirmed leads, and alternative configurations that came close (from
+   `closest_overall`).
+
+Also:
+- Separate "confirmed cause" (all checks pass), "plausible explanation" (fits but
+  unsupported) and "interacting factors" visually.
+- **Provenance block on every report:** GapFinder git commit (`git rev-parse HEAD`), model IDs,
+  prompt hashes, a sha256 of the harness spec, and total cost (Nemotron billed, sandbox
+  reported).
+- **Claim robustness** (optional, cheap): for comparative claims ("A beats B"), report in how many
+  of the configurations tested the conclusion still holds. Label it "over the configurations
+  tested", because they aren't a random sample of settings.
+- **"The sentence the paper was missing"**, only once there is a *confirmed* cause on a real
+  paper (MC Dropout or the second blind case, not the toy tasks):
+  - for each Explained or Paper-artifact inconsistency card, one Super call drafts the methods
+    sentence the paper should have contained, shown as a green insertion in the paper's own
+    setup paragraph;
+  - also draft a polite GitHub issue for the artifact's repo as a file, **never posted
+    automatically**;
+  - cost: a few cents.
+- Re-export the static site data after changing the report (`scripts/export_static.py`), and
+  re-run the browser test: `pytest -m e2e tests/e2e`. It needs `npm --prefix web run build`,
+  the static build, and `python -m playwright install chromium`.
+
+## P1-3. Smarter search, but only if it measurably helps
+
+1. **Adaptive ranking** as an experiment, not a feature:
+   - update each hypothesis's prior from its screen result;
+   - spend confirmation repeats on the most promising first;
+   - keep it only if it beats the current search (and the random arm) on runs needed to reach
+     the right answer across dev and test tasks.
+2. **Setting recall** is 0.67 on RusKey, below the 0.80 bar: the tuner's mode flags are missed.
+   - Look at the misses in `eval/results/ledger_ruskey_v5.json` (`missed_knobs`).
+   - Improve the repo map or the assumption prompt generally, and measure on the external
+     paper's ledger as well, so the change isn't tuned to RusKey.
+   - The ledger evaluator is `eval/ledger_eval.py`.
+
+## P1-4. Submission requirements (official rules)
+
+- **Working app:** the static replay site.
+  1. S makes the repo public (Settings → General → Danger Zone).
+  2. S sets Settings → Pages → Source: **GitHub Actions**.
+  3. Run the `pages` workflow from the Actions tab.
+  4. Check https://sayjad21.github.io/GapFinder/ in a logged-out browser.
+  - The workflow is `.github/workflows/pages.yml`; its deploy step fails until Pages is enabled,
+    which is harmless.
+- **Decide what "try it yourself" means** (an outside reviewer asked that judges be able to give
+  it a paper and repo and start an investigation). Pick one and write the choice and the reason
+  in the README:
+  - **A, replay only** (current): free and can't break, but judges can't start anything.
+  - **B, run it locally for free (recommended):** commit the cached model answers for the
+    GapBench dev tasks. Then `gapfinder` can run a full investigation on a dev task with
+    `GF_CACHE_ONLY=1` and the local backend, needing no keys and spending nothing.
+    - First check that the cache files contain only model outputs: no keys, no project ID,
+      no assistant attribution.
+    - Add a one-command quick start to the README, and time it on a fresh machine (the plan's
+      bar is under 15 minutes).
+  - **C, hosted live mode:** a server with a run button, an access code, a dollar cap and a
+    kill switch. It needs paid hosting outside the $50; only with S's approval.
+- **Public repo** with the MIT license badge visible at the top, setup instructions (SETUP.md)
+  and a test build.
+- **Video:** public on YouTube, **under 3 minutes**, with the audio explaining how Token Factory
+  and Nemotron are used.
+  - The script outline is in `docs/PLAN.md` ("Demo guide"); fill it with real numbers only.
+  - Put model names on screen whenever they're said, label sped-up footage ("16×"), and use
+    1920×1080.
+- **NVIDIA open model on Token Factory:** done (Nemotron 3 Ultra, Super, Nano). The README's
+  "How we use Nemotron" table must be updated with final numbers from the spend ledger.
+- **Built during the submission period:** state exactly what was built when.
+  - GapFinder is new: its git history shows when it was built.
+  - The RusKey reproduction is S's earlier research, used as a test case. The README's
+    "Provenance" section says this; keep it accurate.
+- **No illustrative numbers.** The original proposal (`docs/PLAN.md`, `docs/STRATEGY.pdf`)
+  contains targets such as "38% gap to 4%" and "11 minutes". Add a line at the top of
+  `docs/PLAN.md` saying its numbers are planning targets, not results, and make sure none of
+  them appear in the README, video or Devpost text.
+- **Devpost text:** follow the structure in `docs/PLAN.md` ("Devpost description"): inspiration,
+  what it does, how it was built, evaluation, challenges, what's next. Every number must link
+  to a file in `eval/results/` or `papers/ruskey/`.
+- **Feedback form:** paste from [docs/FEEDBACK_SUBMISSION.md](docs/FEEDBACK_SUBMISSION.md),
+  updated with anything new hit along the way.
+- **Code freeze:**
+  1. Tag `v1.0`; the Pages site rebuilds from main.
+  2. Run the test set the second (and last) time on v1.0.
+  3. Update the README numbers.
+  4. Submit with a margin.
+
+## P2. Only after everything above
+
+- More paper types, more agents, more dashboard features.
+- Live mode on hosted infrastructure (option C above).
+- **Race replay for the video:** the baseline transcript and GapFinder's event log side by side,
+  on the same clock, with both budget meters draining. Front-end only. First check that the
+  baseline logs (`eval/baseline/logs/`, `eval/gapbench/runs/*/baseline-super/`) carry
+  per-step timestamps; without them there is no shared clock.
+- A README badge per paper (e.g. "2 claims: 1 unexplained, 1 reproduced") linking to the replay.
+
+### Considered and rejected (don't redo these)
+
+- **A sensitivity (tornado) chart from the 127-branch RusKey run.** That run used an outlier
+  database load. Its load-stage settings were measured on different loads than the naive runs,
+  and most settings have only 1-3 runs. A chart would make confounded numbers look precise. If
+  a sensitivity map is wanted, build it from GapBench runs or from a new RusKey run with
+  `--noise-setups`.
+- **Claiming that anyone (e.g. Nebius staff) can re-run our branches from their checkpoint IDs.**
+  The checkpoints live in our Sandboxes project, and other accounts probably can't fork them.
+  Check first; until then, say "the command and checkpoint are recorded".
+- **Fine-tuning a model, adding model tiers, or more paper types:** they spend credit and time on
+  things judges weigh less than blind results.
+
+---
+
+## Reference: useful commands
+
+```bash
+pytest -q                                   # unit + integration (free)
+pytest -m e2e tests/e2e                     # browser test of both sites (needs builds, see P1-2)
+gapfinder ledger <paper.pdf> --repo <url-or-path> --out <dir>      # Ultra + Super, paid
+gapfinder repomap <repo>                    # flags, defaults, file:line (free)
+gapfinder search --spec <yaml> --targets <json> --assumptions <json> --claims <json> \
+    --backend contree|local --max-runs N [--noise-setups K] [--resume <events.jsonl>] --out <dir>
+python eval/gapbench/harness.py <task_dir> --arm <arm> --run <k> --cap 0.5 [--fresh]
+python eval/gapbench/score.py --split dev|test --out eval/results/<file>.json
+python eval/ledger_eval.py <ledger_run_dir> papers/ruskey --out eval/results/<file>.json
+python eval/ablation_fork.py ...            # see its docstring
+python eval/load_variance.py <run dirs...> --out eval/results/ruskey_load_variance.json
+python scripts/export_static.py web/dist-static/data
+```
+
+Re-labelling a finished search from its recorded runs only, without any new run: pass
+`--resume <its events.jsonl>` with `--max-runs` set to the number of recorded branches, and use
+`--backend local` so nothing can reach Sandboxes.
+
+## Done so far
+
+- Claim ledger v5 on RusKey: precision 1.00 (in-sample), headline recall 1.00, all-claim recall
+  0.93; setting recall 0.67 (below the bar).
+- GapBench dev v5: GapFinder 4/4 with 0% false attribution, median $0.04 a task; the Super
+  baseline 2/4 with 50%.
+- RusKey Figure 6 end to end in Sandboxes (127 branches); fork vs no-fork ablation (-64% setup
+  cost, -45% total).
+- The setup reproducibility check found RusKey's load is not reproducible (12 loads, 12
+  checkpoints), which corrected two earlier observations.
+- No labels from unconfirmed runs; runs in flight are recorded when the budget stops; failing
+  values aren't re-run; Nemotron 3 Super triages failed branches.
+- Static replay site and Pages workflow (waits for the repo to go public and Pages to be
+  enabled); structured feedback write-up; README with results and platform usage.
