@@ -1,0 +1,54 @@
+# Harness spec for this task. Knobs and defaults only.
+name: rlbench
+base: local:../../artifacts/rlbench
+run:
+  command: '"${PYTHON:-python3}" cartpole_q.py --episodes {episodes} --gamma {gamma} --lr {lr} --lr_schedule {lr_schedule} --eps_end {eps_end} --eps_decay {eps_decay} --theta_bins {theta_bins} --omega_bins {omega_bins} --reward_norm {reward_norm} --max_steps {max_steps} --init_q {init_q} --seeds {seeds} --eval_episodes {eval_episodes} --out out/result.json'
+  output: out/result.json
+  format: jsonl
+  timeout: 300
+knobs:
+  episodes:
+    layer: config
+    default: '400'
+  gamma:
+    layer: config
+    default: '0.99'
+  lr:
+    layer: config
+    default: '0.1'
+  lr_schedule:
+    layer: config
+    default: const
+  eps_end:
+    layer: config
+    default: '0.05'
+  eps_decay:
+    layer: config
+    default: '0.99'
+  theta_bins:
+    layer: config
+    default: '6'
+  omega_bins:
+    layer: config
+    default: '6'
+  reward_norm:
+    layer: config
+    default: 'off'
+  max_steps:
+    layer: workload
+    default: '200'
+  init_q:
+    layer: config
+    default: '0.0'
+  seeds:
+    layer: workload
+    default: '10'
+  eval_episodes:
+    layer: workload
+    default: '20'
+allowed_paths:
+- out/
+- configs/
+metrics:
+- mean_reward
+- min_reward
