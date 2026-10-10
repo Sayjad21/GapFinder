@@ -1,0 +1,44 @@
+# DRAFT harness spec (not run): MC Dropout (Gal & Ghahramani, ICML 2016), UCI regression.
+#
+# Built from the repo map, not hand-picked: every argparse flag of experiment.py (--dir, --epochx,
+# --hidden) is a knob, and so is every per-dataset data file the code reads for the tuned
+# hyperparameters (n_epochs.txt, n_hidden.txt, dropout_rates.txt, tau_values.txt, n_splits.txt).
+# Defaults are the repo's own: an unset knob means "what the artifact does out of the box"
+# ("default" leaves the repo's data file untouched; see harness/run_cell.sh).
+#
+# Scaled reproduction, fixed before any run and not a knob: the build stage patches net/net.py from
+# T = 10000 to T = 100 Monte Carlo test passes (10,000 made one split cost hours of CPU), and
+# n_splits defaults to 3 instead of the repo's 20. Both are reported as deviations.
+#
+# Runs in the Docker image from eval/external/mc-dropout/docker/Dockerfile, which already holds the
+# pinned stack (Python 3.6, numpy 1.13.3, scipy 1.1.0, Theano 0.8.2, Keras 2.2.0, h5py 2.8.0, g++)
+# and the repo at commit 6eb4497. See FEASIBILITY.md for how to run it with the local backend.
+name: mcd
+base: docker:gf-mcdropout
+build:
+  # The only edit to the artifact. Idempotent: the image already contains it.
+  command: "sed -i 's/T = 10000/T = 100/' net/net.py && grep -q 'T = 100' net/net.py && echo patched-ok"
+  timeout: 120
+run:
+  command: 'bash run_cell.sh dir={dir} epochx={epochx} hidden={hidden} n_splits={n_splits} n_epochs={n_epochs} n_hidden={n_hidden} dropout_rates={dropout_rates} tau_values_yacht={tau_values_yacht} tau_values_energy={tau_values_energy} tau_values_concrete={tau_values_concrete}'
+  output: stdout
+  format: kv
+  timeout: 14400
+knobs:
+  # experiment.py flags
+  dir:           {layer: dataset, default: "yacht,energy,concrete"}
+  epochx:        {layer: config, default: "500"}
+  hidden:        {layer: config, default: "2"}
+  # per-dataset data files, UCI_Datasets/<dir>/data/*.txt (the repo's defaults for the three datasets)
+  n_epochs:      {layer: config, default: "default"}
+  n_hidden:      {layer: config, default: "default"}
+  dropout_rates: {layer: config, default: "default"}
+  # the repo's tau grid differs per dataset (Concrete: 0.025 0.05 0.075), so one knob per dataset
+  tau_values_yacht:    {layer: config, default: "default"}
+  tau_values_energy:   {layer: config, default: "default"}
+  tau_values_concrete: {layer: config, default: "default"}
+  n_splits:      {layer: dataset, default: "3", max: 20}
+allowed_paths: ["out/", "UCI_Datasets/*/data/n_epochs.txt", "UCI_Datasets/*/data/n_hidden.txt",
+                "UCI_Datasets/*/data/dropout_rates.txt", "UCI_Datasets/*/data/tau_values.txt",
+                "UCI_Datasets/*/data/n_splits.txt", "UCI_Datasets/*/results/"]
+metrics: [yacht_rmse, energy_rmse, concrete_rmse, yacht_ll, energy_ll, concrete_ll]

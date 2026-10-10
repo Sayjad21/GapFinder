@@ -105,6 +105,7 @@ class LocalBackend(SandboxBackend):
         self.emulate_dedup = emulate_dedup
         self._dedup: dict[str, RunResult] = {}
         self.shell = shell or _find_bash()
+        self.docker_image: str | None = None  # set by base("docker:<image>"): runs happen inside it
 
     def _dir(self, checkpoint: str) -> Path:
         tags = self._tags()
@@ -123,6 +124,12 @@ class LocalBackend(SandboxBackend):
         dest = self.images / cid
         if ref == "empty":
             dest.mkdir()
+        elif ref.startswith("docker:"):
+            # A local Docker image whose /work holds the artifact. Every run mounts its checkpoint
+            # directory over /work in a fresh container of that image, for artifacts that need an
+            # old toolchain the host lacks.
+            self.docker_image = ref.removeprefix("docker:")
+            await asyncio.to_thread(_copy_from_image, self.docker_image, dest)
         else:
             src = Path(ref.removeprefix("local:"))
             if not src.is_dir():
@@ -145,6 +152,12 @@ class LocalBackend(SandboxBackend):
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(data)
         full_env = {**os.environ, **env, "WORK": str(dest), "PYTHON": Path(sys.executable).as_posix()}
+        argv, container = [self.shell, "-c", shell], None
+        if self.docker_image:
+            container = f"gf-{cid}"
+            argv = ["docker", "run", "--rm", "--name", container, "-v", f"{dest}:{WORK_DIR}", "-w", WORK_DIR,
+                    "-e", f"WORK={WORK_DIR}", *(a for k, v in env.items() for a in ("-e", f"{k}={v}")),
+                    self.docker_image, "bash", "-c", shell]
         start = time.monotonic()
         timed_out = False
 
@@ -153,12 +166,14 @@ class LocalBackend(SandboxBackend):
             # shell would otherwise hold the pipe open and hang the read.
             with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:
                 proc = subprocess.Popen(
-                    [self.shell, "-c", shell], cwd=dest, env=full_env, stdout=fo, stderr=fe,
+                    argv, cwd=dest, env=full_env, stdout=fo, stderr=fe,
                     **_new_group_kwargs(),
                 )
                 try:
                     code, hit_timeout = proc.wait(timeout=timeout), False
                 except subprocess.TimeoutExpired:
+                    if container:  # killing the docker client would leave the container running
+                        subprocess.run(["docker", "kill", container], capture_output=True)
                     _kill_tree(proc)
                     code, hit_timeout = 124, True
                 fo.seek(0), fe.seek(0)
@@ -207,6 +222,21 @@ class LocalBackend(SandboxBackend):
         tags = self._tags()
         tags[tag] = self._dir(checkpoint).name
         self.tags_file.write_text(json.dumps(tags, indent=1))
+
+
+def _copy_from_image(image: str, dest: Path) -> None:
+    """Copy /work out of a local Docker image into `dest`."""
+    made = subprocess.run(["docker", "create", image], capture_output=True, text=True)
+    if made.returncode != 0:
+        raise InfraError(f"docker create {image} failed: {made.stderr.strip()}")
+    container = made.stdout.strip()
+    try:
+        dest.mkdir()
+        copied = subprocess.run(["docker", "cp", f"{container}:{WORK_DIR}/.", str(dest)], capture_output=True, text=True)
+        if copied.returncode != 0:
+            raise InfraError(f"docker cp from {image} failed: {copied.stderr.strip()}")
+    finally:
+        subprocess.run(["docker", "rm", container], capture_output=True)
 
 
 def _new_group_kwargs() -> dict:
