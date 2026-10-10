@@ -10,6 +10,57 @@ const ARM_NAMES = {
   "baseline-ultra": "mini-swe-agent + Nemotron 3 Ultra",
 };
 
+const MATRIX_COLS = [
+  ["correct_cause", "Correct cause"], ["partial", "Part of it"],
+  ["wrong_confident", "Wrong, stated confidently"], ["abstained", "Abstained"], ["missed", "Missed"],
+];
+const MATRIX_ROWS = [["cause", "A cause exists"], ["no_cause", "No cause"]];
+
+// Cells that are the right answer for their row are green, confident errors are red.
+function cellClass(row, col, n) {
+  if (!n) return "zero";
+  if (col === "wrong_confident") return "bad";
+  return (row === "cause" && col === "correct_cause") || (row === "no_cause" && col === "abstained") ? "good" : "";
+}
+
+function TrustMatrix({ arm, stats }) {
+  const m = stats.trust_matrix;
+  if (!m) return null;
+  return (
+    <div className="matrix">
+      <h5>{ARM_NAMES[arm] || arm}</h5>
+      <table>
+        <thead><tr><th>Truth / arm said</th>{MATRIX_COLS.map(([c, label]) => <th key={c}>{label}</th>)}</tr></thead>
+        <tbody>
+          {MATRIX_ROWS.map(([row, label]) => (
+            <tr key={row}>
+              <th>{label} <small>({m[row].runs} runs)</small></th>
+              {MATRIX_COLS.map(([col]) => {
+                const impossible = row === "no_cause" && (col === "correct_cause" || col === "partial");
+                return (
+                  <td key={col} className={impossible ? "zero" : cellClass(row, col, m[row][col])}>
+                    {impossible ? "–" : m[row][col]}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function pct(r) {
+  if (!r || r.rate == null) return "n/a";
+  return r.k + "/" + r.n + " (" + (r.lo * 100).toFixed(0) + "–" + (r.hi * 100).toFixed(0) + "%)";
+}
+
+function stable(s) {
+  const m = s.answer_stability && s.answer_stability.mean;
+  return m == null ? "n/a" : (m * 100).toFixed(0) + "%";
+}
+
 function Split({ name, data }) {
   const arms = Object.entries(data.summary || {});
   return (
@@ -32,6 +83,31 @@ function Split({ name, data }) {
           ))}
         </tbody>
       </table>
+      {arms.some(([, s]) => s.trust_matrix) && (
+        <>
+          <h4>Trust matrix</h4>
+          <p className="note">Rows are what was true; columns are what the arm said. A trustworthy arm is right when a
+            cause exists and abstains when none does. Cells count runs. Intervals in the table below are 95% Wilson,
+            and with this few tasks they are wide.</p>
+          <div className="matrices">
+            {arms.map(([arm, s]) => <TrustMatrix key={arm} arm={arm} stats={s} />)}
+          </div>
+          <table className="rates">
+            <thead>
+              <tr><th>Arm</th><th>Correct</th><th>Confidently wrong</th><th>Correct abstention</th><th>Missed</th><th>Same answer across runs</th></tr>
+            </thead>
+            <tbody>
+              {arms.filter(([, s]) => s.rates).map(([arm, s]) => (
+                <tr key={arm} className={arm === "gapfinder" ? "us" : ""}>
+                  <td>{ARM_NAMES[arm] || arm}</td><td>{pct(s.rates.correct)}</td>
+                  <td>{pct(s.rates.confidently_wrong)}</td><td>{pct(s.rates.correct_abstention)}</td>
+                  <td>{pct(s.rates.missed)}</td><td>{stable(s)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
       <h4>Per task</h4>
       <table className="rows">
         <thead><tr><th>Task</th><th>Type</th><th>Arm</th><th>Correct</th><th>Answer</th></tr></thead>
