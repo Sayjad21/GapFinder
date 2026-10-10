@@ -1,0 +1,929 @@
+[
+ {
+  "id": "A1",
+  "knob": "RUN_TAG",
+  "layer": "environment",
+  "paper_value": "unstated (paper only says 'different shuffling seeds')",
+  "code_default": "'' (empty string, leading to seed 0)",
+  "candidate_values": [
+   "''",
+   "\"abcdef\"",
+   "\"123456\""
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Numbers are medians over 7 runs with different shuffling seeds."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:67",
+    "quote": "tag = os.environ.get(\"RUN_TAG\", \"\")"
+   }
+  ],
+  "prior_score": 0.9,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A2",
+  "knob": "shuffling_seeds_7_runs",
+  "layer": "workload",
+  "paper_value": "7 runs with different shuffling seeds (exact seeds unstated)",
+  "code_default": "1 run per invocation (no automatic median aggregation)",
+  "candidate_values": [
+   "7 runs with seeds 0..6",
+   "7 runs with seeds from paper's supplementary material if any",
+   "7 runs with seeds derived from RUN_TAG variants"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Numbers are medians over 7 runs with different shuffling seeds."
+   }
+  ],
+  "prior_score": 0.85,
+  "status": "stated_code_differs",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A3",
+  "knob": "SCALES",
+  "layer": "dataset",
+  "paper_value": "unstated (paper only describes dataset statistically)",
+  "code_default": "[1.0, 1.0, 50.0, 0.02, 400.0, 1.0, 5.0, 0.5]",
+  "candidate_values": [
+   "[1.0, 1.0, 50.0, 0.02, 400.0, 1.0, 5.0, 0.5]",
+   "[1.0]*8",
+   "[10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0]"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The synthetic dataset has 1,200 rows with eight numeric features, a 30% positive rate and 5% label noise."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:28",
+    "quote": "SCALES = [1.0, 1.0, 50.0, 0.02, 400.0, 1.0, 5.0, 0.5]"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:36",
+    "quote": "z = [rng.gauss(0, 1) for _ in SCALES]"
+   }
+  ],
+  "prior_score": 0.8,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A4",
+  "knob": "WEIGHTS",
+  "layer": "dataset",
+  "paper_value": "unstated",
+  "code_default": "[1.2, -0.8, 0.6, 0.9, -0.5, 0.0, 0.4, 0.0]",
+  "candidate_values": [
+   "[1.2, -0.8, 0.6, 0.9, -0.5, 0.0, 0.4, 0.0]",
+   "[1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0]",
+   "[0.5]*8"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The synthetic dataset has 1,200 rows with eight numeric features, a 30% positive rate and 5% label noise."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:29",
+    "quote": "WEIGHTS = [1.2, -0.8, 0.6, 0.9, -0.5, 0.0, 0.4, 0.0]"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:37",
+    "quote": "logit = sum(w * v for w, v in zip(WEIGHTS, z)) + math.log(a.positive_rate / (1 - a.positive_rate))"
+   }
+  ],
+  "prior_score": 0.8,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A5",
+  "knob": "num_runs_aggregation",
+  "layer": "workload",
+  "paper_value": "7 (median over 7 runs)",
+  "code_default": "1 (single run per script invocation)",
+  "candidate_values": [
+   "7",
+   "1",
+   "10"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Numbers are medians over 7 runs with different shuffling seeds."
+   }
+  ],
+  "prior_score": 0.75,
+  "status": "stated_code_differs",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A6",
+  "knob": "--data_seed",
+  "layer": "dataset",
+  "paper_value": "7",
+  "code_default": "7",
+  "candidate_values": [
+   "7",
+   "42",
+   "123"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The first 80% of rows are used for training and the rest for testing (data seed 7)."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:23",
+    "quote": "p.add_argument(\"--data_seed\", type=int, default=7)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:33",
+    "quote": "rng = random.Random(a.data_seed)"
+   }
+  ],
+  "prior_score": 0.7,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A30",
+  "knob": "median_aggregation_method",
+  "layer": "workload",
+  "paper_value": "median over 7 runs",
+  "code_default": "no aggregation (single run output)",
+  "candidate_values": [
+   "median",
+   "mean",
+   "max"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Numbers are medians over 7 runs with different shuffling seeds."
+   }
+  ],
+  "prior_score": 0.7,
+  "status": "stated_code_differs",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A7",
+  "knob": "--n",
+  "layer": "dataset",
+  "paper_value": "1200",
+  "code_default": "1200",
+  "candidate_values": [
+   "1200",
+   "1000",
+   "2000"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The synthetic dataset has 1,200 rows with eight numeric features, a 30% positive rate and 5% label noise."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:11",
+    "quote": "p.add_argument(\"--n\", type=int, default=1200)"
+   }
+  ],
+  "prior_score": 0.6,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A8",
+  "knob": "--positive_rate",
+  "layer": "dataset",
+  "paper_value": "0.3",
+  "code_default": "0.3",
+  "candidate_values": [
+   "0.3",
+   "0.5",
+   "0.1"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The synthetic dataset has 1,200 rows with eight numeric features, a 30% positive rate and 5% label noise."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:12",
+    "quote": "p.add_argument(\"--positive_rate\", type=float, default=0.3)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:37",
+    "quote": "logit = sum(w * v for w, v in zip(WEIGHTS, z)) + math.log(a.positive_rate / (1 - a.positive_rate))"
+   }
+  ],
+  "prior_score": 0.6,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A9",
+  "knob": "--label_noise",
+  "layer": "dataset",
+  "paper_value": "0.05",
+  "code_default": "0.05",
+  "candidate_values": [
+   "0.05",
+   "0.0",
+   "0.1"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The synthetic dataset has 1,200 rows with eight numeric features, a 30% positive rate and 5% label noise."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:13",
+    "quote": "p.add_argument(\"--label_noise\", type=float, default=0.05)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:39",
+    "quote": "if rng.random() < a.label_noise:"
+   }
+  ],
+  "prior_score": 0.6,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A10",
+  "knob": "--split",
+  "layer": "dataset",
+  "paper_value": "0.8",
+  "code_default": "0.8",
+  "candidate_values": [
+   "0.8",
+   "0.75",
+   "0.9"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The first 80% of rows are used for training and the rest for testing (data seed 7)."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:14",
+    "quote": "p.add_argument(\"--split\", type=float, default=0.8)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:43",
+    "quote": "k = int(a.split * a.n)"
+   }
+  ],
+  "prior_score": 0.6,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A11",
+  "knob": "--epochs",
+  "layer": "config",
+  "paper_value": "15",
+  "code_default": "15",
+  "candidate_values": [
+   "15",
+   "10",
+   "20"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The model is logistic regression trained by mini-batch SGD for 15 epochs (batch size 32, a constant learning rate of 0.05, no weight decay and no class weighting)."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:16",
+    "quote": "p.add_argument(\"--epochs\", type=int, default=15)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:79",
+    "quote": "for ep in range(a.epochs):"
+   }
+  ],
+  "prior_score": 0.55,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A12",
+  "knob": "--batch_size",
+  "layer": "config",
+  "paper_value": "32",
+  "code_default": "32",
+  "candidate_values": [
+   "32",
+   "64",
+   "16"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The model is logistic regression trained by mini-batch SGD for 15 epochs (batch size 32, a constant learning rate of 0.05, no weight decay and no class weighting)."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:17",
+    "quote": "p.add_argument(\"--batch_size\", type=int, default=32)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:81",
+    "quote": "for s0 in range(0, len(idx), a.batch_size):"
+   }
+  ],
+  "prior_score": 0.55,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A13",
+  "knob": "--lr",
+  "layer": "config",
+  "paper_value": "0.05",
+  "code_default": "0.05",
+  "candidate_values": [
+   "0.05",
+   "0.01",
+   "0.1"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The model is logistic regression trained by mini-batch SGD for 15 epochs (batch size 32, a constant learning rate of 0.05, no weight decay and no class weighting)."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:18",
+    "quote": "p.add_argument(\"--lr\", type=float, default=0.05)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:87",
+    "quote": "lr = a.lr"
+   }
+  ],
+  "prior_score": 0.55,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A14",
+  "knob": "--threshold",
+  "layer": "config",
+  "paper_value": "0.5",
+  "code_default": "0.5",
+  "candidate_values": [
+   "0.5",
+   "0.3",
+   "0.7"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Predictions use a decision threshold of 0.5."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:22",
+    "quote": "p.add_argument(\"--threshold\", type=float, default=0.5)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:99",
+    "quote": "pred = [1 if sigmoid(sum(wj * xj for wj, xj in zip(w, r)) + b) >= a.threshold else 0 for r in Xte]"
+   }
+  ],
+  "prior_score": 0.5,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A24",
+  "knob": "data_generation_process",
+  "layer": "dataset",
+  "paper_value": "unstated (paper only describes statistical properties)",
+  "code_default": "logistic model with specific SCALES, WEIGHTS, label noise flip",
+  "candidate_values": [
+   "current logistic generative process",
+   "Gaussian features with linear decision boundary",
+   "Other synthetic dataset generator"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The synthetic dataset has 1,200 rows with eight numeric features, a 30% positive rate and 5% label noise."
+   }
+  ],
+  "prior_score": 0.5,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A15",
+  "knob": "--normalize",
+  "layer": "dataset",
+  "paper_value": "\"none\" (features used raw, without any scaling)",
+  "code_default": "\"none\"",
+  "candidate_values": [
+   "\"none\"",
+   "\"zscore\"",
+   "\"minmax\""
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Features are used raw, without any scaling."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:15",
+    "quote": "p.add_argument(\"--normalize\", choices=[\"none\", \"zscore\", \"minmax\"], default=\"none\")"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:70",
+    "quote": "f = normaliser(Xtr, a.normalize)"
+   }
+  ],
+  "prior_score": 0.45,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A16",
+  "knob": "weight_init_scale",
+  "layer": "config",
+  "paper_value": "unstated",
+  "code_default": "0.01 (stddev for gaussian initialization)",
+  "candidate_values": [
+   "0.01",
+   "0.1",
+   "0.001"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The model is logistic regression trained by mini-batch SGD for 15 epochs (batch size 32, a constant learning rate of 0.05, no weight decay and no class weighting)."
+   }
+  ],
+  "prior_score": 0.4,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A17",
+  "knob": "--lr_schedule",
+  "layer": "config",
+  "paper_value": "\"const\" (constant learning rate)",
+  "code_default": "\"const\"",
+  "candidate_values": [
+   "\"const\"",
+   "\"step\"",
+   "\"cosine\""
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The model is logistic regression trained by mini-batch SGD for 15 epochs (batch size 32, a constant learning rate of 0.05, no weight decay and no class weighting)."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:19",
+    "quote": "p.add_argument(\"--lr_schedule\", choices=[\"const\", \"step\", \"cosine\"], default=\"const\")"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:82",
+    "quote": "if a.lr_schedule == \"step\":"
+   }
+  ],
+  "prior_score": 0.35,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A18",
+  "knob": "--weight_decay",
+  "layer": "config",
+  "paper_value": "0.0 (no weight decay)",
+  "code_default": "0.0",
+  "candidate_values": [
+   "0.0",
+   "1e-4",
+   "1e-3"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The model is logistic regression trained by mini-batch SGD for 15 epochs (batch size 32, a constant learning rate of 0.05, no weight decay and no class weighting)."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:20",
+    "quote": "p.add_argument(\"--weight_decay\", type=float, default=0.0)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:96",
+    "quote": "w = [wj - lr * (gj / m + a.weight_decay * wj) for wj, gj in zip(w, gw)]"
+   }
+  ],
+  "prior_score": 0.35,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A19",
+  "knob": "--class_weight",
+  "layer": "config",
+  "paper_value": "\"none\" (no class weighting)",
+  "code_default": "\"none\"",
+  "candidate_values": [
+   "\"none\"",
+   "\"balanced\""
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The model is logistic regression trained by mini-batch SGD for 15 epochs (batch size 32, a constant learning rate of 0.05, no weight decay and no class weighting)."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:21",
+    "quote": "p.add_argument(\"--class_weight\", choices=[\"none\", \"balanced\"], default=\"none\")"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:75",
+    "quote": "cw = {1: 0.5 / pos, 0: 0.5 / (1 - pos)} if a.class_weight == \"balanced\" else {1: 1.0, 0: 1.0}"
+   }
+  ],
+  "prior_score": 0.35,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A23",
+  "knob": "num_features",
+  "layer": "dataset",
+  "paper_value": "8 (eight numeric features)",
+  "code_default": "8 (length of SCALES and WEIGHTS)",
+  "candidate_values": [
+   "8",
+   "10",
+   "5"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The synthetic dataset has 1,200 rows with eight numeric features, a 30% positive rate and 5% label noise."
+   }
+  ],
+  "prior_score": 0.3,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A27",
+  "knob": "shuffling_per_epoch",
+  "layer": "workload",
+  "paper_value": "unstated (paper says mini-batch SGD)",
+  "code_default": "shuffle once per epoch (rng.shuffle(idx))",
+  "candidate_values": [
+   "shuffle per epoch",
+   "shuffle once before training",
+   "no shuffle (sequential)"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The model is logistic regression trained by mini-batch SGD for 15 epochs (batch size 32, a constant learning rate of 0.05, no weight decay and no class weighting)."
+   }
+  ],
+  "prior_score": 0.3,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A25",
+  "knob": "test_set_size",
+  "layer": "dataset",
+  "paper_value": "20% of 1200 = 240 rows",
+  "code_default": "240 (derived from n=1200, split=0.8)",
+  "candidate_values": [
+   "240",
+   "200",
+   "300"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The first 80% of rows are used for training and the rest for testing (data seed 7)."
+   }
+  ],
+  "prior_score": 0.25,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A20",
+  "knob": "python_random_module",
+  "layer": "environment",
+  "paper_value": "unstated",
+  "code_default": "Python's built-in random.Random (implementation depends on Python version)",
+  "candidate_values": [
+   "Python 3.10",
+   "Python 3.11",
+   "Python 3.12"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Numbers are medians over 7 runs with different shuffling seeds."
+   }
+  ],
+  "prior_score": 0.2,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A26",
+  "knob": "balanced_accuracy_formula",
+  "layer": "config",
+  "paper_value": "unstated (paper reports balanced accuracy 0.484)",
+  "code_default": "0.5 * (TPR + TNR) with guards for zero division",
+  "candidate_values": [
+   "0.5 * (TPR + TNR)",
+   "0.5 * (recall + specificity)",
+   "sklearn.metrics.balanced_accuracy_score"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Table 1 reports the main result: test accuracy 0.494, balanced accuracy 0.484."
+   }
+  ],
+  "prior_score": 0.2,
+  "status": "unstated",
+  "affects_claims": [
+   "C3"
+  ]
+ },
+ {
+  "id": "A21",
+  "knob": "sigmoid_clip_threshold",
+  "layer": "config",
+  "paper_value": "unstated",
+  "code_default": "35.0 (clipping logits to [-35, 35] before sigmoid)",
+  "candidate_values": [
+   "35.0",
+   "20.0",
+   "50.0"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The model is logistic regression trained by mini-batch SGD for 15 epochs (batch size 32, a constant learning rate of 0.05, no weight decay and no class weighting)."
+   }
+  ],
+  "prior_score": 0.15,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A22",
+  "knob": "output_rounding_decimals",
+  "layer": "config",
+  "paper_value": "unstated (paper reports 0.494 and 0.484)",
+  "code_default": "4 (round to 4 decimal places)",
+  "candidate_values": [
+   "4",
+   "3",
+   "5"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Table 1 reports the main result: test accuracy 0.494, balanced accuracy 0.484."
+   }
+  ],
+  "prior_score": 0.1,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A28",
+  "knob": "floating_point_precision",
+  "layer": "environment",
+  "paper_value": "unstated",
+  "code_default": "Python float (IEEE 754 double precision)",
+  "candidate_values": [
+   "double (default)",
+   "single (numpy float32)",
+   "extended precision"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Table 1 reports the main result: test accuracy 0.494, balanced accuracy 0.484."
+   }
+  ],
+  "prior_score": 0.1,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ },
+ {
+  "id": "A29",
+  "knob": "os_environment",
+  "layer": "environment",
+  "paper_value": "unstated",
+  "code_default": "any OS running Python",
+  "candidate_values": [
+   "Linux",
+   "macOS",
+   "Windows"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "We revisit logistic regression trained with mini-batch SGD on a synthetic screening dataset and show that it reaches 0.494 test accuracy."
+   }
+  ],
+  "prior_score": 0.05,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3"
+  ]
+ }
+]

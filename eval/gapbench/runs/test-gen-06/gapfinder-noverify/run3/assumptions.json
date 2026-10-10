@@ -1,0 +1,725 @@
+[
+ {
+  "id": "A1",
+  "knob": "RUN_TAG",
+  "layer": "environment",
+  "paper_value": "unstated",
+  "code_default": "None",
+  "candidate_values": [
+   "auto (7 different hex seeds)",
+   "unset (seed 0)",
+   "fixed seed for determinism"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Numbers are medians over 7 runs with different shuffling seeds"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:67",
+    "quote": "tag = os.environ.get(\"RUN_TAG\", \"\")"
+   }
+  ],
+  "prior_score": 0.95,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A2",
+  "knob": "SCALES",
+  "layer": "dataset",
+  "paper_value": "unstated",
+  "code_default": "[1.0, 1.0, 50.0, 0.02, 400.0, 1.0, 5.0, 0.5]",
+  "candidate_values": [
+   "[1.0, 1.0, 50.0, 0.02, 400.0, 1.0, 5.0, 0.5]",
+   "all 1.0",
+   "feature-wise std from data"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "eight numeric features"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:28",
+    "quote": "SCALES = [1.0, 1.0, 50.0, 0.02, 400.0, 1.0, 5.0, 0.5]"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:36",
+    "quote": "z = [rng.gauss(0, 1) for _ in SCALES]"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:41",
+    "quote": "X.append([v * s for v, s in zip(z, SCALES)])"
+   }
+  ],
+  "prior_score": 0.9,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A3",
+  "knob": "WEIGHTS",
+  "layer": "dataset",
+  "paper_value": "unstated",
+  "code_default": "[1.2, -0.8, 0.6, 0.9, -0.5, 0.0, 0.4, 0.0]",
+  "candidate_values": [
+   "[1.2, -0.8, 0.6, 0.9, -0.5, 0.0, 0.4, 0.0]",
+   "all 1.0",
+   "random weights"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "eight numeric features"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:29",
+    "quote": "WEIGHTS = [1.2, -0.8, 0.6, 0.9, -0.5, 0.0, 0.4, 0.0]"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:37",
+    "quote": "logit = sum(w * v for w, v in zip(WEIGHTS, z)) + math.log(a.positive_rate / (1 - a.positive_rate))"
+   }
+  ],
+  "prior_score": 0.9,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A4",
+  "knob": "--normalize",
+  "layer": "config",
+  "paper_value": "unstated",
+  "code_default": "\"none\"",
+  "candidate_values": [
+   "none",
+   "zscore",
+   "minmax"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The model is logistic regression trained by mini-batch SGD for 15 epochs (batch size 32, a constant learning rate of 0.05, no weight decay and no class weighting)."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:15",
+    "quote": "p.add_argument(\"--normalize\", choices=[\"none\", \"zscore\", \"minmax\"], default=\"none\")"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:70",
+    "quote": "f = normaliser(Xtr, a.normalize)"
+   }
+  ],
+  "prior_score": 0.85,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A5",
+  "knob": "--lr_schedule",
+  "layer": "config",
+  "paper_value": "const",
+  "code_default": "\"const\"",
+  "candidate_values": [
+   "const",
+   "step",
+   "cosine"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "a constant learning rate of 0.05"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:19",
+    "quote": "p.add_argument(\"--lr_schedule\", choices=[\"const\", \"step\", \"cosine\"], default=\"const\")"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:82",
+    "quote": "if a.lr_schedule == \"step\":"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:84",
+    "quote": "elif a.lr_schedule == \"cosine\":"
+   }
+  ],
+  "prior_score": 0.8,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A6",
+  "knob": "--class_weight",
+  "layer": "config",
+  "paper_value": "none",
+  "code_default": "\"none\"",
+  "candidate_values": [
+   "none",
+   "balanced"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "no class weighting"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:21",
+    "quote": "p.add_argument(\"--class_weight\", choices=[\"none\", \"balanced\"], default=\"none\")"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:75",
+    "quote": "cw = {1: 0.5 / pos, 0: 0.5 / (1 - pos)} if a.class_weight == \"balanced\" else {1: 1.0, 0: 1.0}"
+   }
+  ],
+  "prior_score": 0.75,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A7",
+  "knob": "--weight_decay",
+  "layer": "config",
+  "paper_value": "0.0",
+  "code_default": "0.0",
+  "candidate_values": [
+   "0.0",
+   "1e-4",
+   "1e-3"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "no weight decay"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:20",
+    "quote": "p.add_argument(\"--weight_decay\", type=float, default=0.0)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:96",
+    "quote": "w = [wj - lr * (gj / m + a.weight_decay * wj) for wj, gj in zip(w, gw)]"
+   }
+  ],
+  "prior_score": 0.7,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A8",
+  "knob": "--threshold",
+  "layer": "config",
+  "paper_value": "0.5",
+  "code_default": "0.5",
+  "candidate_values": [
+   "0.5",
+   "0.3",
+   "0.7"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Predictions use a decision threshold of 0.5"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:22",
+    "quote": "p.add_argument(\"--threshold\", type=float, default=0.5)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:99",
+    "quote": "pred = [1 if sigmoid(sum(wj * xj for wj, xj in zip(w, r)) + b) >= a.threshold else 0 for r in Xte]"
+   }
+  ],
+  "prior_score": 0.7,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A9",
+  "knob": "--data_seed",
+  "layer": "dataset",
+  "paper_value": "7",
+  "code_default": "7",
+  "candidate_values": [
+   "7",
+   "42",
+   "123"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "first 80% of rows are used for training and the rest for testing (data seed 7)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:23",
+    "quote": "p.add_argument(\"--data_seed\", type=int, default=7)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:33",
+    "quote": "rng = random.Random(a.data_seed)"
+   }
+  ],
+  "prior_score": 0.65,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A10",
+  "knob": "--n",
+  "layer": "dataset",
+  "paper_value": "unstated",
+  "code_default": "1200",
+  "candidate_values": [
+   "1200",
+   "2000",
+   "5000"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The synthetic dataset has eight numeric features, a 30% positive rate and 5% label noise."
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:11",
+    "quote": "p.add_argument(\"--n\", type=int, default=1200)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:35",
+    "quote": "for _ in range(a.n):"
+   }
+  ],
+  "prior_score": 0.6,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A11",
+  "knob": "--positive_rate",
+  "layer": "dataset",
+  "paper_value": "0.3",
+  "code_default": "0.3",
+  "candidate_values": [
+   "0.3",
+   "0.5",
+   "0.1"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "30% positive rate"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:12",
+    "quote": "p.add_argument(\"--positive_rate\", type=float, default=0.3)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:37",
+    "quote": "logit = sum(w * v for w, v in zip(WEIGHTS, z)) + math.log(a.positive_rate / (1 - a.positive_rate))"
+   }
+  ],
+  "prior_score": 0.6,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A12",
+  "knob": "--label_noise",
+  "layer": "dataset",
+  "paper_value": "0.05",
+  "code_default": "0.05",
+  "candidate_values": [
+   "0.05",
+   "0.1",
+   "0.0"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "5% label noise"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:13",
+    "quote": "p.add_argument(\"--label_noise\", type=float, default=0.05)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:39",
+    "quote": "if rng.random() < a.label_noise:"
+   }
+  ],
+  "prior_score": 0.6,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A13",
+  "knob": "--split",
+  "layer": "dataset",
+  "paper_value": "0.8",
+  "code_default": "0.8",
+  "candidate_values": [
+   "0.8",
+   "0.7",
+   "0.9"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "The first 80% of rows are used for training and the rest for testing"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:14",
+    "quote": "p.add_argument(\"--split\", type=float, default=0.8)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:43",
+    "quote": "k = int(a.split * a.n)"
+   }
+  ],
+  "prior_score": 0.6,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A14",
+  "knob": "--epochs",
+  "layer": "config",
+  "paper_value": "15",
+  "code_default": "15",
+  "candidate_values": [
+   "15",
+   "10",
+   "20"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "trained by mini-batch SGD for 15 epochs"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:16",
+    "quote": "p.add_argument(\"--epochs\", type=int, default=15)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:77",
+    "quote": "steps = a.epochs * math.ceil(len(idx) / a.batch_size)"
+   }
+  ],
+  "prior_score": 0.55,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A15",
+  "knob": "--batch_size",
+  "layer": "config",
+  "paper_value": "32",
+  "code_default": "32",
+  "candidate_values": [
+   "32",
+   "64",
+   "16"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "batch size 32"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:17",
+    "quote": "p.add_argument(\"--batch_size\", type=int, default=32)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:81",
+    "quote": "for s0 in range(0, len(idx), a.batch_size):"
+   }
+  ],
+  "prior_score": 0.55,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A16",
+  "knob": "--lr",
+  "layer": "config",
+  "paper_value": "0.05",
+  "code_default": "0.05",
+  "candidate_values": [
+   "0.05",
+   "0.1",
+   "0.01"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "a constant learning rate of 0.05"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:18",
+    "quote": "p.add_argument(\"--lr\", type=float, default=0.05)"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:87",
+    "quote": "lr = a.lr"
+   }
+  ],
+  "prior_score": 0.55,
+  "status": "stated_matches",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A17",
+  "knob": "Python random module",
+  "layer": "environment",
+  "paper_value": "unstated",
+  "code_default": "CPython 3.x Mersenne Twister",
+  "candidate_values": [
+   "CPython 3.10+",
+   "PyPy",
+   "numpy.random"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Numbers are medians over 7 runs with different shuffling seeds"
+   }
+  ],
+  "prior_score": 0.5,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A18",
+  "knob": "Hardware CPU",
+  "layer": "environment",
+  "paper_value": "unstated",
+  "code_default": "any x86_64",
+  "candidate_values": [
+   "Intel Skylake",
+   "AMD Zen 3",
+   "Apple M1"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Plain Logistic Regression Is a Strong Baseline for Credit Screening"
+   }
+  ],
+  "prior_score": 0.3,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A19",
+  "knob": "Python version",
+  "layer": "environment",
+  "paper_value": "unstated",
+  "code_default": "3.8+",
+  "candidate_values": [
+   "3.8",
+   "3.10",
+   "3.11"
+  ],
+  "evidence": [
+   {
+    "kind": "paper",
+    "ref": "p.1",
+    "quote": "Plain Logistic Regression Is a Strong Baseline for Credit Screening"
+   }
+  ],
+  "prior_score": 0.25,
+  "status": "unstated",
+  "affects_claims": [
+   "C1",
+   "C2",
+   "C3",
+   "C4",
+   "C5"
+  ]
+ },
+ {
+  "id": "A20",
+  "knob": "--out",
+  "layer": "config",
+  "paper_value": "unstated",
+  "code_default": "\"out/result.json\"",
+  "candidate_values": [
+   "out/result.json",
+   "custom.json",
+   "/tmp/result.json"
+  ],
+  "evidence": [
+   {
+    "kind": "code",
+    "ref": "train.py:24",
+    "quote": "p.add_argument(\"--out\", default=\"out/result.json\")"
+   },
+   {
+    "kind": "code",
+    "ref": "train.py:106",
+    "quote": "os.makedirs(os.path.dirname(a.out) or \".\", exist_ok=True)"
+   }
+  ],
+  "prior_score": 0.05,
+  "status": "unstated",
+  "affects_claims": []
+ }
+]
