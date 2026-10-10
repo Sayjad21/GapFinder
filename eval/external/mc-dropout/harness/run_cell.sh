@@ -15,6 +15,18 @@
 # tau grid differs per dataset (Concrete's is 0.025 0.05 0.075), so tau_values_<dir> overrides
 # tau_values for that dataset.
 #
+# Noise between repeats (RUN_TAG): the repo seeds everything, so the same settings on the same splits
+# are bit-identical. GapFinder gives every run a fresh RUN_TAG, and the cell turns it into the splits:
+# the tag seeds a draw of n_splits distinct splits out of the dataset's available splits (sampling
+# without replacement, a small LCG in bash so it is the same on every machine), and the drawn splits
+# are used as splits 0..n_splits-1. Repeats of one configuration therefore see different data
+# splits, as across real reruns (the same idea as rlbench's RUN_TAG seeding). The draw is
+# deterministic per tag; two tags may share some splits but rarely draw the same set. With RUN_TAG
+# unset the run uses splits 0..n_splits-1 as before. The draw is not a knob. split_offset=<k>
+# (development only) overrides it with splits k, k+1, ...; the splits used are printed as
+# splits_used=. `print_splits=1 [n_splits=..] [total_splits=20]` prints the draw for the current
+# RUN_TAG and exits (used by tests).
+#
 # With several datasets they run in parallel (one process each) and every metric is prefixed
 # with the dataset name: yacht_rmse=..., energy_rmse=... With one dataset there is no prefix.
 #
@@ -25,6 +37,29 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 for kv in "$@"; do declare "${kv%%=*}=${kv#*=}"; done
+
+# split_sample <tag> <n_splits> <total_splits>: n distinct split indices out of 0..total-1, drawn
+# without replacement (partial Fisher-Yates) from an LCG seeded by the tag; space-separated.
+split_sample() {
+  local tag=$1 n=$2 total=$3 h i j t x
+  local -a pool
+  [ "$n" -le "$total" ] || n=$total
+  h=$(printf %s "$tag" | cksum | cut -d' ' -f1)  # POSIX CRC of the whole tag: same everywhere
+  for ((i = 0; i < total; i++)); do pool[i]=$i; done
+  x=$(( (h % 2147483648) * 7 + 12345 ))
+  for ((i = 0; i < 4; i++)); do x=$(( (x * 1103515245 + 12345) % 2147483648 )); done  # warm-up
+  for ((i = 0; i < n; i++)); do
+    x=$(( (x * 1103515245 + 12345) % 2147483648 ))
+    j=$(( i + (x >> 8) % (total - i) ))
+    t=${pool[i]}; pool[i]=${pool[j]}; pool[j]=$t
+  done
+  echo "${pool[@]:0:n}"
+}
+if [ -n "${print_splits:-}" ]; then
+  split_sample "${RUN_TAG:-}" "${n_splits:-3}" "${total_splits:-20}"
+  exit 0
+fi
+
 : "${dir:?dir=<dataset>[,<dataset>...] is required, e.g. dir=yacht}"
 : "${epochx:=500}" "${hidden:=2}"
 mkdir -p out    # an empty results/ folder is dropped by uploads, so results/ is made below too
@@ -69,19 +104,28 @@ run_one() {
   [ -n "${dropout_rates:-}" ] && echo "${dropout_rates//,/$'\n'}" > "$data/dropout_rates.txt"
   [ -n "$tau" ] && echo "${tau//,/$'\n'}" > "$data/tau_values.txt"
 
-  # split_offset=k (development only, not a GapFinder knob): use the repo's splits k, k+1, ... as
-  # splits 0, 1, ... by renaming the index files, so repeats can use disjoint splits. The
-  # repo seeds everything, so repeating the same splits gives the identical result.
-  if [ "${split_offset:-0}" -gt 0 ]; then
-    local nsp=$(( ${n_splits:-$(cat "$data/n_splits.txt")} )) i kind
-    mkdir -p "out/splits_$d"
-    for i in $(seq 0 $((nsp - 1))); do
-      for kind in train test; do
-        cp "$data/index_${kind}_$((i + split_offset)).txt" "out/splits_$d/index_${kind}_$i.txt"
-      done
-    done
-    cp "out/splits_$d"/index_*.txt "$data/"
+  # Splits: the chosen split indices become splits 0, 1, ... by renaming the index files. The
+  # choice is split_offset=k when given (development only: k, k+1, ...), else the RUN_TAG's draw
+  # of n_splits distinct splits (see the header), else 0, 1, ... The repo seeds everything, so
+  # the same splits give the identical result; different draws are how repeats differ. Not a knob.
+  local nsp=$(( ${n_splits:-$(cat "$data/n_splits.txt")} )) i kind
+  local -a chosen=()
+  if [ -n "${split_offset:-}" ]; then
+    for ((i = 0; i < nsp; i++)); do chosen+=($((i + split_offset))); done
+  elif [ -n "${RUN_TAG:-}" ]; then
+    local idx=("$data"/index_train_*.txt)
+    read -ra chosen <<< "$(split_sample "$RUN_TAG" "$nsp" "${#idx[@]}")"
+  else
+    for ((i = 0; i < nsp; i++)); do chosen+=("$i"); done
   fi
+  mkdir -p "out/splits_$d"
+  for ((i = 0; i < nsp; i++)); do
+    for kind in train test; do
+      cp "$data/index_${kind}_${chosen[i]}.txt" "out/splits_$d/index_${kind}_$i.txt"
+    done
+  done
+  cp "out/splits_$d"/index_*.txt "$data/"
+  local splits_used="${chosen[*]}"; splits_used=${splits_used// /,}
 
   local start status wall cpu suffix
   start=$(date +%s)
@@ -114,6 +158,7 @@ run_one() {
   echo "${p}ll_sd=$ll_sd"
   echo "${p}mean_tau=$mean_tau"
   echo "${p}splits_done=$n"
+  echo "${p}splits_used=$splits_used"
   echo "${p}wall_s=$wall"
   echo "${p}cpu_s=$cpu"
 }

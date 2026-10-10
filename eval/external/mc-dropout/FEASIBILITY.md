@@ -85,7 +85,9 @@ one `key=value` line per metric (`rmse` = MC-dropout RMSE, `rmse_single`, `ll`, 
 | Concrete | 91-92 min | 5,390-5,440 |
 
   One default cell with all three datasets is therefore about 3.6 CPU-hours (about 1.5 h wall with
-  the datasets in parallel). Cost scales with `epochx`: at `epochx` 10 it should be a few minutes.
+  the datasets in parallel). The search runs **Energy and Yacht only** (see Scope below): one default
+  cell of those two is about 2.0 CPU-hours (7,150-7,700 CPU-s) and about 85 min wall (Energy is the
+  longer one, both in parallel). Cost scales with `epochx`: at a small `epochx` a cell takes minutes.
 
 **Gap check** (defaults only, `T = 100`, 3 repeats of 3 splits each on disjoint splits, grid search
 as in the repo; MC-dropout test RMSE; raw files in [gapcheck/](gapcheck/), summary by
@@ -109,9 +111,14 @@ Reading it honestly:
   so by the strict rule "gap larger than the 3-repeat noise" it does not pass; it is moderate.
 - The paper's own spread is large (listed "+-" is a standard deviation over 20 splits: 0.38, 0.19,
   0.53), and we use 9 splits.
-- **Consequence for the targets** (Step 4): use **Energy RMSE** as the headline target claim.
-  Yacht and Concrete RMSE are held-out claims whose gap should shrink, not grow, under the true
-  cause. Yacht alone, the TODO's earlier suggestion, would be a weak target.
+- **Consequence for the targets** (Step 4): use **Energy RMSE** as the headline target claim and
+  **Yacht RMSE** as the held-out claim, whose gap should shrink, not grow, under the true cause.
+  Yacht alone, the TODO's earlier suggestion, would be a weak target.
+- **Scope: Concrete is not searched.** Its default-vs-paper gap was not above the repeat noise (1.6
+  times the sd between repeats, so it fails the strict rule above), and it is the most expensive
+  dataset (about 91 min and 5,400 CPU-s per 3-split repeat). It stays in the gap-check table, and the
+  `dir` knob and the Concrete tau knob stay in the spec, so it can be run by hand. The spec's `dir`
+  default is `energy,yacht`, and `targets_mcd.json` has no Concrete claim.
 - Not measured, because it would leak: that the paper setting moves these metrics toward the
   paper. The answer key's re-run (Step 5) is where that is confirmed.
 
@@ -119,20 +126,35 @@ Seeds: no seed flag exists. `np.random.seed(1)` is fixed in `experiment.py`, so 
 cannot be tried without a code edit; disjoint splits are the available noise source.
 
 **Go / no-go for running the GapFinder search locally in Docker: go, with conditions.**
-- Cost per run is time on this machine, not money. A default-like cell (all three datasets,
-  `epochx` 500) takes about 1.5 h wall and 3.6 CPU-hours; hypotheses with lower `epochx` are far
-  cheaper. A search of 15-25 runs will take on the order of 10-20 hours of CPU if several
-  hypotheses keep `epochx` at 500 (for example `hidden` alone), and well under that if the screen
-  tries small `epochx` first. Cap the concurrency at the core count divided by three (each cell
-  runs its three datasets in parallel): `GF_MAX_CONCURRENCY=3` on 12 cores. Set the run `timeout`
-  at 4 hours (the draft spec has it).
+- Cost per run is time on this machine, not money. A default-like cell (Energy and Yacht, `epochx`
+  500) takes about 85 min wall and 2.0 CPU-hours; cells with a lower `epochx` are far cheaper.
+  - **Calibration:** the search starts with 5 naive cells for the noise band, about 10 CPU-hours.
+    With `GF_MAX_CONCURRENCY=6` all 5 run at once on 12 cores (each cell runs its two datasets in
+    parallel, so two cores): about 1.5 h wall.
+  - **Search:** each hypothesis cell costs 2.0 CPU-hours if it keeps `epochx` at 500 (for example
+    `hidden` alone), and minutes if it lowers it. Estimate per arm: 40 branch runs, of which half
+    at the full cost, is about 40-50 CPU-hours in total, so about 4-5 h wall when 6 cells run in
+    parallel. These are estimates from the gap-check timings, not measurements.
+  - **Suggested settings (12 cores):** `GF_MAX_CONCURRENCY=6` (the core count divided by the two
+    datasets per cell) and `--max-runs 40` (5 of them are the calibration). Set the run `timeout` at
+    4 hours (the spec has it). Four arms at that size take about a day of machine time.
 - If that is too slow, lower `n_splits` (the knob `max` and default can drop to 2), reported as a
   further scaling.
-- Noise: the baseline cell is deterministic, so GapFinder's noise band must come from another
-  source. The usual rule for knob-only experiments has no stochastic repeat here; use the
-  disjoint-split repeats (this folder's `split_offset`, which would have to be exposed as a knob,
-  or a per-cell noise estimate from the gap check: Energy 0.003, Yacht 0.019, Concrete 0.52 for
-  the repeat sd). That decision belongs to Step 3 (freeze), before the run.
+- Noise (decided before the freeze): the baseline cell is deterministic on fixed splits, so repeats
+  of one configuration must vary the data splits, as across real reruns (the same idea as rlbench's
+  `RUN_TAG` seeding). `harness/run_cell.sh` seeds a draw from `RUN_TAG`, which the orchestrator sets
+  fresh for every run: `n_splits` distinct splits sampled without replacement out of the dataset's
+  20 (a small LCG in bash seeded by the tag's CRC, so the draw is the same on every machine and
+  inside the container), used as splits 0..n_splits-1. The draw is deterministic per tag; two
+  repeats may share some splits but rarely draw the same set (1,140 possible sets at the default 3).
+  With `RUN_TAG` unset the cell behaves as before (splits 0..n_splits-1). The draw is not a knob and
+  is not in the knob list; the cell prints it as `splits_used=` for the record. The
+  development-only `split_offset=<k>` argument (splits k, k+1, ...) still overrides it. Because the
+  noise band now comes from split-to-split variation, it is wider on Yacht (0.019 between 3-split
+  repeats in the gap check) than on Energy (0.003); that is the intended behaviour, not a bug.
+  Checked by `tests/unit/test_mcd_harness.py`. Rebuild the image
+  after any change to `run_cell.sh` (`COPY` bakes it in): `docker build -t gf-mcdropout -f
+  docker/Dockerfile .` from this folder.
 - The engine's `LocalBackend` can now run commands in the image (below); a full search still needs
   a short dry run on `--max-runs 2` first.
 
@@ -145,8 +167,44 @@ for any local run. The draft spec [mcd.yaml](mcd.yaml) uses `base: docker:gf-mcd
 Verified with a throwaway script (the spec's build stage and one `run_cell.sh` cell through the
 backend gave the same numbers as the plain container) and by `tests/integration/test_local_docker.py`
 (skipped when the image is absent). Limits: each run starts a cold container, so Theano recompiles
-(not measured separately; check it in the dry run); a cell with `dir=yacht,energy,concrete` uses three cores, so the engine's
-concurrency must be capped; the spec's `base` is not valid for `--backend contree`.
+(about 20 s, see the dry run); a cell with `dir=energy,yacht` uses two cores, so the engine's
+concurrency must be capped (`GF_MAX_CONCURRENCY=6` on 12 cores); the spec's `base` is not valid for `--backend contree`.
+
+## Dry run of the plumbing (2026-10-10, no models, no GapFinder search)
+
+Inputs were hand-written (one `n_splits` assumption, one claim, one target) in a temp folder, with
+`GF_CACHE_ONLY=1`; the spec was a temp copy of [mcd.yaml](mcd.yaml) with reduced defaults
+(`dir=yacht,energy`, `epochx=1`, `n_splits=2`; `hidden` stayed at 2). Nothing from it is a result.
+The image was rebuilt after each change to `run_cell.sh`; the last rebuild was for the sampling
+scheme, and the freeze record holds the final image id.
+- **Spec and base load.** `gapfinder search --spec ... --backend local --max-runs 1` loads the spec and
+  the `docker:gf-mcdropout` base, then stops: the search always starts with 5 naive runs for the noise
+  band (`noise_repeats=5`, at least 3 must succeed), so `--max-runs` must be at least 5 plus the
+  search itself (`RunBudgetExceeded: ... wanted 5 more run(s) of naive`). At the real defaults (Energy
+  and Yacht) the 5 naive cells alone are about 10 CPU-hours (5 x 2.0); size `--max-runs` and the time
+  budget with that in mind.
+- **Naive cells through the orchestrator** (`gapfinder fanout --noise 0 --knobs '[{}, {}]'`, two
+  naive branches): the build-stage patch ran, both branches succeeded, and `yacht_rmse`, `energy_rmse`
+  and the `_ll` metrics parsed. Two branches in parallel took 88 s in total (checkpoint copy about
+  2 s; each cell about 81 s for 2 datasets x 2 splits at `epochx` 1). The extra keys the cell prints
+  (`splits_used`, `wall_s`, ...) are not in `metrics:` and not numeric, so they are not parsed.
+- **RUN_TAG gives different splits.** Re-run after the switch to sampling: the two branches had tags
+  `bd91f802c5e7` and `49d32e92b9e2` and different numbers (yacht RMSE 8.711 and 8.701, energy RMSE
+  2.742 and 2.725). The draw for tag `a01d7d9b2288` at 3 splits is 19, 0, 15 both on the host's bash
+  and inside the container.
+- **Cold-container Theano compile cost: about 20 s.** The same cell twice in one container
+  (yacht, 2 splits, `epochx` 1): 40 s cold, 19 s warm. Every orchestrator run starts a cold
+  container, so each cell pays this once; it is small against cells that train for minutes. The image
+  was rebuilt from the changed `run_cell.sh`; rebuild it before the freeze (`scripts/freeze_record.py`
+  records the image id).
+
+**Hypothesis arms.** The "all flags, random" arm (`--hypotheses repomap`) builds candidate values from
+factors of 2, 5 and 10 around each knob's default, interleaved (/2, x2, /5, x5, /10, x10); integers
+stay integers and at least 1. `n_epochs`, `n_hidden`, `dropout_rates` and `tau_values_*` default to
+the literal "default" and `dir` is a list, so they get no generated values and are left out (the
+command prints which). The screen tries the first `--candidates-per-knob` values (default 2, recorded
+for every arm in FROZEN.md) per knob, in that order. The random arm's generated values are generic
+multiples of each default; values outside that grid are not reachable by it.
 
 ## The earlier attempt in Sandboxes
 

@@ -187,15 +187,27 @@ async def cmd_search(args) -> int:
 
     spec = HarnessSpec.load_yaml(args.spec)
     targets = [Target(**t) for t in json.loads(Path(args.targets).read_text())]
-    raw = json.loads(Path(args.assumptions).read_text())
-    assumptions = [Assumption(**a) for a in (raw["assumptions"] if isinstance(raw, dict) else raw)]
+    if args.hypotheses == "repomap":  # no ledger: every spec knob, uniform priors, no paper values or evidence
+        from gapfinder.search.hypotheses import assumptions_from_spec
+
+        assumptions, skipped = assumptions_from_spec(spec)
+        raw = [a.model_dump() for a in assumptions]
+        print(f"hypotheses from the repo map: {len(assumptions)} knobs"
+              + (f"; no candidate values for {', '.join(skipped)}" if skipped else ""))
+    else:
+        if not args.assumptions:
+            print("search needs --assumptions (or --hypotheses repomap)", file=sys.stderr)
+            return 2
+        raw = json.loads(Path(args.assumptions).read_text())
+        assumptions = [Assumption(**a) for a in (raw["assumptions"] if isinstance(raw, dict) else raw)]
     run_dir = Path(args.out or settings().runs_dir / f"search-{spec.name}-{time.strftime('%Y%m%d-%H%M%S')}")
     events = EventLog(run_dir / "events.jsonl")
     orch = Orchestrator(make_backend(args.backend), spec, events, cost=CostMeter(cap_usd=args.cap),
                         concurrency=args.concurrency, no_fork=args.no_fork)
     _adopt(orch, args.adopt)
     events.emit("run_started", spec=spec.model_dump(), mode="search", no_fork=args.no_fork,
-                evidence_gate=not args.no_evidence_gate, rank=args.rank, seed=args.seed)
+                evidence_gate=not args.no_evidence_gate, rank=args.rank, seed=args.seed,
+                hypotheses=args.hypotheses)
     evidence = None
     if args.evidence_anchor and not args.no_evidence_gate:  # web evidence for values the paper and code don't back (Tavily)
         from gapfinder.search.evidence import EvidenceSearch
@@ -208,6 +220,7 @@ async def cmd_search(args) -> int:
         raw_c = json.loads(Path(args.claims).read_text())
         ledger_claims = [Claim(**c) for c in (raw_c["claims"] if isinstance(raw_c, dict) else raw_c)]
     search = GapSearch(orch, targets, assumptions, SearchConfig(max_runs=args.max_runs, screen_repeats=args.screen_repeats,
+                                                              candidates_per_knob=args.candidates_per_knob,
                                                               noise_setups=args.noise_setups,
                                                               reproduce_tol=args.reproduce_tol,
                                                               evidence_gate=not args.no_evidence_gate,
@@ -299,7 +312,14 @@ def main(argv: list[str] | None = None) -> int:
     ps = sub.add_parser("search", help="explain divergent claims: screen/confirm/combine/bisect/verify (M3)")
     ps.add_argument("--spec", required=True)
     ps.add_argument("--targets", required=True, help="JSON list of {claim_id, metric, paper_value, held_out}")
-    ps.add_argument("--assumptions", required=True, help="assumptions.json from `gapfinder ledger`, or a list")
+    ps.add_argument("--assumptions", help="assumptions.json from `gapfinder ledger`, or a list "
+                                          "(required unless --hypotheses repomap)")
+    ps.add_argument("--hypotheses", choices=("ledger", "repomap"), default="ledger",
+                    help="where hypotheses come from: the ledger's assumption list (default), or every knob of "
+                         "the harness spec with generated candidate values, uniform priors and no paper "
+                         "values (with --rank random: the random arm over all flags)")
+    ps.add_argument("--candidates-per-knob", type=int, default=2,
+                    help="values tried per knob in the screen (default 2)")
     ps.add_argument("--paper", help="paper name for the report title")
     ps.add_argument("--max-runs", type=int, default=None, help="branch-run budget")
     ps.add_argument("--screen-repeats", type=int, default=1, help="runs per hypothesis in the screen round")
