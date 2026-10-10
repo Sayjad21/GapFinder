@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -265,11 +266,12 @@ class ContreeBackend(SandboxBackend):
         from contree_sdk.sdk.exceptions import ContreeError
 
         try:
-            files = None
+            files, dirs = None, [WORK_DIR]
             if ref.startswith("local:"):
                 # a local artifact folder: upload it into /work of a Python image, so the same
                 # harness spec runs on the local backend and in Sandboxes
                 files = _folder_files(Path(ref[6:]))
+                dirs += [f"{WORK_DIR}/{d}" for d in _empty_dirs(Path(ref[6:]))]  # uploads carry files only
                 ref = os.environ.get("GF_CONTREE_LOCAL_IMAGE", "python:3.12-slim")
             if _looks_like_uuid(ref):
                 img = await self.sdk.images.use(ref)
@@ -277,7 +279,8 @@ class ContreeBackend(SandboxBackend):
                 img = await self.sdk.images.oci(ref)
             # make sure the work dir exists in every descendant
             upload = {f"{WORK_DIR}/{k}": v for k, v in (files or {}).items()} or None
-            img = await img.run(shell=f"mkdir -p {WORK_DIR}", disposable=False, files=upload)
+            img = await img.run(shell="mkdir -p " + " ".join(shlex.quote(d) for d in dirs), disposable=False,
+                                files=upload)
             if img.result.cost:
                 budget.record("sandbox", img.result.cost, note="base image setup")
             return str(img.uuid)
@@ -363,6 +366,20 @@ class ContreeBackend(SandboxBackend):
         await img.tag_as(tag)
 
 
+_SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", "out"}
+
+
+def _empty_dirs(root: Path) -> list[str]:
+    """Directories under `root` with no files below them. A file upload can't create them, and an
+    artifact that writes into e.g. results/ fails without them (cost us one wasted sandbox run)."""
+    out = []
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root).as_posix()
+        if p.is_dir() and not any(part in _SKIP_DIRS for part in rel.split("/"))                 and not any(q.is_file() for q in p.rglob("*")):
+            out.append(rel)
+    return out
+
+
 def _folder_files(root: Path, max_bytes: int = 50_000_000) -> dict[str, bytes]:
     """All files under `root` (relative posix paths), skipping VCS/cache dirs; CRLF -> LF for scripts."""
     if not root.is_dir():
@@ -370,7 +387,7 @@ def _folder_files(root: Path, max_bytes: int = 50_000_000) -> dict[str, bytes]:
     out, total = {}, 0
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root).as_posix()
-        if p.is_dir() or any(part in {".git", "__pycache__", ".venv", "node_modules", "out"} for part in rel.split("/")):
+        if p.is_dir() or any(part in _SKIP_DIRS for part in rel.split("/")):
             continue
         data = p.read_bytes()
         if p.suffix in {".sh", ".py", ".yaml", ".yml"}:
