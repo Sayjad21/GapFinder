@@ -18,7 +18,8 @@ GapFinder against a standard coding agent. Every number links to a log in this r
 
 > Status (2026-10-09): runs end to end in Token Factory Sandboxes on a real systems paper
 > (RusKey, Figure 6). GapBench-mini dev set: 4/4 with no false attributions. The held-out
-> test tasks are being written by a teammate who doesn't share them with the developers.
+> test tasks will come from a sealed random generator and an independent AI author, not from the
+> team, and haven't been run yet.
 > Plan: [docs/PLAN.md](docs/PLAN.md) · spikes: [tests/spikes/](tests/spikes/README.md).
 
 ## Results
@@ -106,12 +107,18 @@ already handle.
 
 - CPU only: Sandboxes VMs have 4 vCPUs and 3.9 GB, so GPU papers and the paper's full data scale
   are out of reach.
-- The harness spec (how to build, load and run the artifact, and which knobs exist) is drafted
-  from the repo map but needs a human to confirm it.
+- The harness spec (how to build, load and run the artifact, and which knobs exist) needs a
+  human to confirm it. `gapfinder spec-draft` can draft one and smoke-test it, but we haven't
+  evaluated it live against the hand-written specs yet.
 - Timing metrics are noisy in shared VMs. GapFinder compares ratios measured inside one VM, uses
   noise bands from repeats, and confirms with more repeats when a metric's CV is above 5%.
 - The dev set has 4 tasks, built by the same people who built GapFinder. The test set is the
   real measure, and isn't run yet.
+- GapBench's harder categories (interacting settings, decoys, no supported cause) land mostly on
+  the ML artifact, because the RL artifact's noise is too wide to build those tasks on. The RL
+  tasks mostly cover the simple categories.
+- RL verdicts can flip between runs by design: each run uses its own seeds. That is why the test
+  protocol scores 3 runs per task and reports answer stability, not only the best run.
 - Ledger precision was measured on the paper the prompts were developed on.
 - RusKey ran at 2M keys; the paper used 100M. Settings that only matter at scale can't be
   tested here, and the report lists them as untestable.
@@ -119,28 +126,10 @@ already handle.
   layout each time, and the Figure 6 ratios depend on it. Conclusions drawn from one load
   don't carry over (see [FINDINGS.md](papers/ruskey/FINDINGS.md)).
 
-## Quick start (no credentials needed)
-
-Teammates: see [SETUP.md](SETUP.md) for the full setup, keys and budget rules.
+## Quick start (no keys, free)
 
 ```bash
-uv venv --python 3.11 .venv && uv pip install --python .venv -e ".[dev,baseline]"
-.venv/bin/pytest                                  # unit + local-backend integration tests
-.venv/bin/gapfinder fanout --spec eval/toy/hidden_knob.yaml --knobs eval/toy/knobs.json --backend local
-.venv/bin/gapfinder repomap path/to/any/repo
-```
-
-With credentials in `.env` (see `.env.example`):
-
-```bash
-gapfinder ledger papers/ruskey/ruskey_paper.pdf --repo <path-or-url>
-gapfinder search --spec <paper>.yaml --targets targets.json --assumptions assumptions.json \
-    --claims claim_ledger.json --backend contree --noise-setups 5
-```
-
-## Try it yourself (free, no keys)
-
-```bash
+uv venv --python 3.11 .venv && uv pip install --python .venv -e ".[dev,baseline]"   # once, see SETUP.md
 python scripts/try_it.py                      # dev-ml-threshold, about 20 s
 python scripts/try_it.py --task dev-rl-schedule
 python scripts/try_it.py --list               # the four GapBench dev tasks
@@ -158,11 +147,44 @@ run instead of reaching an API, so it can't spend anything.
 Timed on the development machine (Windows 11, local backend, models replayed from the cache):
 dev-ml-threshold 16 s, dev-ml-normalize 13 s, dev-rl-schedule 22 s, dev-rl-nocause 41 s. We
 haven't timed a fresh clone on another machine yet; the plan's bar is under 15 minutes including
-the install. The two RL tasks train a small agent, so their numbers vary a little from run to
-run, and the verdict on `dev-rl-schedule` can flip between "Paper-artifact inconsistency" and
-"Unexplained" (the committed run in [eval/gapbench/runs/](eval/gapbench/runs/) is one draw).
+the install. The two RL tasks train a small agent with per-run seeds, so their numbers vary a
+little from run to run, and the verdict on `dev-rl-schedule` can flip between "Paper-artifact
+inconsistency" and "Unexplained" (the committed run in [eval/gapbench/runs/](eval/gapbench/runs/)
+is one draw).
 
-**Why option B** (TODO P1-4: A is replay only, B runs locally from cached answers, C is hosted
+For development and tests (also free; SETUP.md has the Windows notes):
+
+```bash
+.venv/bin/pytest                                  # unit + local-backend integration tests
+.venv/bin/gapfinder fanout --spec eval/toy/hidden_knob.yaml --knobs eval/toy/knobs.json --backend local
+.venv/bin/gapfinder repomap path/to/any/repo
+```
+
+## With credentials
+
+Put the keys in `.env` (see `.env.example` and SETUP.md for the budget rules). Then:
+
+```bash
+gapfinder ledger papers/ruskey/ruskey_paper.pdf --repo <path-or-url>
+gapfinder search --spec <paper>.yaml --targets targets.json --assumptions assumptions.json \
+    --claims claim_ledger.json --backend contree --noise-setups 5
+gapfinder spec-draft <repo> --out draft.yaml      # draft a harness spec and smoke-test it
+```
+
+A few `search` flags, all optional:
+- `--rank random --seed N`: the random-search arm. It tries the hypotheses in shuffled order, with
+  no ledger ranking, to test whether the ranking helps.
+- `--no-evidence-gate`: an ablation that skips the evidence step. A value that closes the gap is
+  then at most "Fits but unsupported".
+- `--missing-sentence` (also the `missing-sentence` subcommand): after a finished run, drafts the
+  methods sentence the paper was missing for confirmed causes, plus a polite issue draft. It's a
+  file only, never posted, costs a few Super calls and is off by default.
+- `--reproduce-tol`: a claim is called Reproduced only if its noise band is within this fraction
+  of the paper value (default 10%); otherwise it is Inconclusive.
+
+## Why the quick start runs locally
+
+**Option B** (TODO P1-4: A is replay only, B runs locally from cached answers, C is hosted
 live mode). A already exists and can't let anyone start anything. C needs paid hosting, an access
 code and a kill switch, and would put the $50 credit at risk. B lets a judge run the actual
 pipeline on a task in seconds, costs nothing, and shows the same search and verdicts the replay

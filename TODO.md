@@ -121,8 +121,9 @@ Before anyone runs anything that touches Sandboxes or spends Nemotron credit:
 
 ### Git and honesty rules
 
-- **Commit identity:** `sayjad <2105021@cse.buet.ac.bd>`. Commit after each piece of progress,
-  with a message that says what changed and why.
+- **Commit identity:** `sayjad <2105021@cse.buet.ac.bd>`. The current developer commits under
+  their own identity (NawrizTurjo). Commit after each piece of progress, with a message that
+  says what changed and why.
 - **No AI-assistant attribution anywhere:** no co-author lines, no tool names in commit messages,
   code comments or pushed files. Before each commit, check that the staged diff contains no keys,
   no project ID, no `.env`, and no assistant attribution.
@@ -309,7 +310,22 @@ when re-run.
 - Risks: about 15-25 min per run on 4 CPUs (unverified); the 92.6% may not reappear with
   multi-threaded word2vec; the shuffle is a script line, not a flag.
 
-### Status: feasibility done, **blocked on S's decision**
+### Status: decided (local Docker, scaled), Steps 1-2 done, freeze next
+
+**Decision made:** option 2 below (local Docker), scaled like option 1: `T = 100` and 3-split
+blocks. The status is no longer "blocked". Done so far:
+- **Step 1:** go verdict in [FEASIBILITY.md](eval/external/mc-dropout/FEASIBILITY.md) (pinned
+  image, timings, the gap seen).
+- **Step 2:** answer key sealed; only its hash is in the repo (`eval/external/mc-dropout/answer_key.sha256`).
+- **Targets:** Energy RMSE is the target claim. Yacht and Concrete are held out: Yacht alone was
+  too weak (a gap of about 2 s.e.).
+- **Code:** `evidence_gate` and `--no-evidence-gate` are done (commit "Search ablations: evidence-gate switch, random-search arm, fair baseline input").
+- **Extra changes GapFinder can't test, recorded in FEASIBILITY.md:** grid search instead of
+  Bayesian optimisation, and `batch_size` 128 instead of the paper's 32.
+
+Still to do: Step 3 (the freeze tag) onward.
+
+The text below is the original Sandboxes finding, kept as history.
 
 Results are in [eval/external/mc-dropout/FEASIBILITY.md](eval/external/mc-dropout/FEASIBILITY.md).
 - **Works:**
@@ -325,7 +341,7 @@ Results are in [eval/external/mc-dropout/FEASIBILITY.md](eval/external/mc-dropou
 - **Lost:** $6.58 of reported time, on a run that crashed because our upload dropped the empty
   `results/` folder. That bug is fixed (`_empty_dirs` in `gapfinder/sandbox/backend.py`).
 
-**Decision for S.** Options, with the recommended one first:
+**Decision for S (made: option 2, scaled).** Options, with the recommended one first:
 1. **Recommended: a scaled run.**
    - Use `T = 100` Monte Carlo samples instead of 10,000, and 3-5 splits instead of 20.
    - The harness spec's `build` stage applies one fixed, documented patch before anything runs:
@@ -345,7 +361,7 @@ Results are in [eval/external/mc-dropout/FEASIBILITY.md](eval/external/mc-dropou
 
 Once S decides, continue with Step 1 item 5 (check there is a gap) and then Step 2.
 
-### Step 1: feasibility check on Candidate A (D). Items 1-4 done; see Status above.
+### Step 1: feasibility check on Candidate A (D). **Done**; see Status above and FEASIBILITY.md.
 
 Cost: no Nemotron spend; a few cents of reported (unbilled) sandbox cost. Stop and tell S if any
 check fails.
@@ -382,7 +398,7 @@ check fails.
 6. **Write the result** in `eval/external/mc-dropout/FEASIBILITY.md`: software pins, network yes
    or no, timings, the gap seen, and a go/no-go. Commit it.
 
-### Step 2: seal the answer before running (D writes it, S checks it)
+### Step 2: seal the answer before running (D writes it, S checks it). **Done** (`answer_key.sha256`)
 
 1. Create `eval/external/mc-dropout/answer_key.md` with:
    - the paper's claimed numbers (dataset, metric, value, page);
@@ -490,6 +506,15 @@ past the $60 guard; S must approve and set `GF_SANDBOX_GUARD_USD` (e.g. 75).
 
 ## P0-2. Hidden GapBench test tasks (generator and AI author write them; D runs them)
 
+**Status:** the tooling is done. Real generation is pending, after the freeze tag.
+- Done: `eval/gapbench/gen_tasks.py` (sealed generator, answers outside the task folders);
+  `eval/gapbench/PROTOCOL.md` (pre-registration); the `score.py` upgrades (categories, Wilson
+  intervals, `--answers`, answer stability, results by source); the trust matrix on the
+  Scoreboard; the dev set re-scored as `gapbench_dev_v7.json`.
+- Pending: generating and running the real test tasks. Run `gen_tasks.py` only after the freeze tag.
+- Limitation: RL noise is wide, so the interaction, decoy and no_cause categories land mostly on
+  mlbench. Report that, don't hide it.
+
 **Why:** 4 dev tasks built by our own team can't show generalisation. The hidden tasks are the
 main evaluation. Both sources from section 0 contribute:
 - **8 tasks from the sealed random generator:** unbiased selection;
@@ -549,6 +574,10 @@ mlbench), so describe them as "blind tasks", not as outside papers.
 
 ## P0-3. Noise as a first-class feature
 
+**Status:** items 1, 2, 4 and 6 are done. Item 4: effect sizes with a bootstrap interval are on
+every card. Item 6: forked repeats are too narrow compared with fresh loads on C5b and C3
+(`eval/results/ruskey_fork_comparability.json`). Items 3 and 5 are open.
+
 **Why:** the RusKey finding (identical loads giving different results) shows that a system which
 changes settings until one run matches the paper will fool itself. Already done: noise bands from
 repeats, extra repeats when CV > 5%, `--noise-setups` with the content-addressed reproducibility
@@ -576,7 +605,7 @@ check, and no labels from unconfirmed runs.
 3. **Measure, then decide, whether `noise_setups=3` should be the default** for artifacts with a
    build or load stage. It costs 2 extra setups per search: about $0.5 reported for RusKey, and
    nothing for GapBench, which has no setup stage. Keep it opt-in if the cost isn't justified.
-4. **Report effect sizes with uncertainty** on each card: the candidate − naive difference, its
+4. **Done.** **Report effect sizes with uncertainty** on each card: the candidate − naive difference, its
    interval, and the number of runs.
 5. **Determinism X-ray:** a stage-by-stage version of the setup check.
    - Run each setup stage (build, load) twice from the same parent, and compare the checkpoint
@@ -598,7 +627,7 @@ check, and no labels from unconfirmed runs.
    - Cost: for RusKey, about 2 extra loads plus 4 tiny hashing runs (about $0.6 reported,
      unbilled); free for GapBench, which has no setup stage.
    - Don't claim "no other tool can do this"; say what it does and show it.
-6. **Check that forked runs are comparable.** Measure the naive configuration on a forked
+6. **Done (`papers/ruskey/FINDINGS.md`, "Are forked runs comparable").** **Check that forked runs are comparable.** Measure the naive configuration on a forked
    checkpoint and on a fresh setup (this already exists in the RusKey runs; tabulate it in
    `eval/load_variance.py` output). Forked runs should fall within the across-setup noise band.
    If they don't, forking itself changes results; report that.
@@ -606,6 +635,9 @@ check, and no labels from unconfirmed runs.
 ---
 
 ## P1-0. Minimal human input: GapFinder drafts its own harness spec
+
+**Status:** the code is done (`gapfinder/spec_draft.py`, `gapfinder spec-draft`, tests with a
+scripted fake model). The live evaluation on the three artifacts (item 2) is pending.
 
 **Why:** the Coding and Agentic Engineering track asks for an agent that plans, writes, tests and
 iterates on a real repository with minimal human input. Today a person writes the harness spec
@@ -635,6 +667,10 @@ GapFinder's biggest manual step, and judges will notice it.
 
 ## P1-1. A fair baseline comparison
 
+**Status:** items 2 and 3 are done, plus the evidence-off arm. The random arm is `gapfinder-random`
+(`--rank random`), the evidence-off arm is `gapfinder-noevidence`, and the baseline now gets the
+repo map (documented in `eval/baseline/prompt.md`). Not yet run on the test set.
+
 1. Write down equal budgets in `PROTOCOL.md`: the same model, paper text, repo, sandbox tools,
    run cap, dollar cap, wall-time cap and sealed answer key for every arm.
 2. Give the baseline the same evidence GapFinder gets: paper text plus the repo map output. The
@@ -650,6 +686,11 @@ GapFinder's biggest manual step, and judges will notice it.
    no-verification (`gapfinder-noverify`), random search, and the evidence gate turned off.
 
 ## P1-2. The Gap Report answers five questions at the top of each card
+
+**Status:** done. Five questions per card, the provenance block, effect sizes and the cause kind
+are in the JSON, the Markdown and `Report.jsx`. The missing sentence is done too
+(`--missing-sentence` and the `missing-sentence` subcommand). It is off by default and should be
+enabled only after a confirmed cause on a real paper.
 
 Change both `gapfinder/report/gap_report.py` (Markdown and JSON) and `web/src/Report.jsx`.
 1. **What did the paper report?** The claim's quote and page. The ledger claims are passed to
@@ -707,6 +748,8 @@ Also:
   4. Check https://sayjad21.github.io/GapFinder/ in a logged-out browser.
   - The workflow is `.github/workflows/pages.yml`; its deploy step fails until Pages is enabled,
     which is harmless.
+- **"Try it yourself": option B chosen and done** (`scripts/try_it.py`, `demo/cache/`; README
+  "Try it yourself"). Timing on a fresh machine is still open.
 - **Decide what "try it yourself" means** (an outside reviewer asked that judges be able to give
   it a paper and repo and start an investigation). Pick one and write the choice and the reason
   in the README:
@@ -813,6 +856,14 @@ Re-labelling a finished search from its recorded runs only, without any new run:
   enabled); structured feedback write-up; README with results and platform usage.
 - An "Inconclusive" verdict (`--reproduce-tol`, default ±10%) and a bootstrap test that every
   confirmed effect must pass; GapBench dev v6 is still 4/4 with 0% false attribution.
-- MC Dropout feasibility: the environment works in Sandboxes; cost blocks it (see P0-1 Status).
+- MC Dropout feasibility: the environment works in Sandboxes, but the cost blocked it there.
   Folder uploads now keep empty directories.
 - `docs/PLAN.md` says its numbers are planning targets, not results.
+- MC Dropout: local Docker decided (scaled, `T = 100`), feasibility go, answer key sealed,
+  Energy chosen as the target (see P0-1 Status).
+- GapBench tooling: sealed generator, PROTOCOL.md, category-aware scoring with Wilson intervals,
+  trust matrix, dev v7 (`gapbench_dev_v7.json`); the random-search and evidence-off arms.
+- Gap Report: five questions per card, effect sizes, provenance; the missing-sentence draft (off
+  by default); `gapfinder spec-draft` code.
+- Forked vs fresh-load comparability on RusKey: forked repeats are too narrow (FINDINGS.md).
+- `scripts/try_it.py`: a free, keyless run of a dev task from `demo/cache/`.

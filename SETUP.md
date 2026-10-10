@@ -19,6 +19,9 @@ uv pip install --python .venv -e ".[dev,baseline]"
 Windows: if `uv pip install` fails with `failed to open file ...WHEEL`, set
 `UV_CACHE_DIR` to a fresh folder and `UV_LINK_MODE=copy`, then retry.
 
+Windows: run `pytest` from Git Bash, not from PowerShell or cmd. The integration tests call
+tools from Git's `usr/bin` (for example `head`), which only Git Bash puts on `PATH`.
+
 Check that everything works. No keys needed, and it costs nothing:
 
 ```bash
@@ -29,6 +32,20 @@ Check that everything works. No keys needed, and it costs nothing:
 To see a full investigation without any keys, run `python scripts/try_it.py`. It replays
 recorded model answers from `demo/cache/` and runs the experiments locally (see "Try it
 yourself" in the README).
+
+## Browser (e2e) tests, optional
+
+`pytest -m e2e tests/e2e` drives both sites in a headless browser. Set it up once:
+
+```bash
+uv pip install --python .venv playwright
+.venv/bin/python -m playwright install chromium
+npm --prefix web ci && npm --prefix web run build                  # web/dist, for the API site
+(cd web && VITE_STATIC=1 npx vite build --outDir dist-static)      # the server-free site
+.venv/bin/python scripts/export_static.py web/dist-static/data     # its data files
+```
+
+A test is skipped, not failed, when its build is missing.
 
 ## 2. Get the paper (free)
 
@@ -47,6 +64,12 @@ the keys privately. Never commit them, and don't paste them in issues or chats.
 ```bash
 cp .env.example .env      # then fill in the keys you were given
 ```
+
+Handing over from another machine:
+- Copy the spend-ledger snapshot first, or the guards count from $0:
+  `mkdir -p .gf_cache && cp eval/results/spend_ledger.jsonl .gf_cache/spend.jsonl`.
+- Only one machine does paid or sandbox work at a time. Each machine keeps its own ledger, so
+  they can't see each other's spending. See TODO.md, "Handing over to another machine".
 
 Budget rules:
 - `GF_SPEND_CAP_USD` is a hard cap, but it's **per machine**: each checkout
