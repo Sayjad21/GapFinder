@@ -1,6 +1,7 @@
 """Leakage check: no task may hand agents its answer.
 
     python eval/gapbench/leakage.py            # all tasks; exit 1 on any leak
+    python eval/gapbench/leakage.py --answers eval/gapbench/sealed   # answers kept outside the task folders
 
 For every hidden knob=value of a task, flag:
   * `--knob value`, `knob=value`, `knob: value` or `knob value` anywhere in
@@ -34,8 +35,10 @@ def leaks(text: str, knob: str, value: str, near: bool) -> list[str]:
     return found
 
 
-def check_task(task_dir: Path) -> list[str]:
-    answer = json.loads((task_dir / "answer.json").read_text())
+def check_task(task_dir: Path, answers_dir: Path | None = None) -> list[str]:
+    """`answers_dir` holds <task>/answer.json for tasks whose answers live outside the task folder."""
+    answer_file = (answers_dir / task_dir.name if answers_dir else task_dir) / "answer.json"
+    answer = json.loads(answer_file.read_text(encoding="utf-8"))
     import yaml
 
     task = yaml.safe_load((task_dir / "task.yaml").read_text(encoding="utf-8"))
@@ -53,8 +56,16 @@ def check_task(task_dir: Path) -> list[str]:
 
 
 if __name__ == "__main__":
-    dirs = [Path(a) for a in sys.argv[1:]] or sorted(p for p in (GB / "tasks").iterdir() if (p / "answer.json").exists())
-    all_problems = [p for d in dirs for p in check_task(d)]
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("task_dirs", nargs="*", type=Path)
+    ap.add_argument("--answers", type=Path, help="directory with <task>/answer.json (e.g. eval/gapbench/sealed)")
+    args = ap.parse_args()
+    dirs = args.task_dirs or sorted(
+        p for p in (GB / "tasks").iterdir()
+        if ((args.answers / p.name) if args.answers else p).joinpath("answer.json").exists())
+    all_problems = [p for d in dirs for p in check_task(d, args.answers)]
     for p in all_problems:
         print("LEAK", p)
     print(f"{len(dirs)} tasks checked, {len(all_problems)} leaks")

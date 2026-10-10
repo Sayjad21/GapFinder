@@ -203,7 +203,10 @@ def load_key(task_dir: Path, answers_dir: Path | None = None) -> dict:
 async def score_run(task_dir: Path, run_dir: Path, n: int, answers_dir: Path | None = None) -> dict:
     answer = load_key(task_dir, answers_dir)
     cat = category_of(answer)
-    calib = json.loads((task_dir / "calibration.json").read_text())["metrics"]
+    # generated tasks keep the full calibration (paper values, noise bands) with the sealed answers
+    sealed_calib = answers_dir / task_dir.name / "calibration.json" if answers_dir else None
+    calib = json.loads((sealed_calib if sealed_calib and sealed_calib.exists() else task_dir / "calibration.json")
+                       .read_text())["metrics"]
     targets = {t["claim_id"]: t for t in json.loads((task_dir / "targets.json").read_text())}
     pred = json.loads((run_dir / "prediction.json").read_text())
     claims = {}

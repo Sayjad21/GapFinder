@@ -56,7 +56,8 @@ ARM_CONFIG = {
 
 def load_task(task_dir: Path):
     task = yaml.safe_load((task_dir / "task.yaml").read_text(encoding="utf-8"))
-    spec = HarnessSpec.load_yaml(GB / f"{task['family']}.yaml")
+    # a task may ship its own spec (the generator's "incomplete" tasks hide a knob the family spec exposes)
+    spec = HarnessSpec.load_yaml(task_dir / task["spec"] if task.get("spec") else GB / f"{task['family']}.yaml")
     targets = json.loads((task_dir / "targets.json").read_text())
     paper = task_dir / "paper.md"
     return task, spec, targets, paper
