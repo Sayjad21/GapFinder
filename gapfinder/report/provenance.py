@@ -39,7 +39,8 @@ def prompt_hashes() -> dict[str, str]:
     found = {}
     for module, names in (("gapfinder.ledger.claims", ("CLAIM_PROMPT", "FILTER_PROMPT")),
                           ("gapfinder.ledger.assumptions", ("ASSUMPTION_PROMPT",)),
-                          ("gapfinder.search.triage", ("TRIAGE_PROMPT",))):
+                          ("gapfinder.search.triage", ("TRIAGE_PROMPT",)),
+                          ("gapfinder.report.missing_sentence", ("MISSING_SENTENCE_PROMPT",))):
         try:
             mod = __import__(module, fromlist=list(names))
         except ImportError:

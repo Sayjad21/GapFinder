@@ -5,6 +5,8 @@
     gapfinder fanout --spec spec.yaml --knobs knobs.json [--noise 5] [--no-fork]
     gapfinder search --spec spec.yaml --targets targets.json --assumptions assumptions.json
     gapfinder spec-draft <repo> --out spec.yaml [--paper-ledger runs/ledger] [--compare hand.yaml]
+                     [--missing-sentence --paper paper.pdf]
+    gapfinder missing-sentence <run_dir> --paper paper.pdf
 """
 
 from __future__ import annotations
@@ -225,6 +227,33 @@ async def cmd_search(args) -> int:
     print(f"{search.runs_used} branch runs, {orch.cost.setup_runs} setups, sandbox ${orch.cost.sandbox_usd:.4f}"
           f"{' (PARTIAL)' if report.partial else ''}")
     print(f"report: {md}")
+    if args.missing_sentence:
+        await _missing_sentence(run_dir, args.paper, raw, args.repo)
+    return 0
+
+
+async def _missing_sentence(run_dir: Path, paper_path, assumptions, repo) -> None:
+    """Draft the missing methods sentence for confirmed causes (paid: a few Super calls)."""
+    from gapfinder.ingest.pdf import load_paper
+    from gapfinder.models.router import Router
+    from gapfinder.report.missing_sentence import add_to_run_dir
+
+    if not paper_path or not Path(paper_path).is_file():
+        print("missing sentence: needs the paper file (PDF or text) via --paper; skipped", file=sys.stderr)
+        return
+    items = assumptions["assumptions"] if isinstance(assumptions, dict) else (assumptions or [])
+    meta = await add_to_run_dir(run_dir, load_paper(paper_path), Router(), items, repo)
+    print(f"missing sentence: {meta['drafted']} drafted, {len(meta['skipped'])} skipped, ${meta['cost_usd']:.4f}"
+          f"{'; issue draft: ' + str(run_dir / 'issue_draft.md') if meta['drafted'] else ''}")
+
+
+async def cmd_missing_sentence(args) -> int:
+    run_dir = Path(args.run_dir)
+    if not (run_dir / "gap_report.json").exists():
+        print(f"no gap_report.json in {run_dir}", file=sys.stderr)
+        return 1
+    raw = json.loads(Path(args.assumptions).read_text()) if args.assumptions else None
+    await _missing_sentence(run_dir, args.paper, raw, args.repo)
     return 0
 
 
@@ -290,6 +319,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="hypothesis order: the ledger's priors (default) or the random-search arm "
                          "(shuffled with --seed, no strong-lead skip)")
     ps.add_argument("--seed", type=int, default=0, help="seed for --rank random")
+    ps.add_argument("--missing-sentence", action="store_true",
+                    help="after the report, draft the methods sentence the paper was missing for Explained / "
+                         "Paper-artifact inconsistency cards, plus issue_draft.md (paid, off by default; "
+                         "needs --paper to be the paper file)")
+    ps.add_argument("--repo", help="artifact repository URL, for the issue draft's header only")
     ps.add_argument("--no-fork", action="store_true", help="ablation: rebuild and reload for every branch")
     ps.add_argument("--backend", default=None)
     ps.add_argument("--concurrency", type=int, default=settings().max_concurrency)
@@ -298,10 +332,18 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--adopt", action="append", metavar="STAGE=UUID",
                     help="reuse an existing checkpoint: source=, built=, loaded= (e.g. from spike S3)")
 
+    pm = sub.add_parser("missing-sentence", help="add the drafted missing methods sentence and issue draft "
+                                                 "to a finished run (paid: a few Super calls)")
+    pm.add_argument("run_dir", help="directory holding gap_report.json")
+    pm.add_argument("--paper", required=True, help="the paper file (PDF or .txt/.md)")
+    pm.add_argument("--assumptions", help="assumptions.json from `gapfinder ledger` (adds paper/code values)")
+    pm.add_argument("--repo", help="artifact repository URL, for the issue draft's header only")
+
     args = p.parse_args(argv)
     if args.cmd == "repomap":
         return cmd_repomap(args)
-    coro = {"ledger": cmd_ledger, "fanout": cmd_fanout, "search": cmd_search, "spec-draft": cmd_spec_draft}[args.cmd](args)
+    coro = {"ledger": cmd_ledger, "fanout": cmd_fanout, "search": cmd_search, "spec-draft": cmd_spec_draft,
+            "missing-sentence": cmd_missing_sentence}[args.cmd](args)
     return asyncio.run(coro)
 
 

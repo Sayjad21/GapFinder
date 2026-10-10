@@ -127,6 +127,14 @@ def get_report_md(run_id: str):
     return FileResponse(path, media_type="text/markdown", filename=f"gap_report_{run_id}.md")
 
 
+@app.get("/api/runs/{run_id}/issue_draft.md")
+def get_issue_draft(run_id: str):
+    path = _run_dir(run_id) / "issue_draft.md"
+    if not path.exists():
+        raise HTTPException(404, "no issue draft for this run")
+    return FileResponse(path, media_type="text/markdown", filename=f"issue_draft_{run_id}.md")
+
+
 @app.get("/api/runs/{run_id}/events")
 def get_events(run_id: str) -> list[dict]:
     return _read_events(_run_dir(run_id))

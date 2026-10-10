@@ -33,6 +33,9 @@ def main(out: Path) -> None:
         md = server._run_dir(rid) / "gap_report.md"
         if md.exists():
             shutil.copyfile(md, out / "runs" / rid / "report.md")
+        issue = server._run_dir(rid) / "issue_draft.md"
+        if issue.exists():
+            shutil.copyfile(issue, out / "runs" / rid / "issue_draft.md")
     _write(out / "config.json", {"max_idle_s": server.MAX_IDLE_S, "static": True})
     size = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
     print(f"exported {len(runs)} runs to {out} ({size / 1e6:.1f} MB)")

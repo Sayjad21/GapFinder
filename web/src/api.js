@@ -15,6 +15,7 @@ export const api = STATIC ? {
   scoreboard: () => getJSON("data/scoreboard.json"),
   events: (id) => getJSON(`data/runs/${enc(id)}/events.json`),
   reportMdUrl: (id) => `data/runs/${enc(id)}/report.md`,
+  issueDraftUrl: (id) => `data/runs/${enc(id)}/issue_draft.md`,
   runJsonUrl: (id) => `data/runs/${enc(id)}.json`,
 } : {
   runs: () => getJSON("/api/runs"),
@@ -22,6 +23,7 @@ export const api = STATIC ? {
   scoreboard: () => getJSON("/api/scoreboard"),
   replayUrl: (id, speed) => `/api/runs/${enc(id)}/replay?speed=${speed}`,
   reportMdUrl: (id) => `/api/runs/${enc(id)}/report.md`,
+  issueDraftUrl: (id) => `/api/runs/${enc(id)}/issue_draft.md`,
   runJsonUrl: (id) => `/api/runs/${enc(id)}`,
 };
 

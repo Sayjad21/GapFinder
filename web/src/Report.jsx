@@ -132,6 +132,29 @@ function Unknown({ u }) {
 
 const CAUSE_NAME = { confirmed_cause: "Confirmed cause", plausible_explanation: "Plausible explanation (fits but unsupported)", interacting_factors: "Interacting factors" };
 
+function splitSentences(p) {
+  return p.split(/(?<=[.!?])\s+(?=[A-Z(["'])/).filter(Boolean);
+}
+
+// The paper's own setup paragraph with the model-drafted sentence inserted. Drafted text is
+// marked by an underline and a tag, not by colour alone.
+function MissingSentence({ ms }) {
+  const sents = splitSentences(ms.paragraph);
+  const k = Math.max(0, Math.min(ms.insert_after, sents.length));
+  return (
+    <div className="sub missing-sentence">
+      <h5>The sentence the paper was missing (p.{ms.page})</h5>
+      <p className="small">Setup paragraph from the paper with a sentence drafted by GapFinder (a language model),
+        not written by the authors. Check it before use.</p>
+      <blockquote>
+        {k > 0 && <>{sents.slice(0, k).join(" ")} </>}
+        <ins className="drafted"><span className="draft-tag">drafted by GapFinder</span>{ms.sentence}</ins>
+        {k < sents.length && <> {sents.slice(k).join(" ")}</>}
+      </blockquote>
+    </div>
+  );
+}
+
 function Card({ c }) {
   const a = c.attribution;
   const label = a?.confidence_label || "Reproduced";
@@ -157,6 +180,7 @@ function Card({ c }) {
       <Q q="What did we measure?"><Measured m={c.measured} /></Q>
       <Q q="Why do we believe it?"><Belief b={c.belief} /></Q>
       <Q q="What remains unknown?"><Unknown u={c.unknown} /></Q>
+      {c.missing_sentence && <MissingSentence ms={c.missing_sentence} />}
       {c.notes?.length > 0 && <div className="sub"><h5>Notes</h5><ul>{c.notes.map((n, i) => <li key={i}>{n}</li>)}</ul></div>}
     </article>
   );
@@ -212,6 +236,7 @@ export default function Report({ run }) {
         <p className="small">
           Artifact <code>{r.artifact}</code> · {r.runs} branch runs ({r.setup_runs} build/load setups) · generated {r.generated}
           {" · "}<a href={api.reportMdUrl(run.id)}>Markdown</a> · <a href={api.runJsonUrl(run.id)}>JSON</a>
+          {r.missing_sentence_meta?.drafted > 0 && <>{" · "}<a href={api.issueDraftUrl(run.id)}>Issue draft (not posted)</a></>}
         </p>
         {r.partial && <p className="warn">Partial report: the run or dollar budget ran out before every claim was verified.</p>}
         {r.setup_check && <p className={r.setup_check.reproducible === false ? "warn" : "small"}>Setup check: {r.setup_check.note}.</p>}
