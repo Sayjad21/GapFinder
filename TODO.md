@@ -82,6 +82,25 @@ Before anyone runs anything that touches Sandboxes or spends Nemotron credit:
 **Until items 1-3 are done, run nothing on Sandboxes** (`--backend contree`). Local runs
 (`--backend local`, GapBench, the toy suite, `GF_CACHE_ONLY=1`) are free and fine.
 
+### Handing over to another machine
+
+- **Spend ledger:** the guards (`GF_SPEND_CAP_USD`, `GF_SANDBOX_GUARD_USD`) count from
+  `.gf_cache/spend.jsonl`, which is git-ignored and per machine. On a new machine it starts empty,
+  so the guards would count from $0. Copy the snapshot first:
+  `mkdir -p .gf_cache && cp eval/results/spend_ledger.jsonl .gf_cache/spend.jsonl`.
+- **Only one machine runs paid or sandbox work at a time.** Each machine keeps its own ledger,
+  so they can't see each other's spending; the Nebius console is the only shared source of
+  truth.
+- **Model and web caches** (`.gf_cache/llm/`, `.gf_cache/tavily/`): without them, anything
+  already computed costs money again. They contain no keys. The model cache holds reasoning
+  about RusKey with one-line code quotes, so S decides whether to share them privately or
+  commit them.
+- **Never shared through this repo:** `.gf_cache/ruskey_bin/`, `.gf_cache/ruskey_src.tar.gz`,
+  `.gf_cache/repos/ruskey` (S's private research code), `.gf_cache/papers/` (re-download with
+  `scripts/fetch_paper.py`), and `runs/` (scratch outputs; everything kept is copied into
+  `eval/` or `papers/`).
+- **The MC Dropout feasibility scripts** are in `eval/external/mc-dropout/scripts/`.
+
 ### Money rules (strict)
 
 - **The whole project has about $50 of Token Factory credit, and only Nemotron inference is
