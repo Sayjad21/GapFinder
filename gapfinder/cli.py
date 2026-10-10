@@ -4,6 +4,7 @@
     gapfinder repomap <path>
     gapfinder fanout --spec spec.yaml --knobs knobs.json [--noise 5] [--no-fork]
     gapfinder search --spec spec.yaml --targets targets.json --assumptions assumptions.json
+    gapfinder spec-draft <repo> --out spec.yaml [--paper-ledger runs/ledger] [--compare hand.yaml]
 """
 
 from __future__ import annotations
@@ -83,6 +84,58 @@ def cmd_repomap(args) -> int:
     rm = build_repo_map(args.path)
     print(rm.summary(max_files=args.max_files))
     return 0
+
+
+async def cmd_spec_draft(args) -> int:
+    """Draft a harness spec for a repo, smoke-test it, write the YAML (and a short report)."""
+    import shutil
+    import tempfile
+
+    from gapfinder import spec_draft as sd
+    from gapfinder.ingest.repo_map import build_repo_map, clone_or_path
+
+    if args.diff:
+        print(sd.diff_specs(*args.diff), end="")
+        return 0
+    if not args.repo or not args.out:
+        print("spec-draft needs <repo> and --out (or --diff A B)", file=sys.stderr)
+        return 2
+    if not settings().token_factory_api_key:
+        print("spec-draft needs a model key (TOKEN_FACTORY_API_KEY in .env)", file=sys.stderr)
+        return 2
+    from gapfinder.models.router import Router
+
+    repo_root = clone_or_path(args.repo, settings().cache_dir / "repos")
+    ctx = sd.gather_inputs(build_repo_map(repo_root), paper_ledger=args.paper_ledger)
+    router = Router(use_cache=not args.no_cache)
+    tmp = None
+    if args.backend == "local":
+        from gapfinder.sandbox.backend import LocalBackend
+
+        tmp = tempfile.mkdtemp(prefix="gf-spec-draft-")
+        backend = LocalBackend(tmp)
+    else:
+        from gapfinder.sandbox.backend import make_backend
+
+        backend = make_backend(args.backend)
+    try:
+        result = await sd.draft_spec(router, ctx, backend, max_attempts=args.max_attempts,
+                                     smoke=not args.no_smoke, smoke_timeout=args.smoke_timeout)
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+    out = Path(args.out)
+    written = sd.write_spec(result, out)
+    if written:
+        print(f"wrote {written}")
+    comparison = sd.compare_knobs(result.spec_dict["knobs"], args.compare) if args.compare and result.spec_dict else None
+    print(f"wrote {sd.write_report(result, out, comparison)}")
+    if comparison:
+        print(f"knob recall vs {comparison.hand_name}: {len(comparison.found)}/"
+              f"{len(comparison.found) + len(comparison.missing)}; {len(comparison.extra)} extra")
+    print(f"{'OK' if result.ok else 'NOT VERIFIED'}: {len(result.knobs_found)} knobs, {len(result.attempts)} model "
+          f"call(s), ${result.cost_usd:.4f}" + (f"; {result.gave_up}" if result.gave_up else ""))
+    return 0 if result.ok else 1
 
 
 async def cmd_fanout(args) -> int:
@@ -189,7 +242,20 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("path")
     pr.add_argument("--max-files", type=int, default=200)
 
-    pf = sub.add_parser("fanout", help="fork branches from the loaded checkpoint (M2)")
+    pd = sub.add_parser("spec-draft", help="draft a harness spec for a repo, smoke-test it (P1-0)")
+    pd.add_argument("repo", nargs="?", help="local path or git URL")
+    pd.add_argument("--out", help="where to write the spec YAML (a .md report goes next to it)")
+    pd.add_argument("--paper-ledger", help="a `gapfinder ledger` output dir: adds the paper's setup values")
+    pd.add_argument("--backend", default="local", help="local | contree (smoke test; default local)")
+    pd.add_argument("--max-attempts", type=int, default=3, help="drafts that get a smoke test")
+    pd.add_argument("--no-smoke", action="store_true", help="validate the draft only, no build/run")
+    pd.add_argument("--smoke-timeout", type=float, default=900, help="cap in seconds on each smoke-test stage")
+    pd.add_argument("--compare", metavar="HAND.yaml", help="hand-written spec: report knob recall against it")
+    pd.add_argument("--diff", nargs=2, metavar=("DRAFT.yaml", "EDITED.yaml"),
+                    help="print what a person changed in a drafted spec (no model call)")
+    pd.add_argument("--no-cache", action="store_true")
+
+    pf = sub.add_parser("fanout",help="fork branches from the loaded checkpoint (M2)")
     pf.add_argument("--spec", required=True)
     pf.add_argument("--knobs", help="JSON list of {knob: value} change sets")
     pf.add_argument("--noise", type=int, default=5, help="identical forks for the noise band (0 = skip)")
@@ -235,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     if args.cmd == "repomap":
         return cmd_repomap(args)
-    coro = {"ledger": cmd_ledger, "fanout": cmd_fanout, "search": cmd_search}[args.cmd](args)
+    coro = {"ledger": cmd_ledger, "fanout": cmd_fanout, "search": cmd_search, "spec-draft": cmd_spec_draft}[args.cmd](args)
     return asyncio.run(coro)
 
 
