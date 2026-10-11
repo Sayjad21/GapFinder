@@ -37,6 +37,15 @@ async def test_runs_in_the_image_and_keeps_files_between_runs(tmp_path):
     assert second.stdout.split() == ["kept"]  # env is per run; files persist in the checkpoint
 
 
+async def test_containers_get_one_blas_thread_unless_the_run_says_otherwise(tmp_path):
+    be = LocalBackend(tmp_path / "sbx")
+    src = await be.base(f"docker:{IMAGE}")
+    default = await be.run(src, "echo $OPENBLAS_NUM_THREADS $OMP_NUM_THREADS $MKL_NUM_THREADS", disposable=True)
+    assert default.stdout.split() == ["1", "1", "1"]
+    own = await be.run(src, "echo $OPENBLAS_NUM_THREADS", env={"OPENBLAS_NUM_THREADS": "3"}, disposable=True)
+    assert own.stdout.split() == ["3"]
+
+
 async def test_timeout_kills_the_container(tmp_path):
     be = LocalBackend(tmp_path / "sbx")
     src = await be.base(f"docker:{IMAGE}")

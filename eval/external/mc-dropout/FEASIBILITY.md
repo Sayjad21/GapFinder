@@ -89,6 +89,14 @@ one `key=value` line per metric (`rmse` = MC-dropout RMSE, `rmse_single`, `ll`, 
   cell of those two is about 2.0 CPU-hours (7,150-7,700 CPU-s) and about 85 min wall (Energy is the
   longer one, both in parallel). Cost scales with `epochx`: at a small `epochx` a cell takes minutes.
 
+  **Correction (Deviation 1, see [FROZEN.md](FROZEN.md)).** These timings came from plain
+  `docker run`, and the same cell through the GapFinder local backend with 6 cells at once never
+  finished inside the 14,400 s timeout: the image's OpenBLAS starts one thread per visible core,
+  and 12 processes with 12 spinning threads each made every cell about 7.5 times slower. The
+  backend now gives each container one BLAS thread; with that, 6 full default cells at once each
+  finished in 52-53 min (energy+yacht, `epochx=500`, 3 splits). Use `GF_MAX_CONCURRENCY=6`. When
+  running a cell by hand, add `-e OPENBLAS_NUM_THREADS=1` to `docker run`.
+
 **Gap check** (defaults only, `T = 100`, 3 repeats of 3 splits each on disjoint splits, grid search
 as in the repo; MC-dropout test RMSE; raw files in [gapcheck/](gapcheck/), summary by
 `gapcheck/summarize.py`). The documented paper setting (`--epochx 10 --hidden 1`) and every other

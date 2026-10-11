@@ -75,3 +75,35 @@ gapfinder ledger <paper.pdf> --repo <clone> --out runs/mcd-ledger
 python scripts/strip_docs.py <clone> <clone>-nodocs
 gapfinder ledger <paper.pdf> --repo <clone>-nodocs --out runs/mcd-ledger-nodocs
 ```
+
+## Deviation 1 (execution fix)
+
+Everything above is the frozen record and is unchanged. This section was added afterwards, before any search had produced a result, under the rule above ("if something blocks a run, fix only that, and describe the fix").
+
+**What failed.** All four arms stopped in calibration. In each arm the five naive cells (`bash run_cell.sh dir=energy,yacht epochx=500 hidden=2 n_splits=3 ...`) hit the 14,400 s run timeout (exit 124), so calibration raised "naive configuration failed: only 0 successful runs". That is 20 cells (4 arms x 5), each cut off at 14,400 s, with no result from any of them. No search ran, no hypothesis was tested, and no model call was billed ($0 spent on searches). It happened with `GF_MAX_CONCURRENCY=6` and also when the machine was otherwise idle (arms 2 to 4).
+
+**Measured cause: BLAS thread oversubscription, not Docker I/O.** The image's numpy (1.13.3, OpenBLAS wheel) starts one OpenBLAS thread per core the container can see, and Docker Desktop shows every container all 12 cores. The networks here are tiny (50 units, batches of 128), so those threads do almost no useful work but spin and fight for cores. A full cell runs two `experiment.py` processes (energy, yacht), and the search runs 6 cells at once, so 12 processes, each with up to 12 spinning threads, shared 12 cores. Measurements on this machine (12 CPUs), same settings within each row, otherwise idle unless stated:
+
+| Run | Default threads | `OPENBLAS_NUM_THREADS=1` |
+|---|---|---|
+| plain `docker run`, yacht, epochx=2, n_splits=1 | 41 s wall, 158.8 CPU-s | 32 s wall, 31.4 CPU-s |
+| plain `docker run`, energy, epochx=20, n_splits=1 | 105 s wall, 932 CPU-s | 50 s wall, 49.8 CPU-s |
+| same, checkpoint bind-mounted from a Windows path as LocalBackend does | 41 s (yacht, epochx=2) | 51 s (energy, epochx=20) |
+| through LocalBackend (`fanout`), energy+yacht, epochx=20, n_splits=1, one cell | 88 s | not run separately |
+| through LocalBackend, 6 such cells at once | 656-670 s each | 91-99 s each |
+
+- The bind mount is not the cause: the cell writes a few KB of result files under `/work` (one line per grid step, no per-epoch logging), and bind-mounted and plain runs took the same time (41 s vs 41 s at default threads; 51 s vs 50 s at one thread).
+- Theano's compile cache lives in the container's own `/root/.theano`, so every `--rm` container compiles from cold (about 20 s once per cell), which is a fixed cost, not the cause.
+- Contention is the cause: 6 cells at once (12 processes on 12 cores) were each 7.5 times slower than one cell alone at default threads (660 s vs 88 s), although 12 single-threaded processes fit on 12 cores. With one thread per container the same 6 cells ran about as fast as one cell alone (91-99 s vs 88 s).
+
+**The fix (infrastructure only).** `gapfinder/sandbox/backend.py`: `LocalBackend` now passes `OPENBLAS_NUM_THREADS=1`, `OMP_NUM_THREADS=1` and `MKL_NUM_THREADS=1` to every Docker container it starts, unless the run sets its own value (`DOCKER_THREAD_ENV`, merged under the run's env). The non-Docker LocalBackend path is unchanged. A test (`tests/integration/test_local_docker.py`) checks that the container sees `1 1 1` by default and that a run's own env value wins. The full test suite passes (237 tests).
+
+**Files and hashes.** `mcd.yaml`, `harness/run_cell.sh` and `docker/Dockerfile` are unchanged, with the same sha256 as in the table above (re-checked: `148c480a...`, `28cdc6c8...`, `9d7612f9...`). The Docker image is not rebuilt: it is still `sha256:7206df29c1c85795d6b003548e1191f21371097bbe44740c274e5eff8deb9ee0`. The only changed code is the LocalBackend change above, which is outside the frozen file list.
+
+**Proof at full size.** The exact default cell (`bash run_cell.sh dir=energy,yacht epochx=500 hidden=2 n_splits=3 ...`, the real `mcd.yaml`), 6 of them concurrently through LocalBackend (`gapfinder fanout --spec mcd.yaml --knobs <6 empty change sets> --noise 0 --backend local --concurrency 6`, `GF_CACHE_ONLY=1`), all finished with exit 0 in **3,127 to 3,171 s (52 to 53 min)** each, 3,176 s for the whole fan-out, against the 14,400 s timeout (4.5x headroom). Before the fix the same cell did not finish in 14,400 s.
+
+**Recommended settings.** Keep `GF_MAX_CONCURRENCY=6` (6 cells x 2 datasets = 12 processes on 12 cores; more concurrency adds no throughput, it only lengthens each cell proportionally). Keep the 14,400 s timeout: it is enough with 4.5x headroom at that concurrency (it would still be enough at concurrency 12, about 105 min a cell by linear scaling, but nothing is gained). A search of 40 runs at default size is then at most about 7 waves of about 53 min, roughly 6 hours of wall time per arm (less where a knob shrinks the cell, e.g. a smaller `epochx`).
+
+**One side effect, stated plainly.** Thread count changes the order of floating-point sums, so a run at one thread does not bit-match a run at 12 threads (energy, epochx=20, n_splits=1: RMSE 0.4546 at one thread vs 0.4535 at default threads, a 0.2% difference). Runs at one thread are bit-identical to each other. The gap check in `gapcheck/` was run at default threads; its numbers are unaffected in substance, but a repeat of it would differ in the third digit.
+
+**What is unchanged.** The hypothesis space, the knobs and their defaults, the candidate values, the targets (`targets_mcd.json`), the scoring rule, the search logic (screen, confirm, combine, bisect, verify), the prompts (hashes above) and the models are all unchanged. The experiments themselves are the same commands in the same image; only the number of BLAS threads each container uses changed.

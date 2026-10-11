@@ -34,6 +34,12 @@ from gapfinder.models import budget
 
 WORK_DIR = "/work"
 
+# Numeric libraries size their thread pool to the host's cores, and Docker Desktop shows every
+# container all of them. With several containers at once the pools spin against each other and a
+# run takes several times longer. Each container gets one thread per library unless the run sets
+# its own value.
+DOCKER_THREAD_ENV = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
+
 
 class InfraError(RuntimeError):
     """Sandbox or API trouble -- the runner may retry these, never experiment failures."""
@@ -156,7 +162,8 @@ class LocalBackend(SandboxBackend):
         if self.docker_image:
             container = f"gf-{cid}"
             argv = ["docker", "run", "--rm", "--name", container, "-v", f"{dest}:{WORK_DIR}", "-w", WORK_DIR,
-                    "-e", f"WORK={WORK_DIR}", *(a for k, v in env.items() for a in ("-e", f"{k}={v}")),
+                    "-e", f"WORK={WORK_DIR}",
+                    *(a for k, v in {**DOCKER_THREAD_ENV, **env}.items() for a in ("-e", f"{k}={v}")),
                     self.docker_image, "bash", "-c", shell]
         start = time.monotonic()
         timed_out = False
