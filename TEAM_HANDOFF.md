@@ -150,7 +150,7 @@ This adds a second blind test source, reported separately from the generator tas
 doing if there is time before about 25 October. Rules are in TODO.md ("Source 2: an independent AI task
 author"). In short:
 - The author is a **coding agent from another vendor** with its own clone and a shell (not a chat window,
-  and not any session of the assistant used to build GapFinder). It must run `make_task.py` and
+  and not a model used to build or tune GapFinder). It must run `make_task.py` and
   `leakage.py` itself.
 - **GapFinder is frozen first.** The `v1.0` tag is the freeze. The author clones the repo at `v1.0`.
 - Nobody on the team opens the answers. Wording everywhere: "tasks written by an independent AI model
