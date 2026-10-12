@@ -20,7 +20,7 @@ GapFinder against a standard coding agent. Every number links to a log in this r
 > (RusKey, Figure 6). GapBench-mini dev set: 4/4 with no false attributions. Blind test run 1
 > (8 tasks from a sealed generator, seeded after the freeze tag `pre-tasks-1`): no confident wrong
 > answers in 24 runs, but only 4 of 8 tasks solved (see Results). Tasks from an independent AI
-> author and the MC Dropout external case are in progress.
+> author are in progress. The MC Dropout external case is done (see Results): no cause found.
 > Plan: [docs/PLAN.md](docs/PLAN.md) · spikes: [tests/spikes/](tests/spikes/README.md).
 
 ## Results
@@ -33,6 +33,7 @@ GapFinder against a standard coding agent. Every number links to a log in this r
 | RusKey Figure 6, end to end in Sandboxes | 127 branches from 13 database loads: nothing explains the balanced-workload claims at 2M keys (**Unexplained**). Counting load-to-load noise (next row), K1/K5 is within noise of the paper and K10/K5 is 31% short. | [FINDINGS.md](papers/ruskey/FINDINGS.md) |
 | Setup reproducibility check | 5 loads with the identical command gave **5 different checkpoints**. Across 12 loads the naive K1/K5 ratio ranged from 0.52 to 1.38. GapFinder now widens its noise band to cover this. It also corrected two observations from the 127-branch run, which had drawn an outlier load. | [search_setups](papers/ruskey/search_setups/gap_report.md), [load_variance.json](eval/results/ruskey_load_variance.json) |
 | Fork vs no-fork, same search, 22 branches each | Forking: 8 database loads instead of 22, setup cost $1.88 instead of $5.21 (-64%), total $4.48 instead of $8.07 (-45%). | [ablation_ruskey.json](eval/results/ablation_ruskey.json) |
+| MC Dropout (Gal and Ghahramani, ICML 2016), external case with a documented cause, semi-blind | **All 4 arms Unexplained** (normal, evidence off, no README, all flags random): no false attribution, but none found the cause, so no credit under the pre-registered key. The documented setting (`epochx=10 hidden=1`, both needed) does close the Energy gap when re-run (median 1.72 against the paper's 1.66, defaults 0.36), so the cause was findable and the search missed it: no candidate value was near `epochx=10`. The same setting overshoots held-out Yacht (3.00 against 1.11), so the held-out check would most likely have rejected it anyway. Caveats: semi-blind, 3-split scaled reproduction, arms split across local Docker and Sandboxes. | [RESULT.md](eval/external/mc-dropout/RESULT.md) |
 
 ## How it works
 
