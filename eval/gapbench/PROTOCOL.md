@@ -142,3 +142,39 @@ Dry runs on throwaway seeds (generator checks) are not test runs and their tasks
   pins them in the meantime. Any GapFinder change between the two runs is listed here.
 - Run 1 arms: gapfinder, baseline-super, gapfinder-noverify, gapfinder-random,
   gapfinder-noevidence. baseline-ultra was not run (budget), decided before any run.
+- 2026-10-13, test run 2 on the frozen tag `v1.0` (runs 4-6; reporting and logistics only, no change to
+  arms or scoring):
+  - **Same design as run 1.** The same five arms (gapfinder, gapfinder-noverify, baseline-super,
+    gapfinder-random, gapfinder-noevidence; baseline-ultra again not run), the same 8 generator tasks,
+    the same `--cap 0.5`, the same `--steps 40` for the baseline, `--fresh` for every GapFinder run, and
+    3 runs per arm per task, scored with `score.py --runs 4,5,6`. No task was added, removed or edited
+    between the two runs. The code changes between run 1 and `v1.0` (checked with
+    `git diff pre-tasks-1 v1.0 -- gapfinder eval/baseline eval/gapbench/harness.py eval/gapbench/score.py scripts`):
+    `gapfinder/sandbox/backend.py` (the local backend passes one-thread BLAS caps to Docker containers
+    only, commit 4817c70, needed by the MC Dropout case), `score.py` (the `--runs` option, commit
+    594ef85) and a launcher script for the MC Dropout arms. None touches the search, the prompts or the
+    baseline, and `git diff v1.0 -- gapfinder eval/baseline eval/gapbench/harness.py` is empty at the time
+    of scoring.
+  - **A failed first attempt, and the guard variable.** The first launch of run 2 on `v1.0` failed:
+    GapFinder's sandbox guard (`GF_SANDBOX_GUARD_USD`, default $60) refused every GapFinder run with
+    `BudgetExceeded`, because the sandbox cost reported in the spend ledger had reached $1,932.00 from
+    the earlier MC Dropout Sandboxes work. The guard counts reported Sandboxes `cost`, which is not billed
+    during the Beta, and GapBench's toy artifacts run on the local backend, so it is unrelated to these
+    runs. About 3 runs were launched and wasted (about $0.15 of billed inference); their logs are
+    `runs/gapbench-test-v1.0-attempt1-*.log` and are not committed (`runs/` is git-ignored). The run was
+    relaunched in full with `GF_SANDBOX_GUARD_USD=20000`. That changes no behaviour of the search, the
+    prompts or the scoring; it only lets the guard pass. The failed attempt produced no scored output,
+    and no run was kept or dropped on the basis of its result.
+  - **One failed run, scored missed.** `gapfinder-random`, `test-gen-01`, run 6 crashed with a
+    `BadJSONError` (a truncated model answer in the claim-ledger step; the file is
+    `eval/gapbench/runs/test-gen-01/gapfinder-random/run6/error.txt`). Per section 4 it is scored as
+    missed, not dropped and not re-run. `test-gen-01` has no cause, so this shows up as one "missed"
+    where run 1 had a correct abstention (`gapfinder-random`: 8 of 9 correct abstentions in run 2).
+  - **Published as promised.** The per-task rows, categories, the sealed answer folder
+    (`eval/gapbench/sealed/`, its hash equals `eval/gapbench/sealed.sha256`) and the seed are now
+    committed, as the 2026-10-11 amendment said they would be. Per-task results are in
+    `eval/results/gapbench_test_v1.json` (run 1, runs 1-3) and `eval/results/gapbench_test_v2.json`
+    (run 2 on `v1.0`, runs 4-6). Per section 7, the test set is not run a third time.
+  - **Independent AI-authored tasks: still pending.** No `test-ai-*` task exists yet, so every number
+    above is from the generator tasks only. If a team member runs the AI-authored tasks later (two arms,
+    on `v1.0`, runs 4-6), that result is reported separately and gets its own amendment.
