@@ -17,11 +17,10 @@ reason, and the blind-test counts.
 
 ## Before you record
 
-- [ ] The numbers on screen match the final files. This script uses blind test **run 1**
-  ([gapbench_test_v1_summary.json](../eval/results/gapbench_test_v1_summary.json)). If the second run
-  on v1.0 is scored before you record, replace the scoreboard numbers in segment 7 with
-  `[[V1.0: numbers from eval/results/gapbench_test_v2.json]]` and say that the second run was done
-  on the frozen v1.0 tag. If it is not scored, say "run 1" out loud, as written.
+- [ ] The numbers on screen match the final files. This script uses both blind test runs
+  ([run 1](../eval/results/gapbench_test_v1.json), [run 2 on the frozen v1.0 tag](../eval/results/gapbench_test_v2.json)).
+  Both are scored and final, so segment 7 is final too. The Scoreboard tab on the replay site shows the
+  run 2 table by default if the build includes both files; check it matches before you record.
 - [ ] If someone other than Sayjad narrates, change "I'm Sayjad" and "my numbers" in segment 1.
 - [ ] The public replay site loads logged out (see TEAM_HANDOFF.md, step a). Record from the public
   URL, not localhost, so the video shows what a judge sees.
@@ -30,7 +29,7 @@ reason, and the blind-test counts.
 
 ## Script
 
-About 340 spoken words (the placeholders count as words), about 2:35 at 130 words a minute, which
+About 345 spoken words, about 2:40 at 130 words a minute, which
 leaves room for pauses. The windows below add up to 2:52. Time each segment when you read it aloud.
 
 ### 1. 0:00 to 0:12, the founder story
@@ -99,14 +98,15 @@ leaves room for pauses. The windows below add up to 2:52. Time each segment when
 - **On screen:** the Scoreboard tab: the test-set table and the trust matrix for `gapfinder` and
   `baseline-super`. Highlight "false attribution" and the counts. End on a text card: "8 tasks. Not
   a proven win."
-- **Caption:** "GapBench blind test, run 1: 8 tasks from a sealed generator, 3 runs each".
-- **Narration:** "On eight blind tasks, GapFinder was confidently wrong in none of 24 runs. The standard agent was confidently wrong in 14 of 24. But GapFinder found the right
-  cause in only four of the eight tasks in the median run, and versions that skipped its ranking found
-  more. Eight tasks is small, so this is not a proven win."
-- **Source:** [gapbench_test_v1_summary.json](../eval/results/gapbench_test_v1_summary.json):
-  gapfinder 0 of 24 confidently wrong and 4 of 8 solved in the median run; baseline-super 14 of 24;
-  gapfinder-random and gapfinder-noevidence 6 of 8.
-- **If run 2 is final:** `[[V1.0: replace with the v1.0 numbers and say "on the frozen version"]]`.
+- **Caption:** "GapBench blind test, run 1 and run 2 (frozen v1.0): 8 tasks from a sealed generator, 3 runs each".
+- **Narration:** "We ran eight blind tasks twice, the second time on the frozen release. GapFinder was confidently
+  wrong in none of 24 runs, both times. The standard agent was confidently wrong in 14 of 24, then 12.
+  But GapFinder solved only four of eight tasks, then six, and versions that skipped its ranking solved
+  as many or more. Eight tasks is small, so this is not a proven win."
+- **Source:** [gapbench_test_v1.json](../eval/results/gapbench_test_v1.json) (run 1) and
+  [gapbench_test_v2.json](../eval/results/gapbench_test_v2.json) (run 2): gapfinder 0 of 24 confidently
+  wrong both times and 4 of 8, then 6 of 8, solved in the median run; baseline-super 14 of 24, then 12
+  of 24; gapfinder-random 6 of 8, then 7 of 8, and gapfinder-noevidence 6 of 8 both times.
 
 ### 8. 2:39 to 2:52, close
 - **On screen:** the cost-per-tier table from the README ("How we use Nemotron on Token Factory", with
@@ -115,7 +115,7 @@ leaves room for pauses. The windows below add up to 2:52. Time each segment when
 - **Caption:** "Ultra, Super, Nano" on the table. URLs: github.com/Sayjad21/GapFinder and
   sayjad21.github.io/GapFinder.
 - **Narration:** "It's open source, every result is a replayable checkpoint, and the project's model
-  calls cost [[V1.0: billed total in dollars from eval/results/spend_ledger.jsonl]]. Press 16x."
+  calls cost about seventeen dollars in total. Press 16x."
 
 Word count check: run the counting command below on your edited narration.
 
@@ -213,5 +213,5 @@ voiceover separately in a quiet room from the script above, then edit.
 3. Upload to YouTube as **public** (not unlisted). Title: "GapFinder: why doesn't the paper
    reproduce?". Put the repo and demo URLs in the description.
 4. Open the link in a logged-out browser (a private window) and check it plays and is under 3:00.
-5. Put the URL into docs/DEVPOST.md (the `[[V1.0: YouTube URL...]]` placeholder) and into the
+5. Put the URL into docs/DEVPOST.md (the `[[V1.0: TODO ... YouTube URL ...]]` placeholder) and into the
    Devpost form.

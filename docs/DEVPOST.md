@@ -3,10 +3,10 @@
 <!--
 FOR WHOEVER PASTES THIS INTO DEVPOST (delete this block first)
 - Everything below the "---" line is the text. Paste it into the project story field.
-- Search for "[[V1.0:" before you submit. Each one is a number or link that is not final until the
-  second GapBench test run (on the v1.0 tag) is scored. Replace it with the real value from the file
-  named inside the brackets, or delete the sentence if the file does not exist. Do not paste a
-  placeholder, and do not invent a number.
+- Search for "[[V1.0:" before you submit. Two are left, both marked TODO: the YouTube URL (after the
+  video is recorded) and the independent AI-author bullet (fill it from the scored file if those tasks
+  are run, otherwise replace it as the bullet says). The run 2 numbers are final and come from
+  eval/results/gapbench_test_v2.json. Do not paste a placeholder, and do not invent a number.
 - Links use the repository's main branch. They only work once the repo is public.
 - The text uses lists, not tables, because Devpost's editor may not render tables.
 - Upload docs/img/report.png, docs/img/scoreboard.png and docs/img/replay.png as the gallery images.
@@ -79,8 +79,11 @@ checks a hard spend cap before each call, and caches every response.
   reads figures. The RusKey Figure 6 values were digitized outside the pipeline.
 - Usage and billed cost per tier are in the
   [README table](https://github.com/Sayjad21/GapFinder#how-we-use-nemotron-on-token-factory), taken
-  from the spend ledger. [[V1.0: refresh the calls, tokens and billed dollars per tier, and the
-  billed total, from eval/results/spend_ledger.jsonl after the final runs]]
+  from the [spend ledger](https://github.com/Sayjad21/GapFinder/blob/main/eval/results/spend_ledger.jsonl). Ultra: 427 calls, 1.98M tokens in
+  and 3.62M out, $12.83 (two calls per GapFinder run, plus the MC Dropout ledgers). Super: 1,346 calls,
+  12.7M in and 395K out, $4.18, of which 1,333 calls ($4.15) are the baseline agent and 13 are the claim
+  filter and failed-branch triage. Nano: 2 calls, under $0.001. All billed inference, development and
+  both test runs included, is $17.17.
 
 **How we use Token Factory Sandboxes.**
 - **One loaded database, many forks.** The checkpoint tree builds once and loads once. Each
@@ -94,7 +97,8 @@ checks a hard spend cap before each call, and caches every response.
 - **Replayable answers.** Every attribution names its checkpoint and exact command. The replay site
   plays recorded runs and costs nothing.
 - **Guards on our side.** Each command runs under a CPU-time limit, and a guard on the reported
-  sandbox cost refuses new runs past a set total. Two MC Dropout arms, its confirmation runs and its post-hoc
+  sandbox cost refuses new runs past a set total (the reported `cost` is diagnostic and was not billed
+  during the Beta). Two MC Dropout arms, its confirmation runs and its post-hoc
   diagnostic ran in Sandboxes (up to 48 simultaneous operations), and RusKey ran its 127-branch
   search there. GapBench's
   toy artifacts run on the local backend.
@@ -105,39 +109,49 @@ All numbers below link to the file they come from. The test protocol was committ
 run ([PROTOCOL.md](https://github.com/Sayjad21/GapFinder/blob/main/eval/gapbench/PROTOCOL.md)). With
 8 tasks, nothing here is a conclusive win, and we do not claim one.
 
-### GapBench blind test, run 1
+### GapBench blind test, run twice
 
 Eight tasks drawn at random by a sealed generator, from a seed created after GapFinder was frozen
-(git tag `pre-tasks-1`). Three runs of each arm per task, 24 runs per arm. The tasks use our two toy
-artifacts, and we designed the generator's categories and value pools, so these are blind tasks, not
-outside papers. Source:
-[gapbench_test_v1_summary.json](https://github.com/Sayjad21/GapFinder/blob/main/eval/results/gapbench_test_v1_summary.json).
-- **GapFinder:** 0 of 24 runs confidently wrong (95% interval 0 to 14%). It abstained correctly in 9
-  of 9 runs on tasks with no findable cause. On tasks with a cause it named the right cause in 5 of
-  15 runs and part of it in 2; in the other 8 it abstained (6) or gave no answer (2). Median run:
-  4 of 8 tasks solved (interval 22 to 79%). Median cost per run $0.05, median wall time 52 s.
-- **Baseline** (mini-swe-agent with Nemotron 3 Super, same inputs and dollar cap): 14 of 24 runs
-  confidently wrong (58%, interval 39 to 76%), correct abstention in 1 of 9, right cause in 4 of 15
-  runs. Median run: 1 of 8 tasks solved (interval 2 to 47%). Median cost per run $0.06, median wall
-  time 129 s.
-- **Ablation without verification:** 7 of 24 runs confidently wrong (29%, interval 15 to 49%).
-  Verification is what keeps wrong answers out.
+(git tag `pre-tasks-1`). Three runs of each arm per task, 24 runs per arm. We ran the whole test set
+twice, as the protocol says, and publish both: run 1, and run 2 on the frozen release (git tag `v1.0`)
+with the same five arms, dollar caps and settings. The search code, prompts and baseline did not change
+between them. The tasks use our two toy artifacts, and we designed the generator's categories and value
+pools, so these are blind tasks, not outside papers. The answers and the seed are now public. Sources:
+[gapbench_test_v1.json](https://github.com/Sayjad21/GapFinder/blob/main/eval/results/gapbench_test_v1.json) (run 1) and
+[gapbench_test_v2.json](https://github.com/Sayjad21/GapFinder/blob/main/eval/results/gapbench_test_v2.json) (run 2).
+- **GapFinder, run 1 and run 2:** 0 of 24 runs confidently wrong in both (95% interval 0 to 14%). It
+  abstained correctly in 9 of 9 runs on tasks with no findable cause, both times. On tasks with a cause
+  it named the right cause in 5 of 15 runs in run 1 and in 7 of 15 in run 2 (part of it in 2 runs in run 1,
+  none in run 2); the other runs were an abstention (6, then 1) or a hedged "Fits but unsupported" answer
+  with knobs that were not the cause (2, then 7). Median run: 4 of 8 tasks solved in run 1 (interval 22 to
+  79%) and 6 of 8 in run 2 (interval 41 to 93%). The search did not change, so the difference is
+  run-to-run variation, not an improvement. Answer stability across a task's 3 runs: 0.83 and 0.88. It
+  never fully solved an interaction task (0 of 12 runs across both runs). Median cost per run $0.05,
+  median wall time 52 s (run 1) and 41 s (run 2).
+- **Baseline** (mini-swe-agent with Nemotron 3 Super, same inputs and dollar cap): confidently wrong in 14
+  of 24 runs in run 1 (58%, interval 39 to 76%) and 12 of 24 in run 2 (50%, interval 31 to 69%). Correct
+  abstention in 1 of 9 and 2 of 9. Right cause in 4 of 15 runs both times. Median run: 1 of 8 tasks solved
+  (interval 2 to 47%) and 2 of 8 (interval 7 to 59%). Answer stability 0.46 and 0.58. Median cost per run
+  $0.06 and $0.08, median wall time 129 s and 84 s.
+- **Ablation without verification:** 7 of 24 runs confidently wrong in both runs (29%, interval 15 to
+  49%). Verification is what keeps wrong answers out.
 - **Honest limitation, from the ablations:** the arm with random hypothesis order and the arm with the
-  evidence step off both found more causes than the full pipeline (6 of 8 tasks in the median run
-  each, against 4 of 8), still with no confident wrong answer. On these tasks, the ledger ranking and
-  the evidence gate cost recall. The intervals overlap, so the data do not separate these arms, but
-  we are not claiming the ranking or the evidence step helps here.
+  evidence step off found as many causes or more than the full pipeline in both runs, still with no
+  confident wrong answer. Random order: the right cause in 9 of 15 runs both times, 6 of 8 tasks in the
+  median run, then 7 of 8. Evidence step off: 8 of 15 runs both times, 6 of 8 tasks both times. Full
+  pipeline: 5 and 7 of 15, 4 and 6 of 8. On these tasks, the ledger ranking and the evidence gate cost
+  recall. The intervals overlap, so the data do not separate these arms, and we are not claiming the
+  ranking or the evidence step helps here.
 - **Caveats:** the intervals treat the 3 runs of a task as independent, which they are not, so they
-  are optimistic. The interval on tasks solved overlaps between GapFinder and the baseline. The
-  separation we do see is in confident wrong answers (0 of 24 against 14 of 24), and it comes from 8
-  tasks on toy artifacts.
-- **Run 2 (frozen v1.0, run exactly once more, per the protocol):** [[V1.0: GapFinder confidently
-  wrong k of 24, correct abstention k of 9, tasks solved in the median run k of 8; baseline-super
-  the same three numbers; the three ablation arms; from eval/results/gapbench_test_v2.json after
-  scoring with --runs 4,5,6]]
-- **Independent AI-authored tasks:** [[V1.0: if tasks written by an independent AI model were run,
-  their result reported separately from the generator tasks, from the by_source entry
-  "ai_author" in the scored file; otherwise delete this bullet]]
+  are optimistic. The interval on tasks solved overlaps between GapFinder and the baseline in run 1
+  and run 2. The separation we do see is in confident wrong answers (0 of 24 against 14 and 12 of 24),
+  and it comes from 8 tasks on toy artifacts. One run 2 `gapfinder-random` run crashed on a truncated model
+  answer and is scored missed, as the protocol says
+  ([PROTOCOL.md](https://github.com/Sayjad21/GapFinder/blob/main/eval/gapbench/PROTOCOL.md), amendments).
+- **Independent AI-authored tasks:** [[V1.0: TODO for a teammate. No `test-ai-*` tasks exist yet. If
+  tasks written by an independent AI model are run (see TEAM_HANDOFF.md, section 3e), report them here
+  separately from the generator tasks, from the `ai_author` entry in the scored file. If they are not
+  run, delete this bullet and write "Tasks from an independent AI author were not run."]]
 
 The 4 dev tasks (the ones GapFinder was tuned on) are kept apart: GapFinder 4 of 4 with no false
 attribution, the baseline 2 of 4 with 50% false attribution
@@ -243,7 +257,7 @@ except for one documented patch (100 Monte Carlo passes instead of 10,000).
 
 - Code, MIT license: https://github.com/Sayjad21/GapFinder
 - Replay site: https://sayjad21.github.io/GapFinder/
-- Video: [[V1.0: YouTube URL, public, under 3 minutes]]
+- Video: [[V1.0: TODO for a teammate: the public YouTube URL, under 3 minutes, after recording]]
 - Feedback on Token Factory, Sandboxes and Nemotron: [FEEDBACK_SUBMISSION.md](https://github.com/Sayjad21/GapFinder/blob/main/docs/FEEDBACK_SUBMISSION.md)
 
 **Built with:** Nemotron 3 Ultra, Nemotron 3 Super, Nemotron 3 Nano, Nebius Token Factory, Token
