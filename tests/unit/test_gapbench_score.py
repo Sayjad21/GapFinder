@@ -272,3 +272,22 @@ def test_sources_and_grouping():
     assert set(by) == {"dev", "generator", "ai_author"}
     assert by["generator"]["a"]["counts"]["correct_abstention"] == 1
     assert by["dev"]["a"]["runs"] == 3
+
+
+def test_main_async_runs_filter_scores_only_the_chosen_run_numbers(tmp_path, monkeypatch):
+    import score
+
+    sealed = tmp_path / "sealed"
+    _write_task(tmp_path / "tasks", "t5", sealed, category="noise_only")
+    monkeypatch.setattr(score, "GB", tmp_path)
+    for k in (1, 4):
+        run = tmp_path / "runs" / "t5" / "gapfinder" / f"run{k}"
+        run.mkdir(parents=True)
+        pred = {"task": "t5", "arm": "gapfinder", "run": k, "claims": {"C1": {"label": "Inconclusive", "knobs": {}}},
+                "cost_usd": 0.01, "wall_s": 2.0, "runs": 5, "setup_runs": 0}
+        (run / "prediction.json").write_text(json.dumps(pred), encoding="utf-8")
+    out = tmp_path / "out.json"
+    asyncio.run(score.main_async("test", 1, out, sealed, {4}))
+    assert [r["run"] for r in json.loads(out.read_text())["rows"]] == [4]
+    asyncio.run(score.main_async("test", 1, out, sealed))
+    assert [r["run"] for r in json.loads(out.read_text())["rows"]] == [1, 4]

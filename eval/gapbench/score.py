@@ -330,7 +330,8 @@ def summarise(rows: list[dict]) -> dict:
     return out
 
 
-async def main_async(split: str, n: int, out: Path | None, answers_dir: Path | None = None) -> None:
+async def main_async(split: str, n: int, out: Path | None, answers_dir: Path | None = None,
+                     runs: set[int] | None = None) -> None:
     import yaml
 
     rows = []
@@ -341,6 +342,8 @@ async def main_async(split: str, n: int, out: Path | None, answers_dir: Path | N
         if task["split"] != split:
             continue
         for run_dir in sorted((GB / "runs" / task["id"]).glob("*/run*")):
+            if runs is not None and run_dir.name not in {f"run{k}" for k in runs}:
+                continue
             if (run_dir / "prediction.json").exists():
                 rows.append(await score_run(task_dir, run_dir, n, answers_dir))
     for r in rows:
@@ -362,5 +365,7 @@ if __name__ == "__main__":
     p.add_argument("--out", type=Path)
     p.add_argument("--answers", type=Path,
                    help="read answer.json (and hidden task fields) from <dir>/<task>/ instead of the task folder")
+    p.add_argument("--runs", help="comma-separated run numbers to score, e.g. 4,5,6 (default: all runs)")
     a = p.parse_args()
-    asyncio.run(main_async(a.split, a.remeasure, a.out, a.answers))
+    runs = {int(k) for k in a.runs.split(",")} if a.runs else None
+    asyncio.run(main_async(a.split, a.remeasure, a.out, a.answers, runs))
