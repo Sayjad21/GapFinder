@@ -158,17 +158,27 @@ async def replay(run_id: str, speed: float = Query(4.0, ge=0.25, le=256)):
     return EventSourceResponse(gen())
 
 
+def _version(p: Path) -> int:
+    digits = "".join(c for c in p.stem.split("_v")[-1] if c.isdigit()) if "_v" in p.stem else ""
+    return int(digits or 0)
+
+
 @app.get("/api/scoreboard")
 def scoreboard() -> dict:
-    """Latest GapBench results per split (highest version number wins)."""
+    """Latest GapBench results per split (highest version number wins). The test split also
+    returns the run before the latest one as `test_prev`, because the test set is run twice
+    and both results are published."""
     res_dir = REPO_ROOT / "eval" / "results"
     out = {}
     for split in ("dev", "test"):
-        files = sorted(res_dir.glob(f"gapbench_{split}*.json"),
-                       key=lambda p: int("".join(c for c in p.stem.split("_v")[-1] if c.isdigit()) or 0)
-                       if "_v" in p.stem else 0)
+        files = sorted(res_dir.glob(f"gapbench_{split}*.json"), key=_version)
+        if split == "test":  # per-task files, not the aggregate-only summary of run 1
+            full = [p for p in files if "summary" not in p.stem]
+            files = full or files
         if files:
-            out[split] = {"file": files[-1].name, **_json(files[-1])}
+            out[split] = {"file": files[-1].name, "run": _version(files[-1]), **_json(files[-1])}
+        if split == "test" and len(files) > 1:
+            out["test_prev"] = {"file": files[-2].name, "run": _version(files[-2]), **_json(files[-2])}
     return out
 
 

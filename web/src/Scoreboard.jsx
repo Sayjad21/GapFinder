@@ -65,10 +65,11 @@ function Split({ name, data }) {
   const arms = Object.entries(data.summary || {});
   return (
     <div className="panel wide">
-      <h3>{name === "dev" ? "Dev set" : "Test set"} <small>({data.file})</small></h3>
+      <h3>{name === "dev" ? "Dev set" : "Test set" + (data.run ? ", run " + data.run : "") + (data.run === 2 ? " (frozen v1.0)" : "")} <small>({data.file})</small></h3>
       {name === "dev" && (
         <p className="note">Dev tasks are the ones GapFinder was tuned on, so these numbers show the method works,
-          not how well it generalises. The test set is written by a second author and run twice.</p>
+          not how well it generalises. The test set is 8 tasks drawn by a sealed generator and run twice (run 2 on the
+          frozen v1.0 tag); both runs are shown below.</p>
       )}
       <table>
         <thead><tr><th>Arm</th><th>Tasks</th><th>Solved (median run)</th><th>Solved (best run)</th><th>False attribution</th><th>Median $/task</th><th>Median wall</th></tr></thead>
