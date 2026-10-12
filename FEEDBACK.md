@@ -127,3 +127,27 @@ live service.
   exceeded.
 - **Suggestion:** expose a per-key usage endpoint (or request IDs in billing) so clients can reconcile.
   We now record failed calls at their estimated input cost and reconcile against the console.
+
+### 12. Sandboxes: an operation timeout above 3,600 s returns HTTP 400 (2026-10-12)
+- **Product:** Sandboxes API. A 14,400 s timeout gave "Timeout 14400 exceeds the maximum allowed value
+  of 3600". Seen on the first smoke run of the MC Dropout arms. We sharded each cell over the VM's
+  cores to fit. See FROZEN.md, Deviations 2 and 3, in `eval/external/mc-dropout/`.
+
+### 13. Sandboxes: reported `elapsed_time` is CPU time summed over processes (2026-10-12)
+- **Product:** Sandboxes API. A 63.9 s wall-clock test reported 180.4 s; a 4-process test reported
+  150 s for a 60 s wall run. It led us to read a 4-core VM as one core (corrected in Deviation 3).
+  The VM has 4 effective cores. Extends item 10.
+
+### 14. Sandboxes: `cost` grows to thousands of dollars of "reported" cost, none billed (2026-10-12)
+- **Product:** Sandboxes API / billing. The MC Dropout arms, confirmation runs and the post-hoc
+  diagnostic reported $1,043.03, $584.66, $134.56 and $733.06. The console showed no Sandboxes charge.
+  The docs call the field diagnostic; the name and scale still read as money. Extends item 10.
+
+### 15. Sandboxes: the checkpoint's image `ENV` is not applied to runs (2026-10-12)
+- **Product:** Sandboxes runs. Variables the Dockerfile set (`THEANO_FLAGS`, `KERAS_BACKEND`) had to be
+  exported in each run command. Local Docker also started one OpenBLAS thread per visible core and
+  ran 6 cells at once 7.5 times slower than one (our side; the Docker part is not a Nebius issue).
+
+### 16. Sandboxes: 50 simultaneous operations per project (Beta), planned around (2026-10-12)
+- **Product:** Sandboxes. Not hit: we kept the total at 48 or below. The limit is shared across
+  processes, so a client can't see it from its own concurrency setting.
