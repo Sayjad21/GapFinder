@@ -199,7 +199,8 @@ def test_sandbox_spec_differs_from_the_frozen_one_only_in_base_env_procs_and_tim
 
 def test_launcher_defaults_to_two_arms_and_keeps_total_concurrency_within_50():
     def plan(*args, env=None):
-        e = {**os.environ, "MCD_ARMS_DRY_RUN": "1", **(env or {})}
+        e = {k: v for k, v in os.environ.items() if k != "GF_MAX_CONCURRENCY"}  # .env may export one; the launcher honours it
+        e.update({"MCD_ARMS_DRY_RUN": "1", **(env or {})})
         e["PATH"] = f"{Path(BASH).parent}{os.pathsep}{e['PATH']}"
         return subprocess.run([BASH, str(ROOT / "scripts" / "run_mcd_sandbox_arms.sh"), *args], capture_output=True,
                               text=True, env=e, timeout=60)

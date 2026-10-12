@@ -275,9 +275,13 @@ def test_public_spec_drops_only_the_unexposed_knob(tmp_path, family, knob):
 
 @pytest.fixture(scope="module")
 def two_runs(tmp_path_factory):
-    roots = [tmp_path_factory.mktemp("gen") for _ in range(2)]
-    results = [g.generate("unit-test-seed", r, artifacts=("mlbench",), quotas=SMALL_QUOTAS) for r in roots]
-    return roots, results
+    # Module scoped, so the per-test autouse isolation in conftest.py does not cover it: the generator's
+    # sandbox guard would read the real spend ledger. Point the cache (and so the ledger) at a temp dir.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GF_CACHE_DIR", str(tmp_path_factory.mktemp("gf_cache")))
+        roots = [tmp_path_factory.mktemp("gen") for _ in range(2)]
+        results = [g.generate("unit-test-seed", r, artifacts=("mlbench",), quotas=SMALL_QUOTAS) for r in roots]
+        yield roots, results
 
 
 def test_same_seed_reproduces_every_byte(two_runs):
