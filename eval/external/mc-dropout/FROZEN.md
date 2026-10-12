@@ -141,6 +141,7 @@ Knobs, defaults, candidates, the run command's arguments, build command, metrics
 **What is unchanged.** The hypothesis space, the knobs and their defaults, the candidate values, the targets (`targets_mcd.json`), the scoring rule, the search logic (screen, confirm, combine, bisect, verify), the prompts (hashes above), the models, `harness/run_cell.sh` and `docker/Dockerfile` (hashes above) are all unchanged. The experiments are the same commands on the same pinned stack and repo commit; only where they run, the run-stage environment export and the per-operation timeout changed. Thread count is one per library, as in Deviation 1.
 
 - Decision (2026-10-12): the team chose to run all four arms in Sandboxes (rather than keeping the
-  completed local normal arm and resuming the evidence-off arm locally), knowing that cells longer
-  than the 3,600 s Sandboxes limit end as timeouts. The completed local attempt-2 normal arm is kept
-  in attempt2-local/ and is reported alongside.
+  completed local normal and evidence-off arms), knowing that cells longer
+  than the 3,600 s Sandboxes limit end as timeouts. The completed local attempt-2 normal and
+  evidence-off arms (both Unexplained) are kept in attempt2-local/ and reported alongside. This
+  decision is under review (see the note below if it changes).
