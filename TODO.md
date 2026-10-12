@@ -16,6 +16,140 @@ author** (see "Who writes hidden tasks" below).
 
 ---
 
+## NEXT STEPS (updated 2026-10-13, after D's handover session; read this first)
+
+**Where things stand.** Engineering and evaluation are done and pushed; GapFinder is frozen as tag
+`v1.0`. Done in D's session (details lower down, and in the files linked):
+- GapBench blind test **run twice** (run 2 on `v1.0`): GapFinder **0 of 48 runs confidently wrong**,
+  18/18 correct abstentions, 4/8 then 6/8 tasks solved; the baseline was confidently wrong in 26/48.
+  The random-order and evidence-off arms found as many or more causes
+  ([gapbench_test_v1.json](eval/results/gapbench_test_v1.json), [gapbench_test_v2.json](eval/results/gapbench_test_v2.json)).
+- MC Dropout external case: all 4 arms **Unexplained**, no false attribution. The documented cause
+  (`epochx=10 hidden=1`) reproduces Energy in our runs but breaks held-out Yacht; the post-hoc run shows
+  the verification rejects it, so the blind miss was hypothesis coverage
+  ([RESULT.md](eval/external/mc-dropout/RESULT.md)).
+- spec-draft live check passed on mlbench and rlbench ([spec_draft_live.md](eval/results/spec_draft_live.md)).
+- Submission drafts: [DEVPOST.md](docs/DEVPOST.md), [VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md),
+  [FEEDBACK_SUBMISSION.md](docs/FEEDBACK_SUBMISSION.md); team steps in [TEAM_HANDOFF.md](TEAM_HANDOFF.md);
+  research on improving recall in [RESEARCH_real_causes.md](docs/RESEARCH_real_causes.md).
+- Billed: **$17.18** (cap in D's `.env`: $20). Sandboxes: diagnostic `cost` only, not billed in the Beta.
+
+D is offline from 2026-10-14. Everything below is for S and the team.
+
+### A. Must do for the submission (deadline 2026-10-30; aim for 27-28 Oct)
+1. [ ] **S: make the repo public and enable Pages.** Settings → General → visibility; Settings → Pages →
+   Source: GitHub Actions; run the `pages` workflow; open https://sayjad21.github.io/GapFinder/ logged out.
+   Before going public: approve or remove the personal email in this file's "Git and honesty rules" and
+   check commit author emails are acceptable.
+2. [ ] **Team: record the video** from [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md) (under 3 min,
+   1920×1080, model names on screen, "16×" on sped-up replay). Upload to YouTube as public.
+3. [ ] **Team: submit on Devpost.** Paste [docs/DEVPOST.md](docs/DEVPOST.md), fill the two remaining
+   `[[V1.0: TODO ...]]` placeholders (the YouTube URL, and the AI-author bullet: fill it or delete it),
+   add the repo and site links.
+4. [ ] **Team: paste [docs/FEEDBACK_SUBMISSION.md](docs/FEEDBACK_SUBMISSION.md)** into the feedback form.
+5. [ ] **Anyone: fresh-machine check.** Clone, follow SETUP.md, run `python scripts/try_it.py`, time it,
+   and fix the README if the time or steps differ.
+
+### B. Strongly recommended (raise the odds; do in this order if there's time)
+6. [ ] **v1.1: compute paper values instead of guessing them** (RESEARCH_real_causes.md, Tier 1 items 1-3, 6, 7;
+   about 2-3 days). Typed relative settings ("10× more" → multiplier record), a code resolver against the repo's
+   knobs, branching on ambiguity, log-ladder candidates (×0.02…×50), and a label for "explains target,
+   conflicts with held-out". Tag `v1.1`. Then rerun MC Dropout as a **post-hoc v1.1 demo**, clearly
+   labelled not blind (the v1.0 blind results can't be re-scored).
+7. [ ] **RusKey positive control** (this file, P0-1 "Positive control on RusKey"). Sandboxes are free in
+   practice, so it costs about $0 billed. It answers "can GapFinder ever find a real cause in a real system?"
+   Needs the sandbox guard raised (`GF_SANDBOX_GUARD_USD=20000`) and S's OK.
+8. [ ] **Independent AI-author tasks** (a teammate with a non-Claude coding agent; two-phase seal/reveal;
+   exact commands in TEAM_HANDOFF.md step e). Run `gapfinder` and `baseline-super` only (about $3), on the
+   frozen code they were written against. Needs the spend cap raised (agree a new `GF_SPEND_CAP_USD`
+   first; billed is $17.18).
+9. [ ] **If v1.1 is built and time remains:** a fresh blind generator run on v1.1 (new seed after the
+   `v1.1` tag; add order-of-magnitude and relative-wording knobs to the generator first). About $7.50 as
+   designed, or about $2-3 if a shared-ledger option is added (the four GapFinder arms recompute the
+   same claim extraction today).
+
+### C. Optional / after the hackathon
+10. [ ] Candidate B, Paragraph Vector on IMDB (P0-1): a second external case; 1-2 days, risky (the shuffle
+    is a script line, so possibly no gap under the repo's defaults).
+11. [ ] Run the search loop on GitHub Actions (6 h jobs) so long searches don't need a PC on.
+12. [ ] Work through the research directions in D below, after v1.1.
+
+### D. Research directions to make GapFinder find real causes (full list)
+Source: [docs/RESEARCH_real_causes.md](docs/RESEARCH_real_causes.md) (5-angle literature review, key claims
+independently verified). **Diagnosis:** the misses come from **hypothesis generation**, not verification.
+Verification already rejects wrong causes (the post-hoc MC Dropout run shows this). Every change below is a
+new version: evaluate it on **new blind tasks**, ablate any documentation-derived source, and check false
+attributions stay at 0.
+
+**Tier 1: quick, high impact (≤ 1 day each). Items 1-3, 6 and 7 are the v1.1 set in B6.**
+- [ ] D1. **Typed setting records:** value + relation (absolute / multiplier_of / fraction_of / delta /
+  qualitative) + reference + verbatim quote; YAML output, 5 few-shot examples including relative wording,
+  strict schema. File: `gapfinder/ledger/assumptions.py`. Fixes the "10× more iterations" sign error.
+- [ ] D2. **Deterministic resolver (PAL-style):** the LLM emits expressions like `knob.base * 10`; code
+  substitutes the repo's defaults and per-dataset bases, so the direction is computed, not guessed
+  (PAL: +15% absolute over chain-of-thought on GSM8K by offloading arithmetic).
+- [ ] D3. **Branch on ambiguity:** two plausible readings give two candidate values (e.g. `epochx` 10 and >500);
+  the experiments decide.
+- [ ] D4. **Numeric direction check** before any run: is the effective quantity above or below the default,
+  and does the paper say more or less? Disagreement means ambiguous, so branch.
+- [ ] D5. **AST knob inventory first:** argparse (name, default, type, help), constants and config keys with
+  file:line; every LLM setting must map to a knob ID or be marked "unmapped". File: `gapfinder/ingest/repo_map.py`.
+- [ ] D6. **Log-ladder candidates** (×0.02, 0.1, 0.5, 2, 10, 50) with a direction hint from the gap sign,
+  plus a 3-point log-linear fit to interpolate toward the target. File: `gapfinder/search/hypotheses.py`.
+- [ ] D7. **New labels:** "explains target, conflicts with held-out (by X SD)" and "probable code-level cause
+  (out of scope)" with a reason, instead of a silent Unexplained. Files: `search/engine.py`, `report/`.
+- [ ] D8. **Noise floor and baseline precheck:** seeds and splits as a control, never as a cause; "can the
+  baseline be reproduced at all?" before blaming any condition (the RusKey lesson).
+
+**Tier 2: bigger changes (1-3 days each)**
+- [ ] D9. **Paper-era commit diff:** choose the commit nearest the paper date (or one linked from the README),
+  extract argparse, config and **literals at training call sites** via AST, align old→new; every changed
+  value becomes a high-prior hypothesis with the old value as a candidate. Verified on MC Dropout: `a6259f1`
+  uses `n_epochs*10` and one layer, HEAD uses `--epochx 500 --hidden 2`.
+- [ ] D10. **README / changelog / committed-results-filename mining** (e.g. `*_100_xepochs_1_hidden_layers.txt`),
+  every hypothesis tagged with its provenance. **Leak risk in blind evaluations:** always report with and
+  without these sources.
+- [ ] D11. **Measured screen instead of evidence-gate pruning:** cheap probes rank knobs by effect; the LLM
+  prior only orders, and the evidence gate only labels (Explained vs Fits but unsupported). This addresses the
+  blind-test finding that random order and evidence-off found more causes.
+- [ ] D12. **Interaction search:** group screening (move all paper-direction values together, then bisect),
+  then a 12-run foldover Plackett-Burman or 2×2 factorials on flagged pairs, then ddmin to a 1-minimal set.
+  Targets the 0/12 interaction-task result; use when the single-knob screen finds nothing.
+- [ ] D13. **Multiple-comparison control:** Benjamini-Hochberg for shortlists, Holm for the final claim,
+  sequential (SPRT-style) repeats, so false attributions stay at 0 as the number of tests grows.
+- [ ] D14. **Shared ledger across arms** (cost): one claim extraction per task and run, shared by all GapFinder
+  arms. A test run drops from about $7.50 to about $2-3.
+- [ ] D15. **Cross-operation sharding** for Sandboxes (one branch as several parallel operations plus a
+  merge), to beat the 3,600 s cap for very large cells.
+
+**Tier 3: research-level (later)**
+- [ ] D16. Priors from **sibling repos and cited baselines** (paper lineage; PaperRepro-style, magnitude unverified).
+- [ ] D17. **Issue/PR mining** with a date filter (ReproRepo surfaced related human blockers for about 90% of
+  1,149 papers; method unverified).
+- [ ] D18. **Dataflow tracing** of indirect knobs (effective quantity = flag × base, e.g. epochs = 40 × `epochx`).
+- [ ] D19. **Level-set Gaussian process** over log values, to report the *range* of values consistent with the
+  claim, with uncertainty.
+- [ ] D20. **Environment default-change tables** (library defaults that changed silently between versions,
+  e.g. scikit-learn's SVC `gamma`) as low-prior hypotheses.
+- [ ] D21. **Multi-sample ledgers:** several independent extractions, take the union, rank by agreement and
+  measured effect (hedges against one biased ledger).
+
+**How to prove any of these honestly:** tag the version, run the sealed generator with a new seed afterwards
+(add order-of-magnitude and relative-wording knob categories to `eval/gapbench/gen_tasks.py`), add the
+AI-author tasks if available, ablate documentation-derived sources, and report confidently-wrong counts
+next to every gain. Show any MC Dropout improvement only as post-hoc.
+
+### Rules that still apply (unchanged; see section 0)
+- Keys only privately. A new machine copies [eval/results/spend_ledger.jsonl](eval/results/spend_ledger.jsonl)
+  to `.gf_cache/spend.jsonl` first; **one machine does paid work at a time**.
+- Set `GF_SANDBOX_GUARD_USD=20000` for any run: the diagnostic sandbox total is far above the default $60
+  guard, and it refuses even local runs otherwise.
+- On Windows: run pytest from Git Bash; call the CLI as `python -m gapfinder.cli` if the launcher is missing.
+- Never re-score the frozen evaluations after a code change; new claims need new blind tasks or a
+  clear "post-hoc" label.
+
+---
+
 ## 0. Read first: how things work here
 
 ### What GapFinder is
