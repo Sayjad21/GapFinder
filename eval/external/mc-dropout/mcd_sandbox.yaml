@@ -1,5 +1,11 @@
-# Sandboxes copy of mcd.yaml (FROZEN.md, Deviation 2). Only `base` and the run command's environment
-# export differ from mcd.yaml. Original header follows.
+# Sandboxes copy of mcd.yaml (FROZEN.md, Deviations 2 and 3). Only `base`, the run command's environment
+# export, its trailing `procs=auto` and the run timeout differ from mcd.yaml. Original header follows.
+#
+# Deviation 3: `procs=auto` makes run_cell.sh run every (dataset, split) of a cell as its own
+# experiment.py process, as many at a time as the VM has cores (4), instead of one process per dataset
+# looping over its splits. That is what lets cells that took 1.5 to 5 hours of one core fit in the
+# Sandboxes limit of 3600 s per operation. Nothing else about a cell changes: same knobs, same grid,
+# same splits drawn from RUN_TAG, same metrics (see run_cell.sh's header for the seeding note).
 # DRAFT harness spec (not run): MC Dropout (Gal & Ghahramani, ICML 2016), UCI regression.
 #
 # Built from the repo map, not hand-picked: every argparse flag of experiment.py (--dir, --epochx,
@@ -30,7 +36,7 @@ build:
 run:
   # The export is the image's ENV (THEANO_FLAGS, KERAS_BACKEND) plus the thread caps of Deviation 1:
   # a Sandboxes run has no image ENV and a spec has no env section. No effect on what is computed.
-  command: 'export THEANO_FLAGS=device=cpu,floatX=float32 KERAS_BACKEND=theano OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1; bash run_cell.sh dir={dir} epochx={epochx} hidden={hidden} n_splits={n_splits} n_epochs={n_epochs} n_hidden={n_hidden} dropout_rates={dropout_rates} tau_values_yacht={tau_values_yacht} tau_values_energy={tau_values_energy} tau_values_concrete={tau_values_concrete}'
+  command: 'export THEANO_FLAGS=device=cpu,floatX=float32 KERAS_BACKEND=theano OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1; bash run_cell.sh dir={dir} epochx={epochx} hidden={hidden} n_splits={n_splits} n_epochs={n_epochs} n_hidden={n_hidden} dropout_rates={dropout_rates} tau_values_yacht={tau_values_yacht} tau_values_energy={tau_values_energy} tau_values_concrete={tau_values_concrete} procs=auto'
   output: stdout
   format: kv
   # The Sandboxes API refuses any operation timeout above 3600 s (HTTP 400, "Timeout 14400 exceeds the
