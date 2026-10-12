@@ -1,4 +1,4 @@
-# Team handoff (written 2026-10-12)
+# Team handoff (written 2026-10-12, updated 2026-10-13 after both test runs were scored)
 
 For the teammates who carry GapFinder to submission after the project lead's PC goes offline
 (tomorrow night, 2026-10-13). The submission is due **2026-10-30**. Check the exact cut-off time and
@@ -16,8 +16,10 @@ Rules that apply to everything below:
 - **No AI-assistant attribution** in commits, code comments or pushed files. Commit under your own name.
 - **Every number in the README, the video and Devpost must point to a file in the repo.** If a run fails,
   record the failure. Never claim a conclusive win from 8 tasks.
-- **Do not open the sealed answers** (`eval/gapbench/sealed/`, any `answer.json` or the `hidden`
-  field of a test task) before scoring. Whoever tunes GapFinder must not see them.
+- **The generator tasks' sealed answers are public now** (`eval/gapbench/sealed/`, revealed after both
+  test runs). Any AI-authored tasks are a new blind source: do not open their answers
+  (`eval/gapbench/sealed-ai/`, any `answer.json` or the `hidden` field of a `test-ai-*` task) before
+  they are scored. Whoever tunes GapFinder must not see them.
 
 ## 1. What is done
 
@@ -27,39 +29,40 @@ Rules that apply to everything below:
 | RusKey Figure 6 end to end in Sandboxes: 127 branches from 13 loads, **Unexplained**; load not reproducible | done | [papers/ruskey/FINDINGS.md](papers/ruskey/FINDINGS.md) |
 | Fork vs no-fork ablation (setup cost -64%, total -45%, reported cost) | done | [eval/results/ablation_ruskey.json](eval/results/ablation_ruskey.json) |
 | GapBench-mini dev set: 4/4, no false attribution | done | [eval/results/gapbench_dev_v7.json](eval/results/gapbench_dev_v7.json) |
-| GapBench blind test **run 1** (8 generator tasks, 5 arms, 3 runs each) | done, aggregates published | [eval/results/gapbench_test_v1_summary.json](eval/results/gapbench_test_v1_summary.json), [PROTOCOL.md](eval/gapbench/PROTOCOL.md) |
+| GapBench blind test **run 1** (8 generator tasks, 5 arms, 3 runs each) | done, scored, per-task rows published | [eval/results/gapbench_test_v1.json](eval/results/gapbench_test_v1.json), [PROTOCOL.md](eval/gapbench/PROTOCOL.md) |
+| GapBench blind test **run 2** on the frozen `v1.0` (same arms, runs 4 to 6) | done, scored, per-task rows published; sealed answers and seed revealed | [eval/results/gapbench_test_v2.json](eval/results/gapbench_test_v2.json), `eval/gapbench/sealed/` |
+| Spend ledger snapshot | refreshed 2026-10-13 ($17.17 billed in total) | [eval/results/spend_ledger.jsonl](eval/results/spend_ledger.jsonl) |
+| README, Devpost text and video script numbers | updated with both runs | [README](README.md), [docs/DEVPOST.md](docs/DEVPOST.md), [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md) |
 | MC Dropout external case (4 arms, confirmation runs, post-hoc diagnostic) | done, all arms Unexplained | [eval/external/mc-dropout/RESULT.md](eval/external/mc-dropout/RESULT.md) |
 | Replay site code and the Pages workflow | done, **not yet deployed** (repo is private) | `web/`, [.github/workflows/pages.yml](.github/workflows/pages.yml) |
 | Keyless try-it script (`scripts/try_it.py`) | done, not timed on a fresh clone | [README](README.md#quick-start-no-keys-free) |
 | Feedback write-up (14 items) | done | [docs/FEEDBACK_SUBMISSION.md](docs/FEEDBACK_SUBMISSION.md) |
-| Devpost text with placeholders | drafted | [docs/DEVPOST.md](docs/DEVPOST.md) |
+| Devpost text | drafted; two TODO placeholders left (YouTube URL, AI-author bullet) | [docs/DEVPOST.md](docs/DEVPOST.md) |
 | Video script and shot list | drafted, not recorded | [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md) |
 | Git tags `pre-tasks-1`, `ext-eval-1`, `v1.0` | on `origin` | `git ls-remote --tags origin` |
 
-**Blind test run 2 (frozen `v1.0`)** was running on the lead's PC when this was written. Runs 4 to 6 of
-each arm on the 8 generator tasks write into `eval/gapbench/runs/test-gen-*/`. Do not touch that
-folder while it runs. The protocol says the test set is run exactly twice, so run 2 is the last one.
-No GapFinder code changed between `v1.0` and the commit this file was written on (checked with `git
-diff v1.0 -- gapfinder eval/baseline eval/gapbench/harness.py`).
+**Blind test run 2 (frozen `v1.0`) is finished and scored.** The protocol says the test set is run
+exactly twice, so there is no third generator run. Both result files have per-task rows, and the sealed
+answers and the seed are committed. Run 2 notes (also in the PROTOCOL.md amendments): the first launch
+failed because the sandbox guard refused every run (see section 3g), it was relaunched with
+`GF_SANDBOX_GUARD_USD=20000`, and one `gapfinder-random` run hit a `BadJSONError` and is scored missed.
+No GapFinder code changed between `v1.0` and the scoring (checked with `git diff v1.0 -- gapfinder
+eval/baseline eval/gapbench/harness.py`).
 
-The Devpost text has `[[V1.0: ...]]` placeholders for the run 2 numbers. Search for them with
-`grep -rn "\[\[V1.0" docs/ TEAM_HANDOFF.md`. Every placeholder must be filled or its sentence deleted
-before submission.
+Two `[[V1.0: ...]]` placeholders are left in docs/DEVPOST.md, both marked TODO: the YouTube URL and the
+AI-author bullet. Search for them with `grep -rn "\[\[V1.0" docs/ TEAM_HANDOFF.md`. Each must be filled or
+its sentence deleted before submission.
 
 ## 2. Before the lead goes offline (the lead's list)
 
 These need the lead's machine or the lead's accounts. If any is not done by tomorrow night, tell the
 team which one, because nobody else can do it.
 1. [ ] **Push everything:** `git push origin main`. The tags are already on `origin`.
-2. [ ] **Let run 2 finish, then score it** (section 3e, "Scoring run 2") so the placeholders can be
-   filled. If it cannot finish, say so in the team chat. The scoring needs `eval/gapbench/sealed/`,
-   which only the lead's PC has (it is git-ignored). If someone else must score, the lead copies that
-   folder to them privately and they check it first (command in 3e).
-3. [ ] **Refresh the spend ledger snapshot**, which is stale (it was taken on 2026-10-10, before the
-   blind test and the MC Dropout runs):
-   `cp .gf_cache/spend.jsonl eval/results/spend_ledger.jsonl`, then look at it (`head -3`; it holds only
-   time, kind, cost and tag, no keys) and commit it. Teammates copy it into their own `.gf_cache`
-   (section 3g).
+2. [x] **Run 2 finished and scored** (done 2026-10-13). The sealed folder is public in the repo, so
+   teammates no longer need it from the lead's PC. Only an AI-author flow would need its own
+   `sealed-ai/` folder (section 3e).
+3. [x] **Spend ledger snapshot refreshed** (done 2026-10-13, committed; it holds only time, kind, cost,
+   tag and token counts, no keys). Teammates copy it into their own `.gf_cache` (section 3g).
 4. [ ] **Share the keys privately** with whoever will run paid work (Token Factory key, the Nebius
    project ID, the Tavily key). One person only, and say who in the chat.
 5. [ ] **Share the model cache** if teammates will re-run anything: `.gf_cache/llm/` (no keys in it;
@@ -109,16 +112,17 @@ Follow [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md): the script with timestamps,
 and the shot list of what to record and how (the replay site at 16x, the Gap Report, the Scoreboard
 trust matrix, the `try_it.py` terminal). Summary:
 1. Decide whose voice it is and edit the "I'm Sayjad" lines if it is not him.
-2. If run 2 is scored, update the scoreboard numbers in segment 7 (the script says how). If not, keep
-   the run 1 numbers and say "run 1" out loud.
+2. Run 2 is scored and segment 7 already has both runs' numbers. Check them against the Scoreboard
+   tab before you record.
 3. Record at 1920x1080, label sped-up clips (16x), put model names on screen when said.
 4. Export at 2:50 or shorter. Upload to YouTube as **public**. Check it in a private window.
-5. Put the URL in docs/DEVPOST.md (the `[[V1.0: YouTube URL...]]` placeholder) and commit.
+5. Put the URL in docs/DEVPOST.md (the `[[V1.0: TODO ... the public YouTube URL ...]]` placeholder) and commit.
 
 ### c. Paste the description into Devpost and submit (about 27 to 28 October)
 
-1. Resolve every `[[V1.0: ...]]` placeholder in [docs/DEVPOST.md](docs/DEVPOST.md) (step e or the lead
-   gives the numbers). Delete the HTML comment block at the top of the file.
+1. Resolve the two remaining `[[V1.0: ...]]` placeholders in [docs/DEVPOST.md](docs/DEVPOST.md) (the
+   YouTube URL, and the AI-author bullet: fill it from step e or delete it as the bullet says). Delete
+   the HTML comment block at the top of the file.
 2. Go to the hackathon's Devpost page and create or edit the project. Fill:
    - name GapFinder and the one-line tagline from the README;
    - the project story: paste everything under the `---` line of docs/DEVPOST.md (Markdown headings,
@@ -153,7 +157,8 @@ author"). In short:
   and not a model used to build or tune GapFinder). It must run `make_task.py` and
   `leakage.py` itself.
 - **GapFinder is frozen first.** The `v1.0` tag is the freeze. The author clones the repo at `v1.0`.
-- Nobody on the team opens the answers. Wording everywhere: "tasks written by an independent AI model
+- Nobody on the team opens the AI tasks' answers before scoring. This needs its own sealed folder,
+  `sealed-ai/`, because the generator's `sealed/` folder is public now. Wording everywhere: "tasks written by an independent AI model
   with no part in building GapFinder".
 
 **Phase 1, the author writes and seals the tasks.**
@@ -163,7 +168,8 @@ author"). In short:
    the tasks `test-ai-<name>` and set `split: test`."
 2. For each task, the author follows TEST_TASKS.md, and then **moves the answers out of the task folder**,
    in the same layout the generator uses (compare the folder names under `eval/gapbench/tasks/test-gen-01/`
-   and `eval/gapbench/sealed/test-gen-01/`, without opening files):
+   and `eval/gapbench/sealed/test-gen-01/`; the generator's answers are public now, so you may open
+   those as an example):
    - the task folder `eval/gapbench/tasks/test-ai-<name>/` keeps `paper.md`, `targets.json`,
      `calibration.json` and a `task.yaml` **without** the `hidden`, `category` and `type` fields;
    - a sealed folder `eval/gapbench/sealed-ai/test-ai-<name>/` gets `answer.json`, `calibration.json`
@@ -187,8 +193,10 @@ author"). In short:
 run numbers 4 to 6, so that "runs 4 to 6" always means "the frozen v1.0 code", for every task.
 1. Check the code is still v1.0:
    `git diff v1.0 --stat -- gapfinder eval/baseline eval/gapbench/harness.py` must print nothing.
-2. Check the keys, cap and ledger (step g), then run. This calls Nemotron, so it costs money:
+2. Check the keys, cap and ledger (step g), then run. This calls Nemotron, so it costs money. Set
+   `GF_SANDBOX_GUARD_USD=20000` or the guard refuses every GapFinder run (step g):
    ```bash
+   export GF_SANDBOX_GUARD_USD=20000
    export GF_SPEND_TAG=test-ai-v1.0
    for t in eval/gapbench/tasks/test-ai-*; do
      for k in 4 5 6; do
@@ -197,8 +205,8 @@ run numbers 4 to 6, so that "runs 4 to 6" always means "the frozen v1.0 code", f
      done
    done
    ```
-3. **Budget:** about $3 for 8 tasks, from run 1: gapfinder $1.24 plus baseline-super $1.82 for 24 runs
-   each ([summary file](eval/results/gapbench_test_v1_summary.json)), so roughly $0.38 per task for the
+3. **Budget:** about $3.50 for 8 tasks, from run 2: gapfinder $1.47 plus baseline-super $1.95 for 24 runs
+   each ([gapbench_test_v2.json](eval/results/gapbench_test_v2.json)), so roughly $0.43 per task for the
    two arms. Check `budget.spent_usd()` before and after (step g). Do not run the other three arms.
 4. Do not open `eval/gapbench/sealed-ai/` or any task's `answer.json`.
 
@@ -207,14 +215,18 @@ run numbers 4 to 6, so that "runs 4 to 6" always means "the frozen v1.0 code", f
    under `runs/`, which is git-ignored):
    ```bash
    mkdir -p runs/answers_all
-   cp -r eval/gapbench/sealed/test-gen-* runs/answers_all/
-   cp -r eval/gapbench/sealed-ai/test-ai-* runs/answers_all/
+   cp -r eval/gapbench/sealed/test-gen-* runs/answers_all/     # public, in the repo
+   cp -r eval/gapbench/sealed-ai/test-ai-* runs/answers_all/   # the AI author's, until scored
    ```
 2. Score runs 4 to 6 (`--runs` picks run numbers; the output has a `by_source` entry per source,
    `generator` and `ai_author`):
    ```bash
    python eval/gapbench/score.py --split test --answers runs/answers_all --runs 4,5,6 --out runs/score_v1_0.json
    ```
+   Only two arms (gapfinder, baseline-super) are run on the AI tasks, so the other three arms will have
+   no rows for `test-ai-*`. Check how `score.py` reports that before you publish, and report each source
+   separately. Do not overwrite `gapbench_test_v2.json`: if you publish the scored file, give it a new
+   name (for example `eval/results/gapbench_test_v2_ai.json`).
    This re-runs each proposed configuration 3 times locally (free). If it stops with a
    missing-`answer.json` error, a task's answers are missing from `runs/answers_all`.
    I wrote this flow from reading `score.py`; no one has run it on AI tasks yet.
@@ -224,34 +236,13 @@ run numbers 4 to 6, so that "runs 4 to 6" always means "the frozen v1.0 code", f
 4. After scoring, commit `sealed-ai/` too (remove it from `.gitignore` first), together with the
    scored file, as the generator's answers are published at the reveal (below).
 
-**Scoring run 2 (the generator tasks, on `v1.0`) and the reveal.** This is the lead's job, or a teammate
-who was given the sealed folder privately. Per PROTOCOL.md section 7, run 2 is the final run.
-1. Check all runs exist: `ls eval/gapbench/runs/test-gen-*/*/run{4,5,6}/prediction.json | wc -l` should
-   print 120 (8 tasks, 5 arms, 3 runs). A crashed run is scored as missed, never dropped.
-2. Check the sealed folder against its pinned hash, if it was copied to a new machine:
-   ```bash
-   python - <<'EOF'
-   import sys
-   sys.path.insert(0, "eval/gapbench")
-   from pathlib import Path
-   from gen_tasks import hash_tree
-   print(hash_tree(Path("eval/gapbench/sealed")))
-   EOF
-   cat eval/gapbench/sealed.sha256
-   ```
-   The two lines must match.
-3. Score: `python eval/gapbench/score.py --split test --answers eval/gapbench/sealed --runs 4,5,6 --out eval/results/gapbench_test_v2.json`.
-   The web Scoreboard shows the highest `_v<N>` file, so this one replaces run 1's summary on the site.
-   To publish run 1's per-task rows as well, score `--runs 1,2,3 --out eval/results/gapbench_test_v1.json`.
-4. Fill the `[[V1.0: ...]]` numbers in docs/DEVPOST.md and the video script from that file, and add a
-   run 2 row to the README results table.
-5. **Reveal:** commit `eval/gapbench/sealed/` and `seed.txt` (remove the `eval/gapbench/sealed/` line
-   from `.gitignore`, or use `git add -f`). PROTOCOL.md's last amendment says per-task rows, categories,
-   the sealed folder and the seed are committed after the v1.0 run.
-6. Add an entry to PROTOCOL.md "Amendments" listing the GapFinder code changes between run 1 and `v1.0`:
-   `LocalBackend` passes one-thread BLAS caps to Docker containers only (commit 4817c70), `score.py` got
-   `--runs`, and a launcher script for the MC Dropout arms. None touches the search, the prompts or the
-   baseline. Check the list with `git log pre-tasks-1..v1.0 -- gapfinder eval scripts`.
+**Scoring run 2 (the generator tasks, on `v1.0`) and the reveal: done 2026-10-13.** The scored files
+are `eval/results/gapbench_test_v1.json` (runs 1 to 3) and `eval/results/gapbench_test_v2.json` (runs 4
+to 6), both made with `score.py --split test --answers eval/gapbench/sealed --runs <list> --out <file>`.
+`eval/gapbench/sealed/` and its seed are committed, and the folder's hash equals
+`eval/gapbench/sealed.sha256` (check it with `hash_tree`, as in the AI flow above). The PROTOCOL.md
+amendments list the code changes between run 1 and `v1.0`, the failed first attempt and the `BadJSONError`
+miss. The README, Devpost text and video script carry both runs' numbers.
 
 ### f. Optional: Candidate B and the RusKey positive control
 
@@ -269,9 +260,9 @@ Both are in TODO.md. Neither is needed for the submission. Do them only with the
 ### g. Money and keys
 
 - **The Token Factory credit is about $50 for the whole project, and only Nemotron inference is billed.**
-  The README's "$1.92 billed to date" is from 2026-10-10 and is out of date: it does not include the
-  blind test runs or the MC Dropout ledgers (about $0.28). The Nebius console is the only shared
-  source of truth, so look there before any run that costs more than $1.
+  The README's billed total is $17.17 (2026-10-13, from the refreshed ledger): each blind test run cost
+  about $7.5, the MC Dropout ledgers about $0.28 and everything before that about $1.9. The Nebius
+  console is the only shared source of truth, so look there before any run that costs more than $1.
 - **`GF_SPEND_CAP_USD`** in `.env` is a hard cap on billed spend, checked before every call, per machine.
   TODO.md says 11, which was written before the two test runs, so the lead has raised it. Do not raise
   it again without the lead's OK.
@@ -279,16 +270,17 @@ Both are in TODO.md. Neither is needed for the submission. Do them only with the
   2026-10-08, and none for 6 to 12 October, see
   [FROZEN.md](eval/external/mc-dropout/FROZEN.md) Deviation 2). The `cost` the API reports is about
   $0.01 per CPU-second, is diagnostic, and is still counted by our guard.
-- **`GF_SANDBOX_GUARD_USD=20000` is needed for any run with `--backend contree`.** The default is 60,
-  and the reported Sandboxes total is far over that (the MC Dropout runs alone reported $2,495.31: arms 3
-  and 4, the confirmation runs and the post-hoc diagnostic). Without it, every Sandboxes run is refused.
-  It does not apply to the local backend, which GapBench uses. Ask the lead before any new Sandboxes
-  run, and check the console for a Sandboxes charge first. Also set `GF_SANDBOX_CPU_LIMIT_S` (default
+- **`GF_SANDBOX_GUARD_USD=20000` is needed for any GapFinder run, including GapBench.** The default is
+  60, and the reported Sandboxes total is far over that ($2,665.07 in the ledger; the MC Dropout runs
+  alone reported $2,495.31: arms 3 and 4, the confirmation runs and the post-hoc diagnostic). Without it,
+  every GapFinder run is refused, local backend included: that is how the first launch of test run 2
+  failed. The `cost` field is diagnostic and is not billed in the Beta. Ask the lead before any new
+  Sandboxes run, and check the console for a Sandboxes charge first. Also set `GF_SANDBOX_CPU_LIMIT_S` (default
   300) only for runs that need more CPU time per process.
 - **One machine does paid or Sandboxes work at a time.** Each machine keeps its own ledger, so they cannot
   see each other's spending. On a new machine, copy the snapshot first, or the guards count from $0:
   `mkdir -p .gf_cache && cp eval/results/spend_ledger.jsonl .gf_cache/spend.jsonl`.
-  (The lead refreshes the snapshot in section 2, item 3.)
+  (The snapshot was refreshed on 2026-10-13.)
 - Tag every paid experiment (`GF_SPEND_TAG=<name>`). Check spend any time:
   `python -c "from gapfinder.models import budget; print(budget.spent_usd(), budget.sandbox_reported_usd())"`.
 - `GF_CACHE_ONLY=1` reuses cached model answers and refuses to call the API on a miss, so re-runs are
@@ -314,15 +306,13 @@ Install from [SETUP.md](SETUP.md) (Python 3.11, uv, Git for Windows). Windows no
   `.venv/Scripts/python -m uvicorn gapfinder.api.server:app --port 8000`.
 - Other commands are in TODO.md, "Reference: useful commands".
 
-## 4. README fixes to make once run 2 is scored
+## 4. README fixes after run 2 (done 2026-10-13)
 
-The README was last updated on 2026-10-11. These lines are out of date or will be:
-- the status block ("Tasks from an independent AI author are in progress"): say what happened;
-- the "Honest limitations" line "The test set is the real measure, and isn't run yet": run 1 is done;
-- the Results table: add a run 2 row (and the AI-author row if it exists);
-- "How we use Nemotron on Token Factory" and the "$1.92" total: refresh from the ledger;
-- "How we use Token Factory Sandboxes": the "$48.67 in total" reported cost is now far larger (see step g);
-- the Devpost placeholders in [docs/DEVPOST.md](docs/DEVPOST.md), the same numbers.
+The README was updated on 2026-10-13: the status block, the Results table (both test runs, with a
+per-arm table), "How we use Nemotron on Token Factory" with the $17.17 total, the Sandboxes reported
+total ($2,665.07, diagnostic and not billed) and the "Honest limitations" line about the test set. If
+the AI-author tasks are run, add their row to the Results table and update the limitation that says
+there is no result from them.
 
 ## 5. What's next for the product
 
