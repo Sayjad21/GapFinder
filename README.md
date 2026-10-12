@@ -139,9 +139,13 @@ already handle.
 
 - CPU only: Sandboxes VMs have 4 vCPUs and 3.9 GB, so GPU papers and the paper's full data scale
   are out of reach.
-- The harness spec (how to build, load and run the artifact, and which knobs exist) needs a
-  human to confirm it. `gapfinder spec-draft` can draft one and smoke-test it, but we haven't
-  evaluated it live against the hand-written specs yet.
+- The harness spec (how to build, load and run the artifact, and which knobs exist) still needs a
+  person to read and approve it. `gapfinder spec-draft` drafted a spec that built, ran and passed
+  its smoke test on both GapBench artifacts we tried (2 attempts each, $0.0081 in total), found
+  all 27 hand-written knobs with matching defaults, and ran unedited. The human input left is
+  approval, not writing. We did not try it on MC Dropout (large Docker repo), and the two
+  artifacts are small single-script repos, so expect more edits on real research code
+  ([results](eval/results/spec_draft_live.md)).
 - Timing metrics are noisy in shared VMs. GapFinder compares ratios measured inside one VM, uses
   noise bands from repeats, and confirms with more repeats when a metric's CV is above 5%.
 - The dev set has 4 tasks, built by the same people who built GapFinder. The test set is the

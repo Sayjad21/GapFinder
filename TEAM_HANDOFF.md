@@ -333,6 +333,6 @@ After the submission. Each comes from something we saw, with its file.
 - **Setting recall on RusKey is 0.67, below our 0.80 bar** (the tuner's mode flags are missed,
   [ledger_ruskey_v5.json](eval/results/ledger_ruskey_v5.json)): improve the repo map or assumption prompt
   in general, and measure it on the external paper too.
-- Evaluate `gapfinder spec-draft` live against the hand-written specs, and time a fresh clone of `try_it.py`.
+- Time a fresh clone of `try_it.py`. (`gapfinder spec-draft` live evaluation is done: eval/results/spec_draft_live.md; MC Dropout not tried.)
 - A second external case where the cause is hidden from us, a RusKey positive control, and, longer term,
   artifact-evaluation committees as users.

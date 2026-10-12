@@ -637,7 +637,7 @@ check, and no labels from unconfirmed runs.
 ## P1-0. Minimal human input: GapFinder drafts its own harness spec
 
 **Status:** the code is done (`gapfinder/spec_draft.py`, `gapfinder spec-draft`, tests with a
-scripted fake model). The live evaluation on the three artifacts (item 2) is pending.
+scripted fake model). Live evaluation done on mlbench and rlbench (both pass unedited, recall 100%, $0.0081; MC Dropout skipped), see eval/results/spec_draft_live.md.
 
 **Why:** the Coding and Agentic Engineering track asks for an agent that plans, writes, tests and
 iterates on a real repository with minimal human input. Today a person writes the harness spec

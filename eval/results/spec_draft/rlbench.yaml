@@ -1,0 +1,68 @@
+# Harness spec drafted by `gapfinder spec-draft`. A person must read and approve it before a search uses it.
+# base is the repo checkout; knob defaults come from the code (see the draft report for file:line).
+name: rlbench_cartpole_q
+base: local:../../eval/gapbench/artifacts/rlbench
+run:
+  command: ${PYTHON:-python3} cartpole_q.py --episodes {episodes} --gamma {gamma} --lr {lr} --lr_schedule {lr_schedule} --eps_start
+    {eps_start} --eps_end {eps_end} --eps_decay {eps_decay} --theta_bins {theta_bins} --omega_bins {omega_bins} --reward_norm
+    {reward_norm} --max_steps {max_steps} --init_q {init_q} --seeds {seeds} --eval_episodes {eval_episodes} --out out/result.json
+  output: out/result.json
+  format: auto
+  timeout: 3600.0
+knobs:
+  episodes:
+    layer: config
+    default: '400'
+  gamma:
+    layer: config
+    default: '0.99'
+  lr:
+    layer: config
+    default: '0.1'
+  lr_schedule:
+    layer: config
+    default: const
+  eps_start:
+    layer: config
+    default: '1.0'
+  eps_end:
+    layer: config
+    default: '0.05'
+  eps_decay:
+    layer: config
+    default: '0.99'
+  theta_bins:
+    layer: config
+    default: '6'
+  omega_bins:
+    layer: config
+    default: '6'
+  reward_norm:
+    layer: config
+    default: 'off'
+  max_steps:
+    layer: config
+    default: '200'
+  init_q:
+    layer: config
+    default: '0.0'
+  seeds:
+    layer: config
+    default: '10'
+  eval_episodes:
+    layer: config
+    default: '20'
+  RUN_TAG:
+    layer: environment
+    default: ''
+    env: true
+  RL_SEED_BASE:
+    layer: environment
+    default: '0'
+    env: true
+allowed_paths:
+- out/
+metrics:
+- max_reward
+- mean_reward
+- min_reward

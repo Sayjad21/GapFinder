@@ -1,0 +1,60 @@
+# Harness spec drafted by `gapfinder spec-draft`. A person must read and approve it before a search uses it.
+# base is the repo checkout; knob defaults come from the code (see the draft report for file:line).
+name: mlbench
+base: local:../../eval/gapbench/artifacts/mlbench
+run:
+  command: ${PYTHON:-python3} train.py --n {n} --positive_rate {positive_rate} --label_noise {label_noise} --split {split}
+    --normalize {normalize} --epochs {epochs} --batch_size {batch_size} --lr {lr} --lr_schedule {lr_schedule} --weight_decay
+    {weight_decay} --class_weight {class_weight} --threshold {threshold} --data_seed {data_seed}
+  output: out/result.json
+  format: auto
+  timeout: 300.0
+knobs:
+  n:
+    layer: dataset
+    default: '1200'
+  positive_rate:
+    layer: dataset
+    default: '0.3'
+  label_noise:
+    layer: dataset
+    default: '0.05'
+  split:
+    layer: dataset
+    default: '0.8'
+  normalize:
+    layer: config
+    default: none
+  epochs:
+    layer: config
+    default: '15'
+  batch_size:
+    layer: config
+    default: '32'
+  lr:
+    layer: config
+    default: '0.05'
+  lr_schedule:
+    layer: config
+    default: const
+  weight_decay:
+    layer: config
+    default: '0.0'
+  class_weight:
+    layer: config
+    default: none
+  threshold:
+    layer: config
+    default: '0.5'
+  data_seed:
+    layer: dataset
+    default: '7'
+  RUN_TAG:
+    layer: environment
+    default: ''
+    env: true
+allowed_paths:
+- out/
+metrics:
+- balanced_accuracy
+- test_accuracy
