@@ -10,3 +10,6 @@
 
 The team then moved all four arms to Token Factory Sandboxes, after checking in the Nebius billing
 console that Sandboxes usage isn't billed during the Beta (see FROZEN.md, Deviation 2).
+
+- **run-no-README-stray, run-all-flags-random-stray:** the local runner started these by accident after it
+  was asked to stop (arm 3 at 15:22, then arm 4), and they were killed during calibration. No verdict.
