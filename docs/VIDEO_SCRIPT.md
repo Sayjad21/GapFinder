@@ -30,7 +30,7 @@ reason, and the blind-test counts.
 
 ## Script
 
-About 330 spoken words (the placeholders count as words), about 2:35 at 130 words a minute, which
+About 340 spoken words (the placeholders count as words), about 2:35 at 130 words a minute, which
 leaves room for pauses. The windows below add up to 2:52. Time each segment when you read it aloud.
 
 ### 1. 0:00 to 0:12, the founder story
