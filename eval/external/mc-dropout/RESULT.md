@@ -150,6 +150,7 @@ Both, for different reasons, and the two should not be mixed up.
 
 We did not rerun the search with `epochx=10` added to the candidates to test the second point; that
 would be a new, unfrozen experiment. It is stated here as an expectation, not a result.
+(Run afterwards as a post-hoc diagnostic, see "Post-hoc diagnostic" below.)
 
 ## Honest conclusion
 
@@ -223,6 +224,26 @@ From [answer_key.md](answer_key.md), section 4, plus what this run adds.
 - **Repeats of identical settings and splits are bit-identical**, so noise is measured over different
   splits. The naive band is the repeat noise of 3-split cells, not the paper's 20-split spread.
 
+## Post-hoc diagnostic (not blind, not scored)
+
+Run after the key was revealed; it changes no arm's score or label above. One extra search on
+Sandboxes with the documented values written into the hypothesis set by hand: the normal ledger plus
+`epochx=10` and `hidden=1` as candidates (with the paper's "10x more iterations" and the authors'
+README "10x epochs one layer" as their evidence), everything else as pre-registered. Details, the
+exact edits and the gap report are in [posthoc/README.md](posthoc/README.md).
+
+- **Label: Unexplained.** The search tested `epochx=10`, `hidden=1` and the pair. The pair gave
+  Energy 1.723 against 1.66 (+3.8%, naive 0.387) but held-out Yacht 1.987 against 1.11 (+79%, naive
+  1.041). Verification found it plausible with the counterfactual passing, then rejected it:
+  "closes this claim but makes held-out claims worse; rejected". The pair is reported only as the
+  closest configuration.
+- So GapFinder's verification confirms the Energy effect and declines to call it the explanation
+  because of Yacht. The probable reason Yacht's paper value cannot be matched by any setting is in
+  the authors' README ("Update (2018)"): the paper-era code tuned hyperparameters by Bayesian
+  optimisation shared across all splits, which caused test-set contamination and was replaced by
+  per-split grid search. That is a code change, not a knob. Not tested here.
+- The result of the blind evaluation stays 0 of 4 arms.
+
 ## Cost
 
 - **Nemotron, billed:** about **$0.28**, all of it ledger extraction: $0.1538 (normal ledger) and
@@ -249,4 +270,5 @@ From [answer_key.md](answer_key.md), section 4, plus what this run adds.
 | Arm 3 and 4 (Sandboxes) | [run-no-README/](run-no-README/), [run-all-flags-random/](run-all-flags-random/), [sandbox-arms.log](sandbox-arms.log) |
 | Ledgers the arms used | [ledgers/](ledgers/) |
 | Confirmation runs | [confirm/](confirm/) |
+| Post-hoc diagnostic (not blind) | [posthoc/](posthoc/) |
 | Gap check before sealing (defaults only) | [gapcheck/](gapcheck/) |
