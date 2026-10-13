@@ -61,6 +61,10 @@ class SearchConfig:
     # In 14 of v1.0's 18 blind-test misses a true value was never tested at all.
     coverage: bool = True
     coverage_candidates: int = 6
+    # the combine round pairs this many of each top knob's best-scoring values (the true value of an
+    # interaction half is often not its knob's best single value), at most combine_max_pairs pairs
+    combine_values_per_knob: int = 2
+    combine_max_pairs: int = 40
     # confirmation counts only runs made after a hypothesis was selected (the screening run that picked
     # it is excluded: winner's curse), with a Bonferroni-corrected bootstrap over the confirm round
     strict_confirm: bool = True
@@ -425,8 +429,16 @@ class GapSearch:
             conf_knobs.setdefault(h.knob, h.value)
         if len(conf_knobs) >= 2:
             combos.append(dict(conf_knobs))
+        k_vals = self.cfg.combine_values_per_knob if self.cfg.coverage else 1
+        values_of = {h.knob: [x for x in sorted(hyps, key=lambda x: -score[x]) if x.knob == h.knob][:k_vals]
+                     for h in top}
+        pairs = []
         for a, b in itertools.combinations(top, 2):
-            c = {a.knob: a.value, b.knob: b.value}
+            for va in values_of[a.knob]:
+                for vb in values_of[b.knob]:
+                    pairs.append((score[va] + score[vb], {a.knob: va.value, b.knob: vb.value}))
+        pairs.sort(key=lambda p: -p[0])  # stable: knob-best pairs first, as before
+        for _, c in pairs[: self.cfg.combine_max_pairs]:
             if c not in combos:
                 combos.append(c)
         await _all(*(self.measure(c, 1, "combine") for c in combos))

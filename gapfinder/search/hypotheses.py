@@ -67,7 +67,22 @@ def coverage_values(knob) -> list[str]:
     categorical flag, or a coarse-first log ladder around a numeric default."""
     if knob.choices:
         return [c for c in knob.choices if c != knob.default]
+    d = knob.default.strip()
+    if _NUM.fullmatch(d) and 0 < float(d) < 1 and "." in d:
+        return fraction_values(float(d))
     return generate_values(knob.default, LADDER)
+
+
+def fraction_values(x: float) -> list[str]:
+    """A default strictly between 0 and 1 is usually a fraction, probability or rate, so values above it
+    approach 1 instead of overshooting it: 0.5 gives 0.05, 0.95, 0.25, 0.75, 0.01, 0.99, ..."""
+    out: list[str] = []
+    for f in LADDER:
+        for v in (x / f, 1 - (1 - x) / f):
+            s = _fmt(v)
+            if 0 < v < 1 and s not in out and float(s) != x:
+                out.append(s)
+    return out
 
 
 def fill_choices(spec: HarnessSpec, flags) -> int:

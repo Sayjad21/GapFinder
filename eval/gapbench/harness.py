@@ -67,7 +67,8 @@ def claims_table(targets: list[dict]) -> str:
     return "\n".join(f"{t['claim_id']}: {t['metric']} = {t['paper_value']:g}" for t in targets)
 
 
-async def run_gapfinder(task_dir: Path, out: Path, overrides: dict, backend: str, use_cache: bool) -> dict:
+async def run_gapfinder(task_dir: Path, out: Path, overrides: dict, backend: str, use_cache: bool,
+                        ledger_from: Path | None = None) -> dict:
     from gapfinder.ingest.pdf import load_paper
     from gapfinder.ingest.repo_map import build_repo_map
     from gapfinder.ledger.assumptions import build_assumption_space, ground_assumptions
@@ -81,8 +82,15 @@ async def run_gapfinder(task_dir: Path, out: Path, overrides: dict, backend: str
     router = Router(use_cache=use_cache)
     paper = load_paper(paper_path)
     rm = build_repo_map(artifact)
-    claims = ground_claims(paper, await extract_claims(router, paper)).kept
-    assumptions = ground_assumptions(paper, artifact, await build_assumption_space(router, paper, rm, claims)).kept
+    if ledger_from is not None:  # the recorded model answers of an earlier run: no model call, same inputs
+        from gapfinder.ledger.schemas import Assumption, Claim
+
+        claims = [Claim(**c) for c in json.loads((ledger_from / "claims.json").read_text(encoding="utf-8"))]
+        assumptions = [Assumption(**a) for a in json.loads((ledger_from / "assumptions.json").read_text(encoding="utf-8"))]
+        (out / "ledger_from.txt").write_text(ledger_from.as_posix() + "\n", encoding="utf-8")
+    else:
+        claims = ground_claims(paper, await extract_claims(router, paper)).kept
+        assumptions = ground_assumptions(paper, artifact, await build_assumption_space(router, paper, rm, claims)).kept
     (out / "assumptions.json").write_text(json.dumps([a.model_dump() for a in assumptions], indent=1))
     (out / "claims.json").write_text(json.dumps([c.model_dump() for c in claims], indent=1))
     orch = Orchestrator(make_backend(backend), spec, EventLog(out / "events.jsonl"), cost=CostMeter())
@@ -153,6 +161,9 @@ def main() -> int:
     p.add_argument("--backend", default="local")
     p.add_argument("--seed", type=int, default=0, help="gapfinder-random: shuffle seed")
     p.add_argument("--fresh", action="store_true", help="GapFinder: bypass the LLM cache (independent repeats)")
+    p.add_argument("--ledger-from", type=Path,
+                   help="GapFinder: reuse the claims.json and assumptions.json of an earlier run instead of calling "
+                        "the models (re-runs only the search, on identical model answers; free)")
     a = p.parse_args()
     task, *_ = load_task(a.task_dir)
     out = GB / "runs" / task["id"] / a.arm / f"run{a.run}"
@@ -165,7 +176,7 @@ def main() -> int:
     try:
         if a.arm.startswith("gapfinder"):
             res = asyncio.run(run_gapfinder(a.task_dir, out, {**ARM_CONFIG[a.arm], "seed": a.seed}, a.backend,
-                                            not a.fresh))
+                                            not a.fresh, a.ledger_from))
         else:
             res = run_baseline(a.task_dir, out, a.arm.split("-")[1], a.backend, a.cap, a.steps)
     except Exception as exc:  # a crashed run is scored as a failure, never silently dropped
