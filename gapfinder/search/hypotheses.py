@@ -79,8 +79,16 @@ def coverage_values(knob) -> list[str]:
         ladder = generate_values(d, LADDER)
         return ladder[:2] + ["1"] + [v for v in ladder[2:] if v != "1"]
     if _NUM.fullmatch(d) and 0 < float(d) < 1 and "." in d:
-        return fraction_values(float(d))
-    return generate_values(knob.default, LADDER)
+        return _with_zero(fraction_values(float(d)))
+    vals = generate_values(knob.default, LADDER)
+    if "." in d and _NUM.fullmatch(d) and float(d) > 0:  # a float knob's boundary value 0 (no exploration, no noise)
+        return _with_zero(vals)
+    return vals
+
+
+def _with_zero(vals: list[str]) -> list[str]:
+    """Insert the boundary value 0.0 after the two coarsest candidates."""
+    return vals[:2] + ["0.0"] + [v for v in vals[2:] if not _same_number(v, "0")]
 
 
 def fraction_values(x: float) -> list[str]:

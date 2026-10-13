@@ -41,7 +41,7 @@ def test_choices_are_filled_into_a_spec_from_the_repo_map(tmp_path):
 def test_fractions_stay_below_one():
     k = Knob(layer="config", default="0.5")
     vals = coverage_values(k)
-    assert all(0 < float(v) < 1 for v in vals) and "0.95" in vals and "0.05" in vals  # threshold 0.5, never 5
+    assert all(0 <= float(v) < 1 for v in vals) and "0.95" in vals and "0.05" in vals and "0.0" in vals  # never 5
 
 
 def test_a_multiplier_knob_gets_the_literal_factors_first(tmp_path):

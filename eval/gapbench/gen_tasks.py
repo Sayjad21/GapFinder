@@ -138,6 +138,10 @@ MAX_RESTARTS = 8               # if a category can't be filled, the whole genera
                                # enough that some noise draws leave a category with no valid task. The
                                # number of restarts is recorded in the sealed log.
 DECOY_DRAWS = 30               # random decoy candidates tried per attempt
+RIVALS_OVER_SEARCH_SPACE = True  # rivals are checked over every value GapFinder can test (pools plus its
+                                 # coverage values: choices, log ladder, multiplier factors), not only the
+                                 # pools: on test-gen-05, eps_start=0.0 (a ladder value outside the pool)
+                                 # explained both claims better than the planted pair
 
 # --------------------------------------------------------------------------- paper templates
 
@@ -445,10 +449,10 @@ class Measurer:
         return self._runs[key]
 
     async def ensure_pool(self, family: str) -> None:
-        """Measure the naive configuration and every single (knob, value) of the family's pools."""
+        """Measure the naive configuration and every single (knob, value) GapFinder could test."""
         if family in self._pooled:
             return
-        configs = [{}] + [{k: v} for k, vs in sorted(POOLS[family].items()) for v in vs]
+        configs = [{}] + [{k: v} for k, vs in sorted(rival_values(family).items()) for v in vs]
         await asyncio.gather(*(self.measure(family, c) for c in configs))
         self._pooled.add(family)
 
@@ -510,9 +514,36 @@ class Screen:
     def rivals(self, skip: set[tuple[str, str]], skip_knobs: set[str] = frozenset()) -> list[tuple[str, str]]:
         """Single pool settings that reproduce both claims (each within one noise band of the paper's
         number): a second, equally good answer the key doesn't name."""
-        return [(k, v) for k, vs in sorted(POOLS[self.plan.family].items()) for v in vs
+        return [(k, v) for k, vs in sorted(rival_values(self.plan.family).items()) for v in vs
                 if (k, v) not in skip and k not in skip_knobs
                 and self.single_closes_primary(k, v, partial=False) and self.single_reproduces_held_out(k, v)]
+
+
+_RIVAL_CACHE: dict[str, dict[str, list[str]]] = {}
+
+
+def rival_values(family: str) -> dict[str, list[str]]:
+    """Per poolable knob: its pool values plus the values GapFinder's search would also try (v1.1 value
+    coverage), so a planted answer is only accepted if nothing GapFinder tests explains the claims as well."""
+    if family in _RIVAL_CACHE:
+        return _RIVAL_CACHE[family]
+    out = {k: list(vs) for k, vs in POOLS[family].items()}
+    if RIVALS_OVER_SEARCH_SPACE:
+        from gapfinder.ingest.config_flow import flag_scales
+        from gapfinder.ingest.repo_map import build_repo_map
+        from gapfinder.search.hypotheses import coverage_values, fill_choices, mark_multipliers_from_flow
+
+        spec = HarnessSpec.load_yaml(GB / f"{family}.yaml")
+        root = Path(str(spec.base).removeprefix("local:"))
+        fill_choices(spec, build_repo_map(root).flags)
+        mark_multipliers_from_flow(spec, flag_scales(root))
+        for k in out:
+            knob = spec.knobs[k]
+            for v in coverage_values(knob)[:6]:
+                if v != knob.default and v not in out[k] and knob.affordable(v):
+                    out[k].append(v)
+    _RIVAL_CACHE[family] = out
+    return out
 
 
 # --------------------------------------------------------------------------- files of one task
