@@ -1,26 +1,26 @@
 # Gap Report: test-gen-04
 
-Artifact `mlbench` · generated 2026-10-14 00:27 · 44 branch runs (0 build/load setups) · sandbox $0.0000
+Artifact `mlbench` · generated 2026-10-14 00:50 · 41 branch runs (0 build/load setups) · sandbox $0.0000
 
 | Claim | Label | Gap before | Gap after | Noise band | Explained by |
 |---|---|---|---|---|---|
-| C1 (test_accuracy) | Paper-artifact inconsistency | -35.4% | +0.3% | ±11.1% | `normalize=zscore` |
+| C1 (test_accuracy) | Paper-artifact inconsistency | -34.8% | +0.5% | ±1.0% | `normalize=zscore` |
 
 ## C1: test_accuracy (paper 0.825)
-**Paper-artifact inconsistency** · gap -35.4% → +0.3% · 13 hypotheses tested
+**Paper-artifact inconsistency** · gap -34.8% → +0.5% · 13 hypotheses tested
 > Confirmed cause: reverting it brings the gap back, held-out claims hold, and the value has evidence
 
 ### Which experiment changed it?
-- Branch: `B0006`, `B0011`, `B0012`, `B0013`, `B0014`, `B0015` (6 run(s) of the same config)
+- Branch: `B0006`, `B0011`, `B0012`, `B0013` (4 run(s) of the same config)
 - Config: `normalize` naive `none`, changed to `zscore`
 - Command:
 
-  Replay: fork checkpoint `54d22a49-2b7a-4c56-b98b-3419593d502b` and run
+  Replay: fork checkpoint `efc19968-a5c9-4ed3-9df3-ae8ca26b27f7` and run
   ```
-  RUN_TAG=c8dc502ac7d4 "${PYTHON:-python3}" train.py --n 1200 --positive_rate 0.3 --label_noise 0.05 --split 0.8 --normalize zscore --epochs 15 --batch_size 32 --lr 0.05 --lr_schedule const --weight_decay 0.0 --class_weight none --threshold 0.5 --data_seed 7 --out out/result.json
+  RUN_TAG=45fece127fd2 "${PYTHON:-python3}" train.py --n 1200 --positive_rate 0.3 --label_noise 0.05 --split 0.8 --normalize zscore --epochs 15 --batch_size 32 --lr 0.05 --lr_schedule const --weight_decay 0.0 --class_weight none --threshold 0.5 --data_seed 7 --out out/result.json
   ```
-- Output: `test_accuracy` 0.8292, 0.825, 0.825, 0.8292, 0.8292, 0.825; gap after +0.3%; result checkpoint `9d5577c2-5303-4e6b-87f4-47cfced516ee`
-- Effect: candidate 0.8271 minus naive 0.5333 = +0.2938, 95% bootstrap interval [+0.2617, +0.3442] (6 candidate runs vs 5 naive runs)
+- Output: `test_accuracy` 0.8292, 0.8292, 0.8292, 0.8292; gap after +0.5%; result checkpoint `c14aa56b-e6ca-4dae-9013-c5d89a1e8a36`
+- Effect: candidate 0.8292 minus naive 0.5375 = +0.2917, 95% bootstrap interval [+0.2859, +0.3217] (4 candidate runs vs 5 naive runs)
 
 ### What did the paper report?
 > A plain logistic-regression baseline reaches 0.825 test accuracy and 0.807 balanced accuracy on a synthetic screening task.
@@ -28,43 +28,46 @@ Artifact `mlbench` · generated 2026-10-14 00:27 · 44 branch runs (0 build/load
 - p. 1; value used: `test_accuracy` = 0.825 (headline claim)
 
 ### What did we measure?
-- Naive median 0.5333 over 5 runs; repeats: 0.4667, 0.5833, 0.5458, 0.5333, 0.4875
-- Spread: range 0.4667 to 0.5833, noise band ±0.0916 (2 x MAD), CV 8.9%
+- Naive median 0.5375 over 5 runs; repeats: 0.5458, 0.5375, 0.5417, 0.5375, 0.4875
+- Spread: range 0.4875 to 0.5458, noise band ±0.0084 (2 x MAD), CV 4.5%
 - Setup check: none in this report (the band comes from forks of one setup)
-- Discrepancy from the paper: -35.4% (noise band ±11.1% of the paper value)
+- Discrepancy from the paper: -34.8% (noise band ±1.0% of the paper value)
 
 ### Why do we believe it?
-- PASS · Counterfactual (reversal test): without `normalize` the gap is -35.4% (it comes back)
-- PASS · Held-out claim: C2: -33.2% to +0.2% (not worse beyond noise)
+- PASS · Counterfactual (reversal test): without `normalize` the gap is -34.8% (it comes back)
+- PASS · Held-out claim: C2: -32.8% to +0.4% (not worse beyond noise)
 - PASS · Evidence: `normalize=zscore`: paper states 'zscore'
-- PASS · Effect vs noise: candidate minus naive is +0.2938 with a 95% bootstrap interval that excludes 0
+- PASS · Effect vs noise: candidate minus naive is +0.2917 with a 95% bootstrap interval that excludes 0
 
 ### What remains unknown?
 - Untestable within the budget: none
 - Not settable with this harness: `RUN_TAG`, `SCALES`, `WEIGHTS`, `num_runs`, `python_version`, `os`, `cpu`, `memory`, `disk`, `PYTHONHASHSEED`, `--out`
 - Setup reproducibility: not checked
-- Unconfirmed leads (moved the gap in the screen, not part of the explanation): none
+- Unconfirmed leads (moved the gap in the screen, not part of the explanation): `lr_schedule=cosine` (12.4 noise units, gap -22.2%); `normalize=minmax` (6.94 noise units, gap -27.8%)
 - Near alternatives (closest across all claims):
-  - `normalize=zscore`, `lr_schedule=cosine`: this claim +0.5%, mean |gap| 0.5% (5 runs)
-  - `normalize=zscore`, `lr_schedule=step`: this claim +0.5%, mean |gap| 0.5% (5 runs)
-  - `normalize=zscore`, `class_weight=balanced`: this claim -5.1%, mean |gap| 3.9% (5 runs)
+  - `lr_schedule=cosine`, `normalize=zscore`: this claim +0.5%, mean |gap| 0.5% (3 runs)
+  - `lr_schedule=step`, `normalize=zscore`: this claim +0.5%, mean |gap| 0.5% (3 runs)
+  - `normalize=zscore`, `class_weight=balanced`: this claim -4.5%, mean |gap| 3.4% (3 runs)
+
+### History matching (every measured configuration, all claims together)
+- 5 of 13 tested configurations fit every claim within 3 sigma
 
 ## Closest configurations across all claims
 Not an attribution: the labels above judge one claim at a time and require the held-out claims not to get worse. This table shows which measured changes bring several claims toward the paper together (gap per claim, mean of absolute gaps).
 
 | Configuration | Runs | C1 | C2 | Mean |gap| |
 |---|---|---|---|---|
-| `normalize=zscore` | 6 | +0.3% | +0.2% | 0.2% |
-| `normalize=zscore`, `lr_schedule=cosine` | 5 | +0.5% | +0.4% | 0.5% |
-| `normalize=zscore`, `lr_schedule=step` | 5 | +0.5% | +0.4% | 0.5% |
-| `normalize=zscore`, `class_weight=balanced` | 5 | -5.1% | -2.7% | 3.9% |
-| `class_weight=balanced`, `normalize=minmax` | 5 | -6.6% | -3.4% | 5.0% |
+| `normalize=zscore` | 4 | +0.5% | +0.4% | 0.5% |
+| `lr_schedule=cosine`, `normalize=zscore` | 3 | +0.5% | +0.4% | 0.5% |
+| `lr_schedule=step`, `normalize=zscore` | 3 | +0.5% | +0.4% | 0.5% |
+| `normalize=zscore`, `class_weight=balanced` | 3 | -4.5% | -2.3% | 3.4% |
+| `normalize=minmax`, `class_weight=balanced` | 3 | -6.6% | -3.8% | 5.2% |
 
 ## Not testable with this harness
 Assumptions about knobs the harness spec can't set: `RUN_TAG`, `SCALES`, `WEIGHTS`, `num_runs`, `python_version`, `os`, `cpu`, `memory`, `disk`, `PYTHONHASHSEED`, `--out`
 
 ## Provenance
-- GapFinder commit: `ab5d0e01d517ea012f76706719410d70d422f3f9` (working tree had uncommitted changes)
+- GapFinder commit: `ee5bfaf3f91999664f6df4e7df12a48c78c40f73` (working tree had uncommitted changes)
 - Models: ultra `nvidia/Nemotron-3-Ultra-550b-a55b`, super `nvidia/nemotron-3-super-120b-a12b`, nano `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`, omni `nvidia/Nemotron-3-Nano-Omni`
 - Prompt sha256: CLAIM_PROMPT `79757ce60aaaf5377dde8465230665347bfca143f0f05b752c9efa3b5bde5e34`, FILTER_PROMPT `439a83d5b510aa71fcfc50c1fdf62816af0a26cce0a8403ac89618d16cabbe32`, ASSUMPTION_PROMPT `85630aca4795a387ca8bb3c6e51dab78b3cd5c5276c9157843d84ef0128d019b`, TRIAGE_PROMPT `26293319ecd0ace0815fb8293cf05b4cbb11142f0c2e3e05e580faa74e1e9d5e`, MISSING_SENTENCE_PROMPT `b935383290f13c0a18521b2e0db1b556e66f5e5e61de1318671d8ad09dcb72e0`
 - Harness spec sha256: `bfdd41b8caf786503bc4ee736dca20ece1be6a7c560eb6cb028e538e361e4388`

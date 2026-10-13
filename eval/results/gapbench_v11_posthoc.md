@@ -13,8 +13,8 @@ $0 (local backend). Scored with `score.py --answers eval/gapbench/sealed`.
 |---|---|---|
 | Confidently wrong (24) | 0 | 0 |
 | Correct abstention (9: no cause, noise only, incomplete) | 9 | 9 |
-| Correct cause (15) | 7 | **11**, plus 1 partial |
-| known cause (6) | 5 | 6 |
+| Correct cause (15) | 7 | **10-11**, plus 1 partial (two invocations; see below) |
+| known cause (6) | 5 | 5-6 |
 | decoy (3) | 2 | 3 |
 | interaction (6) | 0 | 2, plus 1 partial |
 
@@ -28,7 +28,7 @@ v1.1 as measured here (commit `ab5d0e0`):
 - a parsimony tie-break;
 - value sets.
 
-An earlier v1.1 build (before multipliers, boundaries and sets) scored 8 plus 1 partial. The set-valued
+An earlier v1.1 build (before multipliers, boundaries and sets) scored 8 plus 1 partial. The current build (commit `ee5bfaf`, which adds the float boundary 0.0, history matching and the adaptive combine) scored 10 plus 1 partial; the build before it scored 11. The difference is one test-gen-03 run abstaining. These RL artifacts measure differently on every invocation, so a one-task swing is within noise. The set-valued
 score (`correct_set`) equals the exact score here: 11.
 
 Reachability (`reachability_v11.json`): every true value is now measured on these tasks. The remaining

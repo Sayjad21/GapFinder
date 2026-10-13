@@ -85,7 +85,7 @@ Done in v1.1 (commits `c7fb9a0`, `c5b1a93`, `1460855`; results in
   partial, decoy 2 → 3, known cause 5 → 3), still 0 confidently wrong and 9/9 abstentions; dev 3/4.
 
 Remaining, in order:
-1. [ ] **Reachability metric and log re-analysis script** (free; proposal Part D, day 1).
+1. [x] **Done** (`eval/reachability.py`: v1.1 reaches every true value on the former test tasks). **Reachability metric and log re-analysis script** (free; proposal Part D, day 1).
    `eval/reachability.py`: for every run with a known answer, record:
    - whether each true value was in the candidate set;
    - its rank there;
@@ -94,7 +94,7 @@ Remaining, in order:
 
    Report the reachability rate per category, for v1.0 and v1.1. This turns "the grid couldn't reach
    it" into a number and shows what each later fix buys.
-2. [ ] **Multiplier, mode and boundary candidates from plain code** (free; M1 step 3-4).
+2. [x] **Done** (literal factors for multipliers, boundaries 1 and 0.0). **Multiplier, mode and boundary candidates from plain code** (free; M1 step 3-4).
    - In `search/hypotheses.py`, knobs whose name or help text marks a multiplier (`*x`, `*_mult`,
      `*_scale`, `*_factor`, help text "multiplier") get the literal factors {1, 2, 5, 10, 100};
      `epochx=10` then becomes deterministic.
@@ -103,7 +103,7 @@ Remaining, in order:
    - Integer knobs get the boundary values 0 or 1 where valid.
    - Target the RusKey tuner-mode flags behind setting recall 0.67: check, from the RusKey logs and
      `papers/ruskey/gold_assumptions.json`, whether the repo map or the model missed them.
-3. [ ] **Static config flow (Python `ast`)** (free; M1 step 3 and proposal idea #3, reduced).
+3. [x] **Done** (`gapfinder/ingest/config_flow.py`: epochx scales n_epochs). **Static config flow (Python `ast`)** (free; M1 step 3 and proposal idea #3, reduced).
    - Mark a knob as multiplicative when it multiplies a loop bound or size (e.g.
      `int(n_epochs * epochs_multiplier)`), and record what it scales (`epochs = n_epochs.txt × epochx`).
    - The resolver in item 4 needs this to turn "10× PBP's 40 epochs" into `epochx = 10`.
@@ -122,7 +122,7 @@ Remaining, in order:
 5. [ ] **$ Code-to-paper reverse pass** (Dude, arXiv 2609.03416). For every knob in the repo map, ask
    what the paper says about it: a stated value, a relative statement, or nothing. This targets setting
    recall directly; measure it on RusKey and MC Dropout.
-6. [ ] **Set-valued answers for equally good fits** (free; the bridge to phase 2).
+6. [x] **Done** (value_sets, scorer `correct_set`). **Set-valued answers for equally good fits** (free; the bridge to phase 2).
    - Report every value of a knob, and every configuration, whose gaps stay within the noise band, as
      a range or "island", plus the parsimony pick.
    - Pre-register a v1.1 scoring rule: a set counts as correct if it contains the truth and excludes
@@ -140,7 +140,7 @@ Remaining, in order:
      the measured noise) against the current screen, at $0.
 8. [ ] **$ Shared ledger across arms** (cost). The four GapFinder arms recompute the same claim
    extraction. Sharing one ledger per task takes a blind test from about $7.50 to about $2-3.
-9a. [ ] **Generator validity: reject tasks a simpler configuration explains** (free; found 2026-10-14).
+9a. [x] **Done** (rivals checked over GapFinder's whole search space). **Generator validity: reject tasks a simpler configuration explains** (free; found 2026-10-14).
     - On test-gen-05 (interaction: `eps_start=0.1` + `lr_schedule=inv`), the single change
       `eps_start=0.0` reproduces both claims (C1 +5.1%, C2 +0.8%) better than the planted pair does (C1
       +36%). So the planted answer isn't identifiable from the claims, and GapFinder's simpler answer is
@@ -157,7 +157,7 @@ Remaining, in order:
 
 #### Phase 2: turn "Unexplained" into answers (the real target)
 
-10. [ ] **Multi-claim history matching** (M3; free to build, validated on logged runs).
+10. [x] **Done** (`gapfinder/search/history.py` plus the label "Explains target, conflicts with held-out"; MC Dropout re-labelled accordingly; offline validation 11/12 on GapBench). **Multi-claim history matching** (M3; free to build, validated on logged runs).
     - Per claim and configuration, compute implausibility I = |paper − measured| / √(V_obs + V_noise +
       V_emul + V_disc). V_obs comes from the paper's reported spread, V_noise from fresh-load or
       fresh-setup variance, V_disc from a pre-registered discrepancy term for scaled surrogates.
@@ -178,7 +178,7 @@ Remaining, in order:
     Super checks a fixed list: train/test leakage, hyperparameters shared across splits, eval
     padding/EOS, loss-direction defaults, dataset version, metric definition. Each item is backed by a
     repo grep (code evidence, no runs). Report the top cause family.
-12. [ ] **Honest noise model** (M4; free).
+12. [~] **Analysis done** (`eval/noise_model.py`: on RusKey only C5 is detectable; the MDE rule isn't in the engine yet). **Honest noise model** (M4; free).
     - Variance components from fresh loads × forks (one-way ANOVA; the RusKey logs already have many
       loads), and a pooled SD instead of 2×MAD-of-3.
     - A minimum detectable effect per claim: gap below the MDE becomes Inconclusive, which extends
