@@ -42,3 +42,16 @@ def test_fractions_stay_below_one():
     k = Knob(layer="config", default="0.5")
     vals = coverage_values(k)
     assert all(0 < float(v) < 1 for v in vals) and "0.95" in vals and "0.05" in vals  # threshold 0.5, never 5
+
+
+def test_a_multiplier_knob_gets_the_literal_factors_first(tmp_path):
+    (tmp_path / "experiment.py").write_text(
+        "parser.add_argument('--epochx','-e', default=500, type=int, help='Multiplier for the number of epochs for training.')\n"
+        "parser.add_argument('--hidden', '-nh', default=2, type=int, help='Number of hidden layers for the neural net')\n",
+        encoding="utf-8")
+    spec = HarnessSpec(name="t", base=f"local:{tmp_path}", run={"command": "python experiment.py"},
+                       knobs={"epochx": {"layer": "config", "default": "500"}, "hidden": {"layer": "config", "default": "2"}})
+    fill_choices(spec, build_repo_map(tmp_path).flags)
+    assert spec.knobs["epochx"].multiplier and not spec.knobs["hidden"].multiplier
+    assert coverage_values(spec.knobs["epochx"])[:4] == ["1", "2", "5", "10"]  # MC Dropout's epochx=10, by construction
+    assert "1" in coverage_values(spec.knobs["hidden"])[:3]  # one hidden layer, the paper's setting

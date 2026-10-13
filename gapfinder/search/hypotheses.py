@@ -25,6 +25,10 @@ FACTORS = (2, 5, 10)
 # v1.1 value coverage: coarse first, so the span is covered before the resolution (a 50x change, e.g.
 # MC Dropout's epochx 500 -> 10, is reached within the first few candidates)
 LADDER = (10, 2, 50, 5, 100)
+# a multiplier knob's natural values are the factors a paper states ("10x more iterations")
+MULTIPLIER_FACTORS = ("1", "2", "5", "10", "100")
+_MULT_NAME = re.compile(r"(?:_|^)(?:mult|multiplier|scale|factor|times)$|^[a-z]{3,}x$", re.I)
+_MULT_HELP = re.compile(r"multipl|factor|scal(?:e|ing)|times", re.I)
 _FLIP = {"true": "false", "false": "true", "on": "off", "off": "on", "yes": "no", "no": "yes",
          "enabled": "disabled", "disabled": "enabled"}
 _NUM = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
@@ -68,6 +72,12 @@ def coverage_values(knob) -> list[str]:
     if knob.choices:
         return [c for c in knob.choices if c != knob.default]
     d = knob.default.strip()
+    if knob.multiplier:
+        out = [f for f in MULTIPLIER_FACTORS if not _same_number(f, d)]
+        return out + [v for v in generate_values(d, LADDER) if not any(_same_number(v, f) for f in out)]
+    if re.fullmatch(r"\d+", d) and int(d) >= 2:  # an integer knob's boundary value 1 (one layer, one thread)
+        ladder = generate_values(d, LADDER)
+        return ladder[:2] + ["1"] + [v for v in ladder[2:] if v != "1"]
     if _NUM.fullmatch(d) and 0 < float(d) < 1 and "." in d:
         return fraction_values(float(d))
     return generate_values(knob.default, LADDER)
@@ -85,18 +95,29 @@ def fraction_values(x: float) -> list[str]:
     return out
 
 
+def is_multiplier(name: str, help_text: str = "") -> bool:
+    return bool(_MULT_NAME.search(name.lstrip("-")) or _MULT_HELP.search(help_text or ""))
+
+
 def fill_choices(spec: HarnessSpec, flags) -> int:
-    """Copy argparse `choices` from the repo map into spec knobs that don't list them. Returns how many."""
-    by_name = {}
+    """Copy argparse `choices` from the repo map into spec knobs that don't list them, and mark knobs
+    whose name or help text says they multiply something. Returns how many knobs changed."""
+    by_name, text = {}, {}
     for f in flags:
+        key = f.name.lstrip("-").replace("-", "_").lower()
+        text.setdefault(key, getattr(f, "text", ""))
         if getattr(f, "choices", None):
-            by_name.setdefault(f.name.lstrip("-").replace("-", "_").lower(), f.choices)
+            by_name.setdefault(key, f.choices)
     n = 0
     for name, k in spec.knobs.items():
-        ch = by_name.get(name.lstrip("-").replace("-", "_").lower())
+        key = name.lstrip("-").replace("-", "_").lower()
+        ch = by_name.get(key)
+        changed = False
         if ch and not k.choices:
-            k.choices = list(ch)
-            n += 1
+            k.choices, changed = list(ch), True
+        if not k.multiplier and not k.choices and is_multiplier(name, text.get(key, "")):
+            k.multiplier, changed = True, True
+        n += changed
     return n
 
 
