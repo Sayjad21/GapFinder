@@ -13,13 +13,27 @@ $0 (local backend). Scored with `score.py --answers eval/gapbench/sealed`.
 |---|---|---|
 | Confidently wrong (24) | 0 | 0 |
 | Correct abstention (9: no cause, noise only, incomplete) | 9 | 9 |
-| Correct cause (15) | 7 | 8, plus 1 partial |
-| known cause (6) | 5 | 3 |
+| Correct cause (15) | 7 | **11**, plus 1 partial |
+| known cause (6) | 5 | 6 |
 | decoy (3) | 2 | 3 |
 | interaction (6) | 0 | 2, plus 1 partial |
 
-Dev set: v1.0 4/4, v1.1 3/4 (dev-ml-threshold: `normalize=minmax`+... instead of
-`normalize=zscore`+`threshold=0.3`).
+Dev set: v1.0 4/4, v1.1 4/4.
+
+v1.1 as measured here (commit `ab5d0e0`):
+- every choice of a categorical flag, plus a coarse-first log ladder kept below 1 for fractions;
+- literal factors for multiplier knobs, and the boundary value 1 for integers;
+- 6 values per knob, and two values per knob in the combine round;
+- strict, Bonferroni-corrected confirmation;
+- a parsimony tie-break;
+- value sets.
+
+An earlier v1.1 build (before multipliers, boundaries and sets) scored 8 plus 1 partial. The set-valued
+score (`correct_set`) equals the exact score here: 11.
+
+Reachability (`reachability_v11.json`): every true value is now measured on these tasks. The remaining
+misses are selection misses: on test-gen-05 the eps_start half is found but not paired with
+lr_schedule=inv, and in one test-gen-06 run n=5000 was chosen instead of 600.
 
 **What changed.** v1.1 reaches values v1.0 never tested: `normalize=minmax` on the decoy task, and
 `n=600` on an interaction task, found twice. **What it costs:** with more candidates, several values
