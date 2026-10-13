@@ -45,7 +45,7 @@ No benchmark measures "which hidden condition explains the gap", so GapBench-sty
 
 ## 3. How hard the problem is (verified calibration)
 
-- **PaperBench** (replicate 20 ICML papers from scratch): best BasicAgent **21.0%** (Claude 3.5 Sonnet); o1 with
+- **PaperBench** (replicate 20 ICML papers from scratch): best BasicAgent **21.0%** (the best model tested); o1 with
   IterativeAgent 24.4%; ML PhDs 41.4% on a 3-paper subset. **Result Match: 0.0-1.4% for agents.** Matching
   reported numbers is the hardest part.
 - **SUPER** (set up and execute research repos): best end-to-end **16.3%** (SWE-Agent + GPT-4o, expert set).
