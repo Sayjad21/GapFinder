@@ -51,6 +51,7 @@ class Knob(BaseModel):
     candidates: list[str] = Field(default_factory=list)
     choices: list[str] = Field(default_factory=list)  # every value the program accepts (argparse choices)
     multiplier: bool = False  # scales another quantity (e.g. epochs = base x epochx): literal factors are candidates
+    scales: list[str] = Field(default_factory=list)  # what the code multiplies by this knob (static config flow)
     max: float | None = None  # values above this are too costly to test (reported, not run)
 
     def affordable(self, value: str) -> bool:

@@ -95,6 +95,24 @@ def fraction_values(x: float) -> list[str]:
     return out
 
 
+_COUNT_LIKE = re.compile(r"epoch|iter|step|size|count|num|len|rounds|^n_|_n$|^n$", re.I)
+
+
+def mark_multipliers_from_flow(spec: HarnessSpec, scales: dict[str, list[str]]) -> int:
+    """A whole-number knob that the code multiplies a count-like quantity by (epochs, iterations, steps,
+    sizes) is a multiplier; record what it scales. Plain arithmetic such as lr x gradient doesn't count."""
+    n = 0
+    for name, k in spec.knobs.items():
+        targets = scales.get(name.lstrip("-").replace("-", "_"), [])
+        if not targets:
+            continue
+        k.scales = list(targets)
+        if not k.multiplier and not k.choices and re.fullmatch(r"\d+", k.default.strip())                 and any(_COUNT_LIKE.search(t) for t in targets):
+            k.multiplier = True
+            n += 1
+    return n
+
+
 def is_multiplier(name: str, help_text: str = "") -> bool:
     return bool(_MULT_NAME.search(name.lstrip("-")) or _MULT_HELP.search(help_text or ""))
 

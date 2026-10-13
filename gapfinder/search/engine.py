@@ -23,7 +23,7 @@ from gapfinder.models import budget
 from gapfinder.sandbox.noise import NoiseBand, bootstrap_diff_ci, noise_band
 from gapfinder.sandbox.runner import Orchestrator
 from gapfinder.search.bisect import minimal_set
-from gapfinder.search.hypotheses import _same_number, coverage_values, fill_choices
+from gapfinder.search.hypotheses import _same_number, coverage_values, fill_choices, mark_multipliers_from_flow
 from gapfinder.ledger.assumptions import derive_status
 from gapfinder.search.verify import Plausibility, gap_returns, held_out_ok, plausible
 
@@ -636,9 +636,14 @@ class GapSearch:
 
         root = Path(str(self.spec.base).removeprefix("local:"))
         if root.is_dir():
+            from gapfinder.ingest.config_flow import flag_scales
+
             n = fill_choices(self.spec, build_repo_map(root).flags)
+            n += mark_multipliers_from_flow(self.spec, flag_scales(root))
             if n:
-                self.orch.events.emit("note", msg=f"value coverage: read accepted choices for {n} knob(s) from the code")
+                mult = [k for k, v in self.spec.knobs.items() if v.multiplier]
+                self.orch.events.emit("note", msg=f"value coverage: read choices and multipliers for {n} knob(s) "
+                                                  f"from the code (multipliers: {mult or 'none'})")
 
     def _stated_values(self, knob: str) -> list[str]:
         """Paper values for `knob` that apply to the targets' figures. An entry tied only to claims of
