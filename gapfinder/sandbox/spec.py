@@ -66,6 +66,9 @@ class Knob(BaseModel):
 class HarnessSpec(BaseModel):
     name: str
     base: str
+    # local copy of the artifact's code, for static analysis only (repo map, out-of-space code checks)
+    # when `base` is an image or a checkpoint; a local `base` is used directly
+    source: str | None = None
     build: Stage | None = None
     load: Stage | None = None
     run: RunStage
@@ -95,7 +98,18 @@ class HarnessSpec(BaseModel):
             p = Path(spec.base[6:])
             if not p.is_absolute():
                 spec.base = "local:" + str((Path(path).parent / p).resolve())
+        if spec.source:
+            spec.source = os.path.expandvars(spec.source)
+            if not Path(spec.source).is_absolute():
+                spec.source = str((Path(path).parent / spec.source).resolve())
         return spec
+
+    def code_root(self) -> Path | None:
+        """The artifact's code on this machine, if any (for static analysis)."""
+        for p in (self.source, self.base.removeprefix("local:") if self.base.startswith("local:") else None):
+            if p and "$" not in p and Path(p).is_dir():
+                return Path(p)
+        return None
 
     def values(self, changes: dict[str, str]) -> dict[str, str]:
         unknown = set(changes) - set(self.knobs)

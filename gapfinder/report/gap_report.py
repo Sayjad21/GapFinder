@@ -321,6 +321,11 @@ class GapReport:
                     out.append(f"- {len(isl)} separate islands (no single-knob move joins them): " + " | ".join(
                         "; ".join(", ".join(f"{k}={v}" for k, v in sorted(c.items())) or "naive" for c in i[:3])
                         for i in isl[:4]))
+            leads = r.diagnosis.get("leads") or []
+            if leads:  # where a cause outside the settings could hide; static reading only
+                out.append("- Leads outside the settings (static code checks, nothing run; check these first):")
+                out += [f"  - {x['family'].replace('_', ' ')}: {x['detail']} (`{x['file']}:{x['line']}`)"
+                        for x in leads[:8]]
             sets = r.value_sets and {k: v for k, v in r.value_sets.items() if len(v) > 1}
             if sets:
                 out.append("- Equally good values: " + "; ".join(f"`{k}` in {{{', '.join(v)}}}" for k, v in sets.items()))

@@ -174,7 +174,7 @@ Remaining, in order:
       authors' README admits test-set contamination.
     - Calibrate V_disc on toy Explained or Reproduced cases, and report sensitivity under 2-3 settings.
     - Re-analyse MC Dropout, RusKey and GapBench logs first (no new runs).
-11. [ ] **$ Out-of-space checklist triage** (M3 step 4). When the label is "Out-of-space suspected/likely",
+11. [~] **Free static part done** (`gapfinder/ingest/code_checks.py`; leads attached when history matching says out of space; on MC Dropout all 3 documented out-of-flag differences are among 8 leads, `eval/results/code_checks_mcdropout.md`). Still to do: the paid Super ranking, and a way to *test* a lead (a patch knob). **$ Out-of-space checklist triage** (M3 step 4). When the label is "Out-of-space suspected/likely",
     Super checks a fixed list: train/test leakage, hyperparameters shared across splits, eval
     padding/EOS, loss-direction defaults, dataset version, metric definition. Each item is backed by a
     repo grep (code evidence, no runs). Report the top cause family.
@@ -185,7 +185,7 @@ Remaining, in order:
       today's `reproduce_tol` rule.
     - Two or three metamorphic relations: MC error shrinks about as 1/√T; direction relations stated
       by the paper; ratio oracles only when the two sides' noise is correlated.
-13. [ ] **GapBench out-of-space category, plus balanced scoring** (free to build).
+13. [x] **Done** (2 `out_of_space` tasks per set, bugs from patched copies in `eval/gapbench/variants.py`: mlbench `drop_scaled` and `clip5`, two different bugs per set; balanced scores and the always-Unexplained row in `score.py`; dry run with a throwaway seed passes). Risk to watch: a knob that closes most of such a gap (here `normalize=zscore`) can give "Partially explained", which scores as confidently wrong. **GapBench out-of-space category, plus balanced scoring** (free to build).
     - Tasks whose planted cause is not reachable through any knob: shared-split tuning (the MC Dropout
       mechanism), an eval padding bug, a loss-direction default, train/test overlap, a metric on the
       wrong split.

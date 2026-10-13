@@ -670,6 +670,15 @@ class GapSearch:
         runs = {k: v for k, v in runs.items() if v}
         d = diagnose(runs, claims, t.claim_id, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc)
         res.diagnosis = d.to_dict()
+        root = self.spec.code_root()
+        if d.kind.startswith("out_of_space") and root is not None:
+            from gapfinder.ingest.code_checks import code_checks
+
+            leads = code_checks(root, set(self.spec.knobs))
+            res.diagnosis["leads"] = [x.to_dict() for x in leads]
+            if leads:
+                self.orch.events.emit("note", msg=f"{t.claim_id}: {len(leads)} static lead(s) outside the settings, "
+                                                  f"top: {leads[0].file}:{leads[0].line} {leads[0].detail}")
         self.orch.events.emit("note", msg=f"{t.claim_id}: history matching: {d.text}")
         label = res.attribution.confidence_label if res.attribution else None
         if label != ConfidenceLabel.unexplained.value:
