@@ -435,3 +435,25 @@ async def test_random_rank_still_searches_and_skips_no_strong_leads(tmp_path):
 def test_search_config_rejects_an_unknown_rank():
     with pytest.raises(ValueError):
         SearchConfig(rank="alphabetical")
+
+
+async def test_equally_good_values_are_reported_as_a_set(tmp_path):
+    """gamma only matters with CACHE=on in the toy, so with alpha fixed by the paper several measured
+    alpha values can't all fit; the set must contain the answer's value and only near-equal fits."""
+    s, [r] = await search(tmp_path, {"alpha": "2.0"})
+    assert r.changes == {"alpha": "2.0"}
+    assert r.value_sets["alpha"][0] == "2.0" or "2.0" in r.value_sets["alpha"]
+    for v in r.value_sets["alpha"]:  # every member fits within one band of the answer
+        assert abs(s.gap(s.targets[0], {"alpha": v})) <= abs(r.gap_after) + s.band(s.targets[0])
+
+
+def test_scorer_credits_a_set_that_contains_the_truth():
+    import sys
+    sys.path.insert(0, "eval/gapbench")
+    from score import score_claim
+
+    key = {"id": "t", "type": "single_unstated", "category": "known_cause", "hidden": {"max_steps": "500"}}
+    pred = {"label": "Fits but unsupported", "knobs": {"max_steps": "400"}, "value_sets": {"max_steps": ["400", "500", "1000"]}}
+    sc = score_claim(key, pred)
+    assert sc["outcome"] == "missed" and sc["correct_set"]  # exact score unchanged; set credit separate
+    assert not score_claim(key, {**pred, "value_sets": {"max_steps": ["400", "1000"]}})["correct_set"]

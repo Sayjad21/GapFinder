@@ -72,7 +72,7 @@ class GapReport:
                 counterfactual=c.get("counterfactual") or {},
                 plausibility={k: Plausibility(**p) for k, p in (c.get("plausibility") or {}).items()},
                 screen=c.get("screen") or [], hypotheses_tested=c.get("hypotheses_tested", 0),
-                replay=c.get("replay") or [], notes=c.get("notes") or [])
+                replay=c.get("replay") or [], notes=c.get("notes") or [], value_sets=c.get("value_sets") or {})
         claims = d.get("claims") or []
         return cls(paper=d.get("paper", "?"), artifact=d.get("artifact", "?"), results=[claim(c) for c in claims],
                    noise=d.get("noise") or {}, naive=d.get("naive") or {}, runs=d.get("runs", 0),

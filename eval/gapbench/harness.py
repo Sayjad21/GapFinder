@@ -99,7 +99,7 @@ async def run_gapfinder(task_dir: Path, out: Path, overrides: dict, backend: str
     results = await search.run()
     GapReport.from_search(search, results, paper=task["id"]).write(out)
     pred = {r.target.claim_id: {"label": r.attribution.confidence_label if r.attribution else "Reproduced",
-                                "knobs": r.changes} for r in results}
+                                "knobs": r.changes, "value_sets": r.value_sets} for r in results}
     # llm_usd is the fresh-run cost even when answers came from the cache, so arms compare fairly
     return {"claims": pred, "llm_usd": router.meter.total_fresh_cost(), "llm_usd_paid": router.meter.total_cost(),
             "sandbox_usd": orch.cost.sandbox_usd,

@@ -126,12 +126,20 @@ def score_claim(key: dict, pred: dict | None) -> dict:
             outcome = "confidently_wrong"
         else:
             outcome = "missed"
+    # set-valued credit (reported next to the exact score, never instead of it): the right knobs, and each
+    # true value inside the set of values the run found to fit equally well
+    sets = {_norm_knob(k): {_norm_val(x) for x in v} for k, v in (pred.get("value_sets") or {}).items()}
+    correct_set = outcome == "correct"
+    if not correct_set and cat not in ABSTAIN_CATEGORIES and proposed:
+        got, truth = _knob_dict(knobs), _knob_dict(key["hidden"])
+        correct_set = set(got) == set(truth) and all(v in sets.get(k, {got[k]}) for k, v in truth.items())
     abstained = not missing and not proposed
     column = {"correct": "correct_cause", "partial": "partial", "confidently_wrong": "wrong_confident",
               "correct_abstention": "abstained", "missed": "abstained" if abstained else "missed"}[outcome]
     return {"label": pred["label"], "knobs": pred["knobs"], "confident": confident,
             "correct": outcome in ("correct", "correct_abstention"),
-            "false_attr": outcome == "confidently_wrong", "outcome": outcome, "column": column}
+            "false_attr": outcome == "confidently_wrong", "outcome": outcome, "column": column,
+            "correct_set": correct_set}
 
 
 def combine_claims(claims: dict[str, dict]) -> tuple[str, str]:
@@ -225,6 +233,7 @@ async def score_run(task_dir: Path, run_dir: Path, n: int, answers_dir: Path | N
             "truth": "cause" if cat in CAUSE_CATEGORIES else "no_cause", "outcome": outcome, "column": column,
             "source": source_of(answer["id"]), "answer": answer_signature(claims),
             "correct": all(c["correct"] for c in claims.values()),
+            "correct_set": all(c.get("correct_set", c["correct"]) for c in claims.values()),
             "false_attr": any(c["false_attr"] for c in claims.values()),
             "gap_closed": next(iter(claims.values()))["gap_closed"], "claims": claims,
             "cost_usd": round(pred["cost_usd"], 5), "wall_s": pred["wall_s"], "runs": pred["runs"],
@@ -325,6 +334,8 @@ def summarise(rows: list[dict]) -> dict:
             "mean_experiments": round(statistics.mean(r.get("runs", 0) for r in rs), 1),
             "total_experiments": sum(r.get("runs", 0) for r in rs),
             "answer_stability": answer_stability(rs),
+            # cause runs whose answer was right as a set (true values inside the equally-good sets)
+            "correct_set_causes": sum(r.get("correct_set", False) for r in rs if r.get("truth") == "cause"),
             **outcome_stats(rs),
         }
     return out

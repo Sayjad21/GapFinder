@@ -135,6 +135,9 @@ class ClaimResult:
     hypotheses_tested: int = 0
     replay: list[dict] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # every measured value of each explaining knob that fits about as well (equifinality): the honest
+    # answer when one target claim can't tell e.g. max_steps 400, 500 and 1000 apart
+    value_sets: dict[str, list[str]] = field(default_factory=dict)
 
 
 def _norm_knob(k: str) -> str:
@@ -488,6 +491,12 @@ class GapSearch:
             res.plausibility, res.counterfactual, res.held_out, res.replay = {}, {}, {}, []
             res.attribution.assumption_set, res.attribution.gap_after = [], res.gap_before
             res.attribution.checkpoint_ids, res.attribution.counterfactual_ok = [], None
+        if res.changes:
+            res.value_sets = self.equivalent_values(t, res.changes)
+            wider = {k: v for k, v in res.value_sets.items() if len(v) > 1}
+            if wider:
+                res.notes.append("equally good values within one noise band (measured): " + "; ".join(
+                    f"{k} in {{{', '.join(v)}}}" for k, v in wider.items()))
 
     async def _verify(self, t: Target, changes: Changes, parent: ClaimResult) -> ClaimResult:
         r = ClaimResult(target=t, status="searched", gap_before=parent.gap_before, band=parent.band)
@@ -612,6 +621,32 @@ class GapSearch:
                          for h in retry))
             tried.update(frozenset(h.changes.items()) for h in retry)
         return retry
+
+    def equivalent_values(self, t: Target, changes: Changes) -> dict[str, list[str]]:
+        """For each knob of the answer: every measured value (other knobs held at the answer's values)
+        whose target gap is within one noise band of the answer's, and whose held-out claims are no
+        worse than at the naive run beyond their noise. Includes the answer's own value."""
+        best = self.gap(t, changes)
+        if best is None:
+            return {}
+        band = self.band(t)
+        held = [h for h in self.targets if h.held_out and h.metric in self.bands]
+        out: dict[str, list[str]] = {}
+        for k, v in changes.items():
+            vals = {v}
+            for key in self._runs:
+                c = dict(key)
+                if set(c) != set(changes) or any(c[j] != changes[j] for j in changes if j != k) or c[k] == v:
+                    continue
+                g = self.gap(t, c)
+                if g is None or abs(g) > abs(best) + band:
+                    continue
+                if any((gh := self.gap(h, c)) is not None and abs(gh) > abs(self.gap(h, {})) + self.band(h)
+                       for h in held):
+                    continue
+                vals.add(c[k])
+            out[k] = sorted(vals, key=lambda x: (float(x) if _is_num(x) else float("inf"), x))
+        return out
 
     def _change_size(self, changes: Changes) -> float:
         """How far a configuration moves from the defaults: |log10(value/default)| per numeric knob (both
@@ -756,6 +791,14 @@ class GapSearch:
         except ValueError as exc:
             res.notes.append(f"skipped {h.knob}={h.value!r}: {exc}")
             return False
+
+
+def _is_num(x: str) -> bool:
+    try:
+        float(x)
+        return True
+    except ValueError:
+        return False
 
 
 async def _all(*coros):
