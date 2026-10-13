@@ -50,23 +50,165 @@ D is offline from 2026-10-14. Everything below is for S and the team.
 5. [ ] **Anyone: fresh-machine check.** Clone, follow SETUP.md, run `python scripts/try_it.py`, time it,
    and fix the README if the time or steps differ.
 
-### B. Strongly recommended (raise the odds; do in this order if there's time)
-6. [ ] **v1.1: compute paper values instead of guessing them** (RESEARCH_real_causes.md, Tier 1 items 1-3, 6, 7;
-   about 2-3 days). Typed relative settings ("10× more" → multiplier record), a code resolver against the repo's
-   knobs, branching on ambiguity, log-ladder candidates (×0.02…×50), and a label for "explains target,
-   conflicts with held-out". Tag `v1.1`. Then rerun MC Dropout as a **post-hoc v1.1 demo**, clearly
-   labelled not blind (the v1.0 blind results can't be re-scored).
-7. [ ] **RusKey positive control** (this file, P0-1 "Positive control on RusKey"). Sandboxes are free in
-   practice, so it costs about $0 billed. It answers "can GapFinder ever find a real cause in a real system?"
-   Needs the sandbox guard raised (`GF_SANDBOX_GUARD_USD=20000`) and S's OK.
-8. [ ] **Independent AI-author tasks** (a teammate with a non-Claude coding agent; two-phase seal/reveal;
-   exact commands in TEAM_HANDOFF.md step e). Run `gapfinder` and `baseline-super` only (about $3), on the
-   frozen code they were written against. Needs the spend cap raised (agree a new `GF_SPEND_CAP_USD`
-   first; billed is $17.18).
-9. [ ] **If v1.1 is built and time remains:** a fresh blind generator run on v1.1 (new seed after the
-   `v1.1` tag; add order-of-magnitude and relative-wording knobs to the generator first). About $7.50 as
-   designed, or about $2-3 if a shared-ledger option is added (the four GapFinder arms recompute the
-   same claim extraction today).
+### B. Roadmap: fix hypothesis coverage now, then turn "Unexplained" into diagnoses (updated 2026-10-14)
+
+**Why this order.** The run logs settle where capability is lost. In **14 of v1.0's 18 blind-test
+misses, a true value was never tested at all** (e.g. `normalize=minmax`, `n=600`, MC Dropout's
+`epochx=10`). In the other 4, the true value was tested but another value that fit about as well was
+picked. Verification is not the bottleneck: 0 of 48 runs were confidently wrong. So phase 1 makes the
+true value *reachable* and the answer *set-valued*, and phase 2 makes "Unexplained" informative. The
+plan follows `unexplained_solution_proposal.md` (local file; methods M1-M5), adjusted to these findings.
+
+**Money.** Search runs are free on the local backend, and the reported Sandboxes `cost` is unbilled in
+the Beta, so run counts aren't the constraint (the proposal's "40-run envelope" is outdated). Only
+model calls cost money, mostly the ledger stage. About $32.8 of credit is left, but billed spend
+($17.18) is above the local cap (`GF_SPEND_CAP_USD=11`): **S must set a new cap before any paid item**,
+marked $ below.
+
+**Honesty rules for everything below.**
+- The 8 former test tasks are now dev data, since their answers are public.
+- Results on them, or on MC Dropout, are post-hoc and must be labelled so.
+- A claim about v1.1 or v1.2 needs a **new sealed blind test** (new seed after the version tag).
+- The always-"Unexplained" row is reported next to every scoreboard.
+
+#### Phase 1: hypothesis coverage (now)
+
+Done in v1.1 (commits `c7fb9a0`, `c5b1a93`, `1460855`; results in
+[gapbench_v11_posthoc.md](eval/results/gapbench_v11_posthoc.md)):
+- every argparse `choices` value is tried; a coarse-first log ladder for numbers, kept below 1 for
+  fractions; 6 values per knob;
+- the combine round pairs two values per knob;
+- strict confirmation: fresh runs only, Bonferroni-corrected bootstrap;
+- parsimony tie-break;
+- `harness.py --ledger-from` for free like-for-like comparisons.
+- Post-hoc on the 8 former test tasks: correct causes 7 → 8 plus 1 partial (interaction 0 → 2 plus 1
+  partial, decoy 2 → 3, known cause 5 → 3), still 0 confidently wrong and 9/9 abstentions; dev 3/4.
+
+Remaining, in order:
+1. [ ] **Reachability metric and log re-analysis script** (free; proposal Part D, day 1).
+   `eval/reachability.py`: for every run with a known answer, record:
+   - whether each true value was in the candidate set;
+   - its rank there;
+   - whether the true combination was ever run;
+   - the final label.
+
+   Report the reachability rate per category, for v1.0 and v1.1. This turns "the grid couldn't reach
+   it" into a number and shows what each later fix buys.
+2. [ ] **Multiplier, mode and boundary candidates from plain code** (free; M1 step 3-4).
+   - In `search/hypotheses.py`, knobs whose name or help text marks a multiplier (`*x`, `*_mult`,
+     `*_scale`, `*_factor`, help text "multiplier") get the literal factors {1, 2, 5, 10, 100};
+     `epochx=10` then becomes deterministic.
+   - Knobs named mode, tuner, policy or algo, enums and `choices` get all their levels (choices are
+     done).
+   - Integer knobs get the boundary values 0 or 1 where valid.
+   - Target the RusKey tuner-mode flags behind setting recall 0.67: check, from the RusKey logs and
+     `papers/ruskey/gold_assumptions.json`, whether the repo map or the model missed them.
+3. [ ] **Static config flow (Python `ast`)** (free; M1 step 3 and proposal idea #3, reduced).
+   - Mark a knob as multiplicative when it multiplies a loop bound or size (e.g.
+     `int(n_epochs * epochs_multiplier)`), and record what it scales (`epochs = n_epochs.txt × epochx`).
+   - The resolver in item 4 needs this to turn "10× PBP's 40 epochs" into `epochx = 10`.
+   - Tree-sitter only if a C++ repo needs it (RusKey's gflags are already parsed).
+4. [ ] **$ Anchor-aware quantity tuples, plus a deterministic resolver** (M1 steps 1-2; about $0.5-1.5 to
+   validate).
+   - The assumption step emits `{quantity, value | (anchor, operator, factor), direction, unit, table,
+     quote}` (pydantic schema, validators, one re-ask with the validation error, and an output-token
+     check against truncated JSON).
+   - Code resolves the anchor against the ledger and repo defaults, and branches into every reading
+     when ambiguous.
+   - Record which table a claim comes from: MC Dropout's Table 1 already uses 10× epochs, and Table 2
+     is a further 10×.
+   - Validate by re-running only the ledger stage on MC Dropout (both ledgers, about $0.3) and RusKey
+     (setting recall against the gold set). Post-hoc; report reachability and rank.
+5. [ ] **$ Code-to-paper reverse pass** (Dude, arXiv 2609.03416). For every knob in the repo map, ask
+   what the paper says about it: a stated value, a relative statement, or nothing. This targets setting
+   recall directly; measure it on RusKey and MC Dropout.
+6. [ ] **Set-valued answers for equally good fits** (free; the bridge to phase 2).
+   - Report every value of a knob, and every configuration, whose gaps stay within the noise band, as
+     a range or "island", plus the parsimony pick.
+   - Pre-register a v1.1 scoring rule: a set counts as correct if it contains the truth and excludes
+     the default. Report it next to the exact-match score, never instead of it.
+   - On the former test tasks this would turn gen-03 (`max_steps` 400 / 500 / 1000 all fit) into a
+     correct range.
+7. [ ] **Interaction screening as an addition, not a replacement** (free to build; M2).
+   - Run a 16-run resolution-IV 2^(7-3) design (generators E=ABC, F=BCD, G=ACD) over the top 7 knobs,
+     **in addition to** the multi-value screen.
+   - Fit a weak-heredity sparse pairwise model (main effects plus pairs, at most about 6 terms per
+     claim). Enumerate the 128 corners, and break aliases with 2-4 targeted runs.
+   - Keep the multi-value screen: two levels per knob would bring value misses back, the main failure
+     mode.
+   - Validate first with the proposal's synthetic power study (the logged MC Dropout effect sizes plus
+     the measured noise) against the current screen, at $0.
+8. [ ] **$ Shared ledger across arms** (cost). The four GapFinder arms recompute the same claim
+   extraction. Sharing one ledger per task takes a blind test from about $7.50 to about $2-3.
+9. [ ] **$ Fresh sealed blind test on v1.1** (tag `v1.1` first; new seed after the tag).
+   - Add generator task types for order-of-magnitude changes, relative wording ("10× the baseline"),
+     multiplier knobs and pure interactions.
+   - Report the confidently-wrong count first, the always-Unexplained row, and exact binomial
+     intervals.
+
+#### Phase 2: turn "Unexplained" into answers (the real target)
+
+10. [ ] **Multi-claim history matching** (M3; free to build, validated on logged runs).
+    - Per claim and configuration, compute implausibility I = |paper − measured| / √(V_obs + V_noise +
+      V_emul + V_disc). V_obs comes from the paper's reported spread, V_noise from fresh-load or
+      fresh-setup variance, V_disc from a pre-registered discrepancy term for scaled surrogates.
+    - Define NROY = max_i I_i ≤ 3 (the second-largest I when there are 5 or more claims).
+    - Labels:
+
+| Situation | Label |
+|---|---|
+| a verified configuration inside the joint NROY | Explained or Partially explained, with every NROY island listed |
+| each claim fits alone, but no configuration fits them jointly | **"Out-of-space suspected: claims mutually inconsistent under every exposed condition"** |
+| no claim fits | **"Out-of-space likely"** |
+
+    - The second label is exactly MC Dropout: Energy fits, Energy plus Yacht doesn't, and the
+      authors' README admits test-set contamination.
+    - Calibrate V_disc on toy Explained or Reproduced cases, and report sensitivity under 2-3 settings.
+    - Re-analyse MC Dropout, RusKey and GapBench logs first (no new runs).
+11. [ ] **$ Out-of-space checklist triage** (M3 step 4). When the label is "Out-of-space suspected/likely",
+    Super checks a fixed list: train/test leakage, hyperparameters shared across splits, eval
+    padding/EOS, loss-direction defaults, dataset version, metric definition. Each item is backed by a
+    repo grep (code evidence, no runs). Report the top cause family.
+12. [ ] **Honest noise model** (M4; free).
+    - Variance components from fresh loads × forks (one-way ANOVA; the RusKey logs already have many
+      loads), and a pooled SD instead of 2×MAD-of-3.
+    - A minimum detectable effect per claim: gap below the MDE becomes Inconclusive, which extends
+      today's `reproduce_tol` rule.
+    - Two or three metamorphic relations: MC error shrinks about as 1/√T; direction relations stated
+      by the paper; ratio oracles only when the two sides' noise is correlated.
+13. [ ] **GapBench out-of-space category, plus balanced scoring** (free to build).
+    - Tasks whose planted cause is not reachable through any knob: shared-split tuning (the MC Dropout
+      mechanism), an eval padding bug, a loss-direction default, train/test overlap, a metric on the
+      wrong split.
+    - Report in-space recall, out-of-space specificity, their mean (balanced diagnostic accuracy; the
+      abstainer is capped at 0.5), cause-family accuracy and the false-explanation rate.
+14. [ ] **Reporting views at zero extra runs** (proposal Part A, reduced):
+    - an equifinality map (NROY configurations grouped by which knobs changed);
+    - NROY "islands" as connected components under single-knob moves (a BFS);
+    - a code-derived knob → claim graph, to predict which held-out claims a knob should not move.
+15. [ ] **Evidence as a prior, and confirmation by racing** (M5; low priority). Our logs show the evidence
+    gate was not the main cause of misses, so do this only if item 1's re-analysis says otherwise.
+16. [ ] **$ Post-hoc MC Dropout rerun on the new version.** Expected: "Partially explained (Energy) +
+    Out-of-space suspected", with shared-split tuning as the top checklist item. Label it not blind.
+17. [ ] **RusKey positive control** (this file, P0-1 "Positive control on RusKey"). It costs $0 billed but
+    needs the sandbox guard raised and S's OK. It answers "can GapFinder find a real cause in a real
+    system?"
+18. [ ] **Independent AI-author tasks** (a coding agent from a different vendor than the one that built
+    GapFinder; two-phase seal/reveal; commands in TEAM_HANDOFF.md step e). About $3; needs the cap
+    raised.
+
+**Not doing**, from theory.md, with the reasons in the proposal's Part A:
+- **Rejected:** flux balance analysis, SMT over the training loop, latent diffusion over configurations,
+  persistent homology beyond a BFS, quantum annealing.
+- **Only in reduced form, as above:** MAP-Elites (as the equifinality map), the Ising model (as the
+  pairwise surrogate in item 7), do-calculus (as the code graph in item 14), MDL (as the parsimony
+  tie-break, done).
+
+**Order if time is short:**
+1. Items 1-3, 6 and 10: free, and they give the "found it / here is the range / this is out of space"
+   story.
+2. Then 4, 8 and 9, which are paid.
+3. Then 13 and 16.
 
 ### C. Optional / after the hackathon
 10. [ ] Candidate B, Paragraph Vector on IMDB (P0-1): a second external case; 1-2 days, risky (the shuffle
