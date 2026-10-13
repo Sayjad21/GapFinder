@@ -23,12 +23,15 @@ SMALL_QUOTAS = (("known_cause", "single_unstated", 1), ("noise_only", "no_cause"
 
 # ------------------------------------------------------------------ pre-registered constants
 
-def test_quotas_are_the_registered_eight():
-    assert g.N_TASKS == 8
+def test_quotas_are_the_registered_ten():
+    """The v1.1 protocol: the v1.0 eight plus 2 out-of-space tasks. (The published v1.0 set was drawn with
+    the eight; regenerate it with the generator at tag pre-tasks-1.)"""
+    assert g.N_TASKS == 10
     by_cat = {}
     for cat, _typ, n in g.QUOTAS:
         by_cat[cat] = by_cat.get(cat, 0) + n
-    assert by_cat == {"known_cause": 2, "interaction": 2, "no_cause": 1, "decoy": 1, "noise_only": 1, "incomplete": 1}
+    assert by_cat == {"known_cause": 2, "interaction": 2, "no_cause": 1, "decoy": 1, "noise_only": 1, "incomplete": 1,
+                      "out_of_space": 2}
     assert g.ARTIFACTS == ("rlbench", "mlbench")
 
 
@@ -110,7 +113,8 @@ def test_draw_plan_is_deterministic_and_respects_categories():
     plans = [g.draw_plan(random.Random(5), c, t) for c, t, _ in g.QUOTAS]
     assert plans == [g.draw_plan(random.Random(5), c, t) for c, t, _ in g.QUOTAS]
     for p in plans:
-        n = {"interaction": 2, "no_cause": 0, "noise_only": 0}.get(p.category, 1)
+        n = {"interaction": 2, "no_cause": 0, "noise_only": 0, "out_of_space": 0}.get(p.category, 1)
+        assert bool(p.variant) == (p.category == "out_of_space")  # out of space: a code bug, no setting
         assert len(p.hidden) == n
         for k, v in p.hidden.items():
             assert v in g.POOLS[p.family][k]
@@ -371,6 +375,21 @@ def test_progress_goes_to_stderr_and_names_no_category(tmp_path, capsys):
     out, err = capsys.readouterr()
     assert len(done) == g.N_TASKS and out == ""
     lines = err.strip().splitlines()
-    assert len(lines) == g.N_TASKS and lines[0].startswith("task 1/8 filled, attempts so far ")
-    assert lines[-1] == f"task 8/8 filled, attempts so far {sum(3 + i for i in range(8))}"
+    n = g.N_TASKS
+    assert len(lines) == n and lines[0].startswith(f"task 1/{n} filled, attempts so far ")
+    assert lines[-1] == f"task {n}/{n} filled, attempts so far {sum(3 + i for i in range(n))}"
     assert not any(w in err for w in ("known", "cause", "interaction", "decoy", "noise", "incomplete", "mlbench"))
+
+
+def test_variants_are_patched_copies_and_invisible_to_the_repo_map(tmp_path):
+    import variants
+    from gapfinder.ingest.repo_map import build_repo_map
+
+    for fam, vs in variants.VARIANTS.items():
+        orig = (variants.GB / "artifacts" / fam).resolve()
+        before = {p.name: p.read_bytes() for p in orig.iterdir() if p.is_file()}
+        for v in vs:
+            out = variants.build(fam, v, tmp_path)
+            assert out.resolve() != orig and (out / vs[v][1]).read_bytes() != before[vs[v][1]]
+        assert {p.name: p.read_bytes() for p in orig.iterdir() if p.is_file()} == before  # artifact untouched
+        assert "GAPBENCH" not in build_repo_map(orig).summary()  # no switch for GapFinder to see

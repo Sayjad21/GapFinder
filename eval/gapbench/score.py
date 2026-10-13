@@ -83,7 +83,8 @@ def wilson(k: int, n: int, z: float = 1.959964) -> dict:
 CATEGORY_OF_TYPE = {"single_unstated": "known_cause", "stated_code_differs": "known_cause",
                     "interaction": "interaction", "no_cause": "no_cause"}
 CAUSE_CATEGORIES = ("known_cause", "interaction", "decoy")  # a findable cause exists
-ABSTAIN_CATEGORIES = ("no_cause", "noise_only", "incomplete")  # the right answer is not to attribute
+ABSTAIN_CATEGORIES = ("no_cause", "noise_only", "incomplete", "out_of_space")  # the right answer is not to attribute
+OUT_OF_SPACE_CATEGORIES = ("out_of_space", "incomplete")  # the cause exists but no exposed setting reaches it
 OUTCOMES = ("correct", "partial", "confidently_wrong", "correct_abstention", "missed")
 
 
@@ -139,7 +140,9 @@ def score_claim(key: dict, pred: dict | None) -> dict:
     return {"label": pred["label"], "knobs": pred["knobs"], "confident": confident,
             "correct": outcome in ("correct", "correct_abstention"),
             "false_attr": outcome == "confidently_wrong", "outcome": outcome, "column": column,
-            "correct_set": correct_set}
+            "correct_set": correct_set,
+            # the diagnosis bonus no trivial abstainer can earn: "out of space" said where it is true
+            "oos_diagnosed": (pred.get("diagnosis") or "").startswith("out_of_space")}
 
 
 def combine_claims(claims: dict[str, dict]) -> tuple[str, str]:
@@ -234,6 +237,7 @@ async def score_run(task_dir: Path, run_dir: Path, n: int, answers_dir: Path | N
             "source": source_of(answer["id"]), "answer": answer_signature(claims),
             "correct": all(c["correct"] for c in claims.values()),
             "correct_set": all(c.get("correct_set", c["correct"]) for c in claims.values()),
+            "oos_diagnosed": any(c.get("oos_diagnosed") for c in claims.values()),
             "false_attr": any(c["false_attr"] for c in claims.values()),
             "gap_closed": next(iter(claims.values()))["gap_closed"], "claims": claims,
             "cost_usd": round(pred["cost_usd"], 5), "wall_s": pred["wall_s"], "runs": pred["runs"],
@@ -311,6 +315,31 @@ def outcome_stats(rs: list[dict]) -> dict:
             "rates": {o: wilson(count(o), denom[o]) for o in OUTCOMES}, "trust_matrix": trust_matrix(rs)}
 
 
+def balanced_scores(rs: list[dict]) -> dict:
+    """In-space recall, out-of-space/no-cause specificity, their mean, and the out-of-space diagnosis rate.
+    The always-'Unexplained' abstainer scores recall 0, specificity 1, balanced 0.5 and diagnosis 0."""
+    cause = [r for r in rs if r.get("truth") == "cause"]
+    none = [r for r in rs if r.get("truth") != "cause"]
+    oos = [r for r in rs if r.get("category") in OUT_OF_SPACE_CATEGORIES]
+    recall = sum(r.get("outcome") == "correct" for r in cause) / len(cause) if cause else None
+    spec = sum(r.get("outcome") == "correct_abstention" for r in none) / len(none) if none else None
+    return {"in_space_recall": None if recall is None else round(recall, 3),
+            "no_cause_specificity": None if spec is None else round(spec, 3),
+            "balanced_accuracy": round((recall + spec) / 2, 3) if recall is not None and spec is not None else None,
+            "out_of_space_diagnosed": f"{sum(r.get('oos_diagnosed', False) for r in oos)}/{len(oos)}" if oos else None}
+
+
+def trivial_abstainer(rows: list[dict]) -> dict:
+    """The always-'Unexplained' system, scored on the same runs: shown next to every arm."""
+    arm = rows[0]["arm"] if rows else None
+    rs = [r for r in rows if r["arm"] == arm]
+    cause = sum(r.get("truth") == "cause" for r in rs)
+    return {"runs": len(rs), "correct_causes": 0, "confidently_wrong": 0,
+            "correct_abstentions": len(rs) - cause, "in_space_recall": 0.0 if cause else None,
+            "no_cause_specificity": 1.0 if len(rs) - cause else None,
+            "balanced_accuracy": 0.5 if cause and len(rs) - cause else None, "out_of_space_diagnosed": 0}
+
+
 def summarise(rows: list[dict]) -> dict:
     out = {}
     for arm in sorted({r["arm"] for r in rows}):
@@ -336,6 +365,7 @@ def summarise(rows: list[dict]) -> dict:
             "answer_stability": answer_stability(rs),
             # cause runs whose answer was right as a set (true values inside the equally-good sets)
             "correct_set_causes": sum(r.get("correct_set", False) for r in rs if r.get("truth") == "cause"),
+            **balanced_scores(rs),
             **outcome_stats(rs),
         }
     return out
@@ -362,6 +392,8 @@ async def main_async(split: str, n: int, out: Path | None, answers_dir: Path | N
               f"false_attr={r['false_attr']!s:5s} gap_closed={r['gap_closed']}  ${r['cost_usd']:.4f}  "
               f"{ {c: (v['label'], v['knobs']) for c, v in r['claims'].items()} }")
     summary = summarise(rows) if rows else {}
+    if rows:  # the trivial system every safety number must be read against
+        summary["always-unexplained (trivial)"] = trivial_abstainer(rows)
     by_source = summarise_by_source(rows) if rows else {}
     print(json.dumps(summary, indent=1))
     if out:

@@ -43,6 +43,7 @@ import yaml
 # make_task puts the repository root on sys.path, so it has to come before the gapfinder imports
 import leakage
 import make_task
+import variants
 from gapfinder.sandbox import runner as runner_mod
 from gapfinder.sandbox.backend import LocalBackend
 from gapfinder.sandbox.events import EventLog
@@ -65,7 +66,15 @@ QUOTAS: tuple[tuple[str, str | None, int], ...] = (
     ("decoy", "single_unstated", 1),
     ("noise_only", "no_cause", 1),
     ("incomplete", "single_unstated", 1),
+    ("out_of_space", "out_of_space", 2),
 )
+
+#: out_of_space: the paper's numbers come from an older, buggy copy of the artifact (eval/gapbench/variants.py:
+#: patched copies, so the artifacts and GapFinder's view of them never change). No setting GapFinder can
+#: change should explain them; the rival check still rejects any draw where one does. Only mlbench: see
+#: variants.py for the rlbench candidates and why each was rejected.
+OOS_VARIANTS: dict[str, list[str]] = {f: sorted(v) for f, v in variants.VARIANTS.items()}
+OOS_OMITTED = 3  # knobs the paper leaves unstated, so the search has hypotheses to test and reject
 N_TASKS = sum(q[2] for q in QUOTAS)
 
 ARTIFACTS = ("rlbench", "mlbench")
@@ -338,6 +347,7 @@ class Plan:
     noise_u: dict[str, float] = field(default_factory=dict)  # noise_only: offset in noise bands
     decoy: dict[str, str] = field(default_factory=dict)
     unexposed: list[str] = field(default_factory=list)     # knobs removed from the task's spec
+    variant: str = ""                                      # out_of_space: the code-level bug behind the paper
 
     def paper_values(self) -> dict[str, str | None]:
         vals: dict[str, str | None] = dict(spec_defaults(self.family))
@@ -353,7 +363,7 @@ class Plan:
 
 def draw_plan(rng: random.Random, category: str, typ: str, artifacts=ARTIFACTS) -> Plan:
     """Category is given by the quota; the artifact, then the hidden knob(s) and values come from rng."""
-    family = rng.choice(artifacts)
+    family = rng.choice([a for a in artifacts if a in OOS_VARIANTS] if category == "out_of_space" else artifacts)
     pools = POOLS[family]
     eligible = sorted(pools)
     plan = Plan(category, typ, family, rng.randrange(len(TITLES[family])), rng.randrange(len(ABSTRACTS[family])))
@@ -373,6 +383,9 @@ def draw_plan(rng: random.Random, category: str, typ: str, artifacts=ARTIFACTS) 
             plan.unexposed = [k]
     elif category == "no_cause":
         plan.offset = {m: rng.choice(OFFSET_POOLS[family][m]) for m in metrics}
+    elif category == "out_of_space":
+        plan.variant = rng.choice(OOS_VARIANTS[family])
+        plan.omitted = rng.sample(eligible, OOS_OMITTED)
     elif category == "noise_only":
         plan.noise_u = {m: round(rng.uniform(-NOISE_ONLY_DRAW_BANDS, NOISE_ONLY_DRAW_BANDS), 3) for m in metrics}
     else:
@@ -433,17 +446,20 @@ class Measurer:
         self._runs: dict[tuple[str, str], dict[str, list[float]]] = {}
         self._pooled: set[str] = set()
 
-    def _orchestrator(self, family: str) -> DetOrchestrator:
-        if family not in self._orch:
+    def _orchestrator(self, family: str, variant: str = "") -> DetOrchestrator:
+        name = f"{family}-{variant}" if variant else family
+        if name not in self._orch:
             spec = HarnessSpec.load_yaml(GB / f"{family}.yaml")
-            self._orch[family] = DetOrchestrator(LocalBackend(self.tmp / f"sbx-{family}"), spec,
-                                                 EventLog(self.tmp / f"{family}.jsonl"))
-        return self._orch[family]
+            if variant:  # out_of_space: the buggy copy, same knobs and command
+                spec = variants.spec_for(spec, family, variant, self.tmp / "variants")
+            self._orch[name] = DetOrchestrator(LocalBackend(self.tmp / f"sbx-{name}"), spec,
+                                               EventLog(self.tmp / f"{name}.jsonl"))
+        return self._orch[name]
 
-    async def measure(self, family: str, changes: dict[str, str]) -> dict[str, list[float]]:
-        key = (family, _key(changes))
+    async def measure(self, family: str, changes: dict[str, str], variant: str = "") -> dict[str, list[float]]:
+        key = (family + (f"@{variant}" if variant else ""), _key(changes))
         if key not in self._runs:
-            branches = await self._orchestrator(family).fanout([dict(changes)] * REPEATS[family])
+            branches = await self._orchestrator(family, variant).fanout([dict(changes)] * REPEATS[family])
             metrics = [c["metric"] for c in CLAIMS[family]]
             self._runs[key] = {m: [b.parsed_metrics[m] for b in branches if m in b.parsed_metrics] for m in metrics}
         return self._runs[key]
@@ -578,7 +594,7 @@ def public_task(task_id: str, plan: Plan) -> dict:
 
 #: Categories scored as abstention are `no_cause` in the answer key (what score.py understands);
 #: `category` carries the real one.
-ANSWER_TYPE = {"noise_only": "no_cause", "incomplete": "no_cause"}
+ANSWER_TYPE = {"noise_only": "no_cause", "incomplete": "no_cause", "out_of_space": "no_cause"}
 
 
 def answer_key(task_id: str, plan: Plan) -> dict:
@@ -592,13 +608,16 @@ def answer_key(task_id: str, plan: Plan) -> dict:
         a["decoy"] = plan.decoy
     if plan.unexposed:
         a["unexposed"] = plan.unexposed
+    if plan.variant:
+        a["cause_family"] = variants.describe(plan.family, plan.variant)
+        a["variant"] = plan.variant
     return a
 
 
 def sealed_task(task_id: str, plan: Plan) -> dict:
     """The hidden part of task.yaml."""
     t = {"id": task_id, "category": plan.category, "type": plan.type, "hidden": plan.hidden}
-    for name in ("stated", "omitted", "offset", "noise_u", "decoy", "unexposed"):
+    for name in ("stated", "omitted", "offset", "noise_u", "decoy", "unexposed", "variant"):
         if getattr(plan, name):
             t[name] = getattr(plan, name)
     return t
@@ -643,6 +662,12 @@ class Generator:
             plan.offset = {m: round(1 + u * self.mz.band(fam, m) / naive[m], 6) for m, u in plan.noise_u.items()}
         if plan.offset:
             paper = {m: round(naive[m] * plan.offset[m], 4) for m in metrics}
+        elif plan.variant:
+            runs = await self.mz.measure(fam, {}, plan.variant)
+            paper = {m: statistics.median(runs[m]) if runs[m] else None for m in metrics}
+            if None in paper.values():
+                raise Reject("variant_runs_failed")
+            paper = {m: round(v, 4) for m, v in paper.items()}
         else:
             await self.mz.measure(fam, plan.hidden)
             paper = {m: self.mz.median(fam, plan.hidden, m) for m in metrics}
@@ -682,6 +707,8 @@ class Generator:
         shutil.rmtree(d, ignore_errors=True)
         d.mkdir(parents=True)
         task = {**public_task(task_id, plan), "type": plan.type, "hidden": plan.hidden}
+        if plan.variant:
+            task["variant"] = plan.variant
         if plan.offset:
             task["offset"] = plan.offset
         task["paper"] = plan.paper()
@@ -705,17 +732,22 @@ class Generator:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             plan = draw_plan(self.rng, category, typ, self.artifacts)
             try:
+                if plan.variant and (plan.family, plan.variant) in self.used_variants:
+                    raise Reject("variant_already_used")  # two out-of-space tasks must be two different bugs
                 paper = await self.screen(plan)
                 staged = await self.build(task_id, plan, paper)
             except Reject as r:
                 rejections[r.reason] = rejections.get(r.reason, 0) + 1
                 continue
+            if plan.variant:
+                self.used_variants.add((plan.family, plan.variant))
             return Done(task_id, plan, staged, attempt, rejections)
         raise GenerationFailed(task_id, rejections, category)
 
     async def run(self) -> list[Done]:
         """Fill every slot. Progress goes to stderr and says nothing about categories, knobs or values."""
         slots = quota_slots(self.rng, self.quotas)
+        self.used_variants: set[tuple[str, str]] = set()
         done: list[Done] = []
         attempts = 0
         for i, (cat, typ) in enumerate(slots):

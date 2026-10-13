@@ -7,6 +7,8 @@ task.yaml fields:
       (single_unstated | stated_code_differs | interaction | no_cause)
     hidden:  knob changes the "authors" used (the answer key)
     offset:  no_cause only: {metric: factor} applied to the naive numbers
+    variant: out_of_space only: the paper's numbers come from an older, buggy copy of the artifact
+             (eval/gapbench/variants.py), a code-level bug no setting reaches (hidden stays {})
     claims:  [{claim_id, metric, figure, held_out}]
     paper:   mini-paper text with {metric:.3f}-style placeholders
     repeats: runs per configuration (default 7)
@@ -46,6 +48,7 @@ EXPECTED = {
     "stated_code_differs": "Paper-artifact inconsistency",
     "interaction": "Explained",
     "no_cause": "Unexplained",
+    "out_of_space": "Unexplained",
 }
 
 
@@ -55,7 +58,15 @@ async def build(task_dir: Path, min_units: float = 3.0) -> dict:
     n = task.get("repeats", 7)
     with tempfile.TemporaryDirectory() as tmp:
         orch = Orchestrator(LocalBackend(Path(tmp) / "sbx"), spec, EventLog(Path(tmp) / "ev.jsonl"))
-        naive_runs, hidden_runs = await asyncio.gather(orch.fanout([{}] * n), orch.fanout([task["hidden"]] * n))
+        if task.get("variant"):  # out of space: the paper's runs use the buggy copy at its defaults
+            import variants
+
+            bug = variants.spec_for(spec, task["family"], task["variant"], Path(tmp))
+            orch_bug = Orchestrator(LocalBackend(Path(tmp) / "sbx-bug"), bug, EventLog(Path(tmp) / "ev-bug.jsonl"))
+            hidden_fan = orch_bug.fanout([{}] * n)
+        else:
+            hidden_fan = orch.fanout([task.get("hidden") or {}] * n)
+        naive_runs, hidden_runs = await asyncio.gather(orch.fanout([{}] * n), hidden_fan)
     metrics = [c["metric"] for c in task["claims"]]
 
     def med(runs, m):

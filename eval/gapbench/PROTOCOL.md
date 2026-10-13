@@ -178,3 +178,24 @@ Dry runs on throwaway seeds (generator checks) are not test runs and their tasks
   - **Independent AI-authored tasks: still pending.** No `test-ai-*` task exists yet, so every number
     above is from the generator tasks only. If a team member runs the AI-authored tasks later (two arms,
     on `v1.0`, runs 4-6), that result is reported separately and gets its own amendment.
+
+## Amendment for the next sealed test (v1.1), written before its seed exists
+
+- **Generator changes since the v1.0 set:**
+  - 10 tasks: the v1.0 eight, plus 2 `out_of_space` tasks. In those, the paper's numbers come from a
+    code-level bug in an older, patched copy of the artifact (`eval/gapbench/variants.py`; mlbench
+    `drop_scaled`: the loader reads only the unit-scale columns). The artifacts themselves are unchanged,
+    so neither the repo map nor any spec shows the bug. The rlbench candidates were rejected in a dry
+    run: its held-out claim is too noisy to rule anything out, so a single setting mimicked every one.
+  - Rivals are checked over GapFinder's whole search space (pools plus v1.1 coverage values), not only
+    the pools.
+- **Reproducing the published v1.0 set:** it was drawn with the generator at tag `pre-tasks-1`. Check
+  out that tag to regenerate it from `eval/gapbench/sealed/seed.txt`. The current generator draws
+  differently by design.
+- **Scoring additions (reported next to the v1.0 numbers, never instead of them):**
+  - `correct_set`: right knobs, and each true value inside the run's equally-good set;
+  - `in_space_recall`, `no_cause_specificity`, and their mean `balanced_accuracy`;
+  - `out_of_space_diagnosed`: the run's history-matching diagnosis says out of space on an
+    `out_of_space` or `incomplete` task;
+  - the **always-Unexplained row**: recall 0, specificity 1, balanced 0.5, diagnosis 0.
+- `out_of_space` is scored as an abstention category: any confident attribution is confidently wrong.
