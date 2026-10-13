@@ -184,9 +184,18 @@ Dry runs on throwaway seeds (generator checks) are not test runs and their tasks
 - **Generator changes since the v1.0 set:**
   - 10 tasks: the v1.0 eight, plus 2 `out_of_space` tasks. In those, the paper's numbers come from a
     code-level bug in an older, patched copy of the artifact (`eval/gapbench/variants.py`; mlbench
-    `drop_scaled`: the loader reads only the unit-scale columns). The artifacts themselves are unchanged,
-    so neither the repo map nor any spec shows the bug. The rlbench candidates were rejected in a dry
-    run: its held-out claim is too noisy to rule anything out, so a single setting mimicked every one.
+    `drop_scaled`, where the loader reads only the unit-scale columns, and `clip5`, where a leftover
+    outlier filter clips every feature to [-5, 5]). The two tasks of a set use two different bugs.
+    The artifacts themselves are unchanged, so neither the repo map nor any spec shows the bug. The
+    rlbench candidates were rejected in a dry run: its held-out claim is too noisy to rule anything
+    out, so a single setting mimicked every one.
+  - Order-of-magnitude values added to the pools: rlbench `lr` 0.01 (/10), mlbench `lr` 0.005 (/10)
+    and `n` 12000 (x10).
+  - Considered and not added: multiplier knobs (the GapBench artifacts have none, and adding one
+    would change the artifacts that cached demo answers depend on); relative wording such as "10x
+    the reference code's epochs" (it tests the anchor-aware resolver, roadmap item 4, which is not
+    built; adding it now would measure a known gap); pure interactions with no main effects (on
+    these artifacts the rival check rejects nearly every such draw).
   - Rivals are checked over GapFinder's whole search space (pools plus v1.1 coverage values), not only
     the pools.
 - **Reproducing the published v1.0 set:** it was drawn with the generator at tag `pre-tasks-1`. Check

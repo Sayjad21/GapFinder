@@ -98,7 +98,7 @@ POOLS: dict[str, dict[str, list[str]]] = {
     "rlbench": {
         "episodes": ["80", "200", "800"],                      # default 400: /5, /2, x2
         "gamma": ["0.9", "0.95", "0.999"],                     # default 0.99: common discounts
-        "lr": ["0.02", "0.05", "0.2", "0.5"],                  # default 0.1: /5, /2, x2, x5
+        "lr": ["0.01", "0.02", "0.05", "0.2", "0.5"],          # default 0.1: /10, /5, /2, x2, x5
         "lr_schedule": ["linear", "inv"],                      # argparse choices
         "eps_start": ["0.5", "0.2", "0.1"],                    # default 1.0: /2, /5, /10
         "eps_end": ["0.01", "0.1", "0.25"],                    # default 0.05: /5, x2, x5
@@ -110,14 +110,14 @@ POOLS: dict[str, dict[str, list[str]]] = {
         "init_q": ["1.0", "10.0", "100.0"],                    # optimistic initialisation
     },
     "mlbench": {
-        "n": ["600", "2400", "6000"],                          # default 1200: /2, x2, x5
+        "n": ["600", "2400", "6000", "12000"],                 # default 1200: /2, x2, x5, x10
         "positive_rate": ["0.1", "0.15", "0.5"],               # default 0.3: common class balances
         "label_noise": ["0.0", "0.01", "0.1", "0.25"],         # default 0.05: none, /5, x2, x5
         "split": ["0.7", "0.9"],                               # default 0.8: common train fractions
         "normalize": ["zscore", "minmax"],                     # argparse choices
         "epochs": ["3", "30", "75", "150"],                    # default 15: /5, x2, x5, x10
         "batch_size": ["8", "16", "64", "128"],                # default 32: powers of two
-        "lr": ["0.01", "0.1", "0.25", "0.5"],                  # default 0.05: /5, x2, x5, x10
+        "lr": ["0.005", "0.01", "0.1", "0.25", "0.5"],         # default 0.05: /10, /5, x2, x5, x10
         "lr_schedule": ["step", "cosine"],                     # argparse choices
         "weight_decay": ["0.0001", "0.001", "0.01", "0.1"],    # common values
         "class_weight": ["balanced"],                          # argparse choices

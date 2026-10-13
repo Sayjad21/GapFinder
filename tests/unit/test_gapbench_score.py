@@ -291,3 +291,13 @@ def test_main_async_runs_filter_scores_only_the_chosen_run_numbers(tmp_path, mon
     assert [r["run"] for r in json.loads(out.read_text())["rows"]] == [4]
     asyncio.run(score.main_async("test", 1, out, sealed))
     assert [r["run"] for r in json.loads(out.read_text())["rows"]] == [1, 4]
+
+
+def test_clopper_pearson_matches_known_values():
+    from score import clopper_pearson
+
+    zero = clopper_pearson(0, 48)
+    assert zero["lo"] == 0.0 and abs(zero["hi"] - (1 - 0.025 ** (1 / 48))) < 1e-3  # 0.0740
+    mid = clopper_pearson(5, 10)  # textbook: (0.1871, 0.8129)
+    assert abs(mid["lo"] - 0.1871) < 1e-3 and abs(mid["hi"] - 0.8129) < 1e-3
+    assert clopper_pearson(10, 10)["hi"] == 1.0

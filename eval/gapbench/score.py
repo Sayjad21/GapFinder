@@ -80,6 +80,36 @@ def wilson(k: int, n: int, z: float = 1.959964) -> dict:
             "hi": round(min(1.0, centre + half), 3)}
 
 
+def _binom_cdf(k: int, n: int, p: float) -> float:
+    """P(X <= k) for X ~ Binomial(n, p)."""
+    if k < 0:
+        return 0.0
+    if k >= n:
+        return 1.0
+    term, total = (1 - p) ** n, 0.0
+    for i in range(k + 1):
+        total += term
+        term *= (n - i) / (i + 1) * p / (1 - p) if p < 1 else 0.0
+    return min(1.0, total)
+
+
+def clopper_pearson(k: int, n: int, alpha: float = 0.05) -> dict:
+    """Exact (Clopper-Pearson) 95% interval for k out of n, by bisection (no scipy). For k = 0 the
+    upper bound is 1 - (alpha/2)^(1/n): with 0 of 48 confidently wrong, the rate is below 7.4%."""
+    if n <= 0:
+        return {"k": k, "n": n, "rate": None, "lo": None, "hi": None}
+
+    def solve(f, lo=0.0, hi=1.0):
+        for _ in range(60):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if f(mid) else (lo, mid)
+        return (lo + hi) / 2
+
+    lo = 0.0 if k == 0 else solve(lambda p: 1 - _binom_cdf(k - 1, n, p) < alpha / 2)
+    hi = 1.0 if k == n else solve(lambda p: _binom_cdf(k, n, p) > alpha / 2)
+    return {"k": k, "n": n, "rate": round(k / n, 3), "lo": round(lo, 4), "hi": round(hi, 4)}
+
+
 CATEGORY_OF_TYPE = {"single_unstated": "known_cause", "stated_code_differs": "known_cause",
                     "interaction": "interaction", "no_cause": "no_cause"}
 CAUSE_CATEGORIES = ("known_cause", "interaction", "decoy")  # a findable cause exists
@@ -312,6 +342,8 @@ def outcome_stats(rs: list[dict]) -> dict:
     denom = {"correct": n_cause, "partial": n_cause, "missed": n_cause, "confidently_wrong": len(rs),
              "correct_abstention": n_none}
     return {"counts": {o: count(o) for o in OUTCOMES}, "runs_with_cause": n_cause, "runs_without_cause": n_none,
+            # the safety number, first and exact: Wilson is optimistic near 0
+            "confidently_wrong_exact": clopper_pearson(count("confidently_wrong"), len(rs)),
             "rates": {o: wilson(count(o), denom[o]) for o in OUTCOMES}, "trust_matrix": trust_matrix(rs)}
 
 
