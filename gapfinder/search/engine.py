@@ -434,9 +434,16 @@ class GapSearch:
             conf_knobs.setdefault(h.knob, h.value)
         if len(conf_knobs) >= 2:
             combos.append(dict(conf_knobs))
+        ranked = {h.knob: [x for x in sorted(hyps, key=lambda x: -score[x]) if x.knob == h.knob] for h in top}
         k_vals = self.cfg.combine_values_per_knob if self.cfg.coverage else 1
-        values_of = {h.knob: [x for x in sorted(hyps, key=lambda x: -score[x]) if x.knob == h.knob][:k_vals]
-                     for h in top}
+        if self.cfg.coverage:  # use as many values per knob as the pair budget allows (few open knobs: all)
+            def n_pairs(k: int) -> int:
+                sizes = [min(k, len(v)) for v in ranked.values()]
+                return sum(a * b for i, a in enumerate(sizes) for b in sizes[i + 1:])
+            most = max((len(v) for v in ranked.values()), default=1)
+            while k_vals < most and n_pairs(k_vals + 1) <= self.cfg.combine_max_pairs:
+                k_vals += 1
+        values_of = {k: v[:k_vals] for k, v in ranked.items()}
         pairs = []
         for a, b in itertools.combinations(top, 2):
             for va in values_of[a.knob]:

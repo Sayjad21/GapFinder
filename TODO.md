@@ -140,6 +140,15 @@ Remaining, in order:
      the measured noise) against the current screen, at $0.
 8. [ ] **$ Shared ledger across arms** (cost). The four GapFinder arms recompute the same claim
    extraction. Sharing one ledger per task takes a blind test from about $7.50 to about $2-3.
+9a. [ ] **Generator validity: reject tasks a simpler configuration explains** (free; found 2026-10-14).
+    - On test-gen-05 (interaction: `eps_start=0.1` + `lr_schedule=inv`), the single change
+      `eps_start=0.0` reproduces both claims (C1 +5.1%, C2 +0.8%) better than the planted pair does (C1
+      +36%). So the planted answer isn't identifiable from the claims, and GapFinder's simpler answer is
+      a valid explanation that the scorer marks wrong.
+    - In `eval/gapbench/gen_tasks.py`, add a check: measure every single-knob candidate (or at least
+      each planted knob's other candidate values) and reject a draw if any configuration simpler than
+      the planted one lands within the noise band on every claim.
+    - Re-check test-gen-06 run 15 (`n=5000` chosen instead of 600) the same way.
 9. [ ] **$ Fresh sealed blind test on v1.1** (tag `v1.1` first; new seed after the tag).
    - Add generator task types for order-of-magnitude changes, relative wording ("10× the baseline"),
      multiplier knobs and pure interactions.
