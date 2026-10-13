@@ -131,12 +131,17 @@ async def test_bisect_drops_knobs_that_do_not_matter(tmp_path):
 async def test_no_cause_is_unexplained(tmp_path):
     m = await paper(tmp_path, {})
     offset = [Target("C1", "score", m["score"] * 1.37), Target("C2", "write_amp", m["write_amp"], held_out=True)]
-    s = GapSearch(orch(tmp_path), offset, ALL, SearchConfig())
+    s = GapSearch(orch(tmp_path), offset, ALL, SearchConfig(coverage=False))  # v1.0 value grid
     [r] = await s.run()
     assert r.attribution.confidence_label == "Unexplained"
     assert r.changes == {}
     assert r.attribution.assumption_set == [] and r.gap_after == r.gap_before
     GapReport.from_search(s, [r], paper="toy").to_markdown()  # must render (regression: KeyError)
+    # v1.1 coverage reaches beta=0.05, which moves the score most of the way without touching the
+    # held-out claim (equifinality). That may be reported, but never as a confident attribution.
+    s2 = GapSearch(orch(tmp_path, "cov"), offset, ALL, SearchConfig())
+    [r2] = await s2.run()
+    assert r2.attribution.confidence_label not in ("Explained", "Paper-artifact inconsistency", "Partially explained")
 
 
 # 8. diff guard ----------------------------------------------------------------
@@ -299,7 +304,7 @@ async def test_a_value_that_always_fails_is_not_rerun_on_every_call(tmp_path):
     assert len(s._runs[frozenset({"alpha": "two"}.items())]) == 2 and s.runs_used == 2
     # and a value with no successful run never survives the screen, even as a strong ledger lead
     lead = [A("A1", "alpha", ["two"], supported=["two"], prior=0.95)]
-    s2 = GapSearch(orch(tmp_path, "lead"), targets(m), lead, SearchConfig())
+    s2 = GapSearch(orch(tmp_path, "lead"), targets(m), lead, SearchConfig(coverage=False))
     [r] = await s2.run()
     assert r.screen and all(x["knob"] != "alpha" or x["units"] == float("-inf") for x in r.screen)
     assert not any(e["type"] == "survivor" for e in s2.orch.events.read())

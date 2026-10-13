@@ -49,6 +49,7 @@ class Knob(BaseModel):
     default: str
     env: bool = False
     candidates: list[str] = Field(default_factory=list)
+    choices: list[str] = Field(default_factory=list)  # every value the program accepts (argparse choices)
     max: float | None = None  # values above this are too costly to test (reported, not run)
 
     def affordable(self, value: str) -> bool:

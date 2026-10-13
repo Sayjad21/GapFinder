@@ -6,6 +6,7 @@ records exactly where it was declared.
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
@@ -23,6 +24,7 @@ _GFLAGS_RE = re.compile(r"\bDEFINE_(bool|int32|int64|uint32|uint64|double|string
 # argparse: add_argument("--name", ..., default=X)
 _ARGPARSE_RE = re.compile(r"add_argument\(\s*['\"](--?[\w-]+)['\"](.*)$")
 _DEFAULT_RE = re.compile(r"default\s*=\s*([^,)]+)")
+_CHOICES_RE = re.compile(r"choices\s*=\s*(\[[^\]]*\]|\([^)]*\))")
 # CMake: option(NAME "help" ON)
 _CMAKE_OPT_RE = re.compile(r"^\s*option\s*\(\s*(\w+)\s+\"[^\"]*\"\s+(\w+)", re.IGNORECASE)
 # Makefile: NAME ?= value
@@ -46,6 +48,7 @@ class Flag:
     file: str  # repo-relative, posix
     line: int
     text: str  # the declaring line, verbatim
+    choices: list[str] | None = None  # argparse choices=[...], when they are literals
 
     @property
     def ref(self) -> str:
@@ -77,6 +80,8 @@ class RepoMap:
         lines += ["## Scripts"] + self.scripts[:100]
         lines += ["## Config files"] + self.config_files[:100]
         lines += ["## Flags and defaults (name = default  @ file:line)"]
+        # choices are kept out of this text on purpose: it is part of the model prompts, and changing
+        # it would invalidate every cached answer (the search reads choices from Flag.choices instead)
         lines += [f"{f.name} = {f.default}  @ {f.ref}  [{f.kind}]" for f in self.flags[:max_flags]]
         lines += ["## File tree (truncated)"] + self.files[:max_files]
         if self.readme:
@@ -127,6 +132,18 @@ def build_repo_map(root: str | Path, *, include_flag_dirs: tuple[str, ...] | Non
     return rm
 
 
+def _literal_choices(window: str) -> list[str] | None:
+    """`choices=["a", "b"]` or `choices=(1, 2)` as strings; None when absent or not a literal."""
+    m = _CHOICES_RE.search(window)
+    if not m:
+        return None
+    try:
+        vals = ast.literal_eval(m.group(1))
+    except (ValueError, SyntaxError):
+        return None
+    return [str(v) for v in vals] or None
+
+
 def _read(path: Path) -> str:
     try:
         if path.stat().st_size > 2_000_000:
@@ -150,12 +167,13 @@ def _scan_flags(path: Path, rel: str) -> list[Flag]:
         elif is_py and "add_argument" in line and (m := _ARGPARSE_RE.search(line.strip())):
             # the call may continue over the next lines: look for default= up to the closing paren
             window = m.group(2)
-            for nxt in lines[i : i + 3]:
-                if ")" in window:
+            for nxt in lines[i : i + 6]:
+                if 1 + window.count("(") - window.count(")") <= 0:  # the call's parentheses are closed
                     break
                 window += " " + nxt.strip()
             d = _DEFAULT_RE.search(window)
-            out.append(Flag(m.group(1), d.group(1).strip() if d else None, "argparse", rel, i, line.strip()))
+            out.append(Flag(m.group(1), d.group(1).strip() if d else None, "argparse", rel, i, line.strip(),
+                            choices=_literal_choices(window)))
         elif path.name == "CMakeLists.txt" and (m := _CMAKE_OPT_RE.match(line)):
             out.append(Flag(m.group(1), m.group(2), "cmake", rel, i, line.strip()))
         elif path.name == "Makefile" and (m := _MAKE_VAR_RE.match(line)):

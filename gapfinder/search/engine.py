@@ -23,6 +23,7 @@ from gapfinder.models import budget
 from gapfinder.sandbox.noise import NoiseBand, bootstrap_diff_ci, noise_band
 from gapfinder.sandbox.runner import Orchestrator
 from gapfinder.search.bisect import minimal_set
+from gapfinder.search.hypotheses import _same_number, coverage_values, fill_choices
 from gapfinder.ledger.assumptions import derive_status
 from gapfinder.search.verify import Plausibility, gap_returns, held_out_ok, plausible
 
@@ -55,6 +56,14 @@ class Target:
 class SearchConfig:
     screen_top_k: int = 24  # assumptions screened, by prior
     candidates_per_knob: int = 2
+    # v1.1 value coverage: also try every accepted choice of a categorical knob, or a coarse-first log
+    # ladder around a numeric default, up to this many values per knob (paper and ledger values first).
+    # In 14 of v1.0's 18 blind-test misses a true value was never tested at all.
+    coverage: bool = True
+    coverage_candidates: int = 6
+    # confirmation counts only runs made after a hypothesis was selected (the screening run that picked
+    # it is excluded: winner's curse), with a Bonferroni-corrected bootstrap over the confirm round
+    strict_confirm: bool = True
     noise_repeats: int = 5
     # >1: that many of the naive noise runs each get a fresh build/load. A setup that isn't
     # reproducible (e.g. a database load whose layout depends on timing) adds its own variance,
@@ -140,6 +149,9 @@ class GapSearch:
         self.claim_figure = {c.id: c.figure_or_table for c in (claims or [])}
         self.target_figures = {t.figure for t in targets if t.figure}
         self.spec = orch.spec
+        self._family = 1  # hypotheses tested together in the current confirm round (multiple comparisons)
+        if self.cfg.coverage and str(self.spec.base).startswith("local:"):
+            self._fill_choices_from_artifact()
         spec_knobs = {_norm_knob(k): k for k in self.spec.knobs}
         # assumption -> spec knob; assumptions about knobs the harness can't set are skipped (and reported)
         self.assumptions: dict[str, Assumption] = {}
@@ -214,10 +226,18 @@ class GapSearch:
     def effect_ci(self, t: Target, changes: Changes) -> tuple[float, float] | None:
         """Bootstrap interval for (candidate - naive) on the target metric, from runs already made."""
         base = [b.parsed_metrics[t.metric] for b in self.measure_ok({}) if t.metric in b.parsed_metrics]
-        cand = [b.parsed_metrics[t.metric] for b in self.measure_ok(changes) if t.metric in b.parsed_metrics]
+        runs = self.measure_ok(changes)
+        if self.cfg.strict_confirm:
+            fresh = [b for b in runs if not (b.note or "").startswith("screen")]
+            if len(fresh) >= 2:
+                runs = fresh  # the screening run selected this hypothesis; it can't also confirm it
+        cand = [b.parsed_metrics[t.metric] for b in runs if t.metric in b.parsed_metrics]
         if len(base) < 2 or len(cand) < 2:
             return None
-        return bootstrap_diff_ci(base, cand, alpha=self.cfg.effect_alpha or 0.05)
+        alpha = self.cfg.effect_alpha or 0.05
+        if self.cfg.strict_confirm:
+            alpha /= self._family  # Bonferroni over the hypotheses confirmed together
+        return bootstrap_diff_ci(base, cand, alpha=alpha)
 
     def _significant(self, t: Target, changes: Changes) -> bool:
         if self.cfg.effect_alpha is None:
@@ -304,16 +324,23 @@ class GapSearch:
             default = spec_knob.default
             values = [str(v) for v in a.candidate_values if str(v) != default] or [
                 v for v in spec_knob.candidates if v != default]
+            if spec_knob.choices:  # a value the program rejects can't be the cause
+                values = [v for v in values if v in spec_knob.choices]
             for v in reversed([_stated_value(s) for s in stated]):
                 if v is not None and v != default:  # the paper's own values come first
                     if v in values:
                         values.remove(v)
                     values.insert(0, v)
+            if self.cfg.coverage:
+                for v in coverage_values(spec_knob):
+                    if v not in values and not any(_same_number(v, w) for w in values):
+                        values.append(v)
             affordable = [v for v in values if spec_knob.affordable(v)]
             for v in values:
                 if not spec_knob.affordable(v) and (knob, v) not in self.untestable:
                     self.untestable.append((knob, v))
-            for v in affordable[: self.cfg.candidates_per_knob]:
+            per_knob = self.cfg.coverage_candidates if self.cfg.coverage else self.cfg.candidates_per_knob
+            for v in affordable[:per_knob]:
                 out.append(Hypothesis(knob, v, a.id))
         if self.cfg.rank == "random":
             rng.shuffle(out)
@@ -374,7 +401,10 @@ class GapSearch:
 
         # 2. confirm: survivors get repeats; effects that fade are pruned
         reps = self.confirm_repeats(t)
-        await _all(*(self.measure(h.changes, reps, "confirm") for h in survivors))
+        # strict: the confirmation runs come on top of the screening run(s) that selected the hypothesis
+        extra = self.cfg.screen_repeats if self.cfg.strict_confirm else 0
+        await _all(*(self.measure(h.changes, reps + extra, "confirm") for h in survivors))
+        self._family = max(1, len(survivors))
         confirmed = [h for h in survivors if self.units(t, h.changes) >= thr and self._significant(t, h.changes)]
         self.orch.events.emit("round", name="confirm", claim=t.claim_id, confirmed=len(confirmed))
 
@@ -561,6 +591,18 @@ class GapSearch:
                          for h in retry))
             tried.update(frozenset(h.changes.items()) for h in retry)
         return retry
+
+    def _fill_choices_from_artifact(self) -> None:
+        """For a local artifact, read argparse choices from its code into knobs that don't list them."""
+        from pathlib import Path
+
+        from gapfinder.ingest.repo_map import build_repo_map
+
+        root = Path(str(self.spec.base).removeprefix("local:"))
+        if root.is_dir():
+            n = fill_choices(self.spec, build_repo_map(root).flags)
+            if n:
+                self.orch.events.emit("note", msg=f"value coverage: read accepted choices for {n} knob(s) from the code")
 
     def _stated_values(self, knob: str) -> list[str]:
         """Paper values for `knob` that apply to the targets' figures. An entry tied only to claims of

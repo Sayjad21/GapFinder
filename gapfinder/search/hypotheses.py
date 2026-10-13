@@ -22,6 +22,9 @@ from gapfinder.ledger.schemas import Assumption
 from gapfinder.sandbox.spec import HarnessSpec
 
 FACTORS = (2, 5, 10)
+# v1.1 value coverage: coarse first, so the span is covered before the resolution (a 50x change, e.g.
+# MC Dropout's epochx 500 -> 10, is reached within the first few candidates)
+LADDER = (10, 2, 50, 5, 100)
 _FLIP = {"true": "false", "false": "true", "on": "off", "off": "on", "yes": "no", "no": "yes",
          "enabled": "disabled", "disabled": "enabled"}
 _NUM = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
@@ -31,8 +34,9 @@ def _fmt(x: float) -> str:
     return f"{x:.6g}"
 
 
-def generate_values(default: str) -> list[str]:
-    """Values around `default`: factors of 2, 5 and 10 below and above for numbers, the flip for booleans."""
+def generate_values(default: str, factors: tuple[int, ...] = FACTORS) -> list[str]:
+    """Values around `default`: each factor below and above for numbers (in the given order), the flip
+    for booleans."""
     d = default.strip()
     if d.lower() in _FLIP:
         flipped = _FLIP[d.lower()]
@@ -44,7 +48,7 @@ def generate_values(default: str) -> list[str]:
         return []
     is_int = re.fullmatch(r"[-+]?\d+", d) is not None
     out: list[str] = []
-    for f in FACTORS:
+    for f in factors:
         for v in (x / f, x * f):
             if is_int:
                 v = int(v + 0.5) if v > 0 else -int(-v + 0.5)
@@ -56,6 +60,29 @@ def generate_values(default: str) -> list[str]:
             if s != d and s not in out and float(s) != x:
                 out.append(s)
     return out
+
+
+def coverage_values(knob) -> list[str]:
+    """Values a knob can take that a reader of the paper may never propose: every accepted choice of a
+    categorical flag, or a coarse-first log ladder around a numeric default."""
+    if knob.choices:
+        return [c for c in knob.choices if c != knob.default]
+    return generate_values(knob.default, LADDER)
+
+
+def fill_choices(spec: HarnessSpec, flags) -> int:
+    """Copy argparse `choices` from the repo map into spec knobs that don't list them. Returns how many."""
+    by_name = {}
+    for f in flags:
+        if getattr(f, "choices", None):
+            by_name.setdefault(f.name.lstrip("-").replace("-", "_").lower(), f.choices)
+    n = 0
+    for name, k in spec.knobs.items():
+        ch = by_name.get(name.lstrip("-").replace("-", "_").lower())
+        if ch and not k.choices:
+            k.choices = list(ch)
+            n += 1
+    return n
 
 
 def knob_candidates(spec: HarnessSpec, knob: str) -> list[str]:
