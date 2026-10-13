@@ -168,7 +168,7 @@ class GapSearch:
         self.target_figures = {t.figure for t in targets if t.figure}
         self.spec = orch.spec
         self._family = 1  # hypotheses tested together in the current confirm round (multiple comparisons)
-        if self.cfg.coverage and str(self.spec.base).startswith("local:"):
+        if self.cfg.coverage and self.spec.code_root() is not None:  # a local base, or the spec's `source`
             self._fill_choices_from_artifact()
         spec_knobs = {_norm_knob(k): k for k in self.spec.knobs}
         # assumption -> spec knob; assumptions about knobs the harness can't set are skipped (and reported)
@@ -738,13 +738,11 @@ class GapSearch:
         return size
 
     def _fill_choices_from_artifact(self) -> None:
-        """For a local artifact, read argparse choices from its code into knobs that don't list them."""
-        from pathlib import Path
-
+        """With the artifact's code on this machine, read argparse choices and multipliers into the knobs."""
         from gapfinder.ingest.repo_map import build_repo_map
 
-        root = Path(str(self.spec.base).removeprefix("local:"))
-        if root.is_dir():
+        root = self.spec.code_root()  # a local base, or the spec's `source` for an image or checkpoint
+        if root is not None:
             from gapfinder.ingest.config_flow import flag_scales
 
             n = fill_choices(self.spec, build_repo_map(root).flags)
