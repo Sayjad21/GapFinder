@@ -24,23 +24,11 @@ import argparse
 import json
 import math
 import statistics
+import sys
 from pathlib import Path
 
-# two-sided 0.05 and one-sided 0.2 Student t quantiles, by degrees of freedom (no scipy dependency)
-_T975 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 8: 2.306, 10: 2.228, 15: 2.131, 20: 2.086,
-         30: 2.042, 60: 2.0, 1000: 1.96}
-_T80 = {1: 1.376, 2: 1.061, 3: 0.978, 4: 0.941, 5: 0.920, 6: 0.906, 8: 0.889, 10: 0.879, 15: 0.866, 20: 0.860,
-        30: 0.854, 60: 0.848, 1000: 0.842}
-
-
-def _t(table: dict[int, float], df: int) -> float:
-    keys = sorted(table)
-    return table[min((k for k in keys if k >= df), default=keys[-1])]
-
-
-def mde(sigma: float, n: int) -> float:
-    df = max(1, 2 * n - 2)
-    return (_t(_T975, df) + _t(_T80, df)) * sigma * math.sqrt(2 / n)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from gapfinder.sandbox.noise import mde  # noqa: E402
 
 
 def naive_by_load(run_dirs: list[Path], metrics: list[str]) -> dict[str, list[dict]]:

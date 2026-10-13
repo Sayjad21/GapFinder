@@ -32,7 +32,31 @@ class Diagnosis:
 
     def to_dict(self) -> dict:
         return {"kind": self.kind, "text": self.text, "joint": self.joint[:10],
+                "islands": islands([j["config"] for j in self.joint]),
                 "per_claim": {c: v[:10] for c, v in self.per_claim.items()}, "params": self.params}
+
+
+def _one_move(a: dict, b: dict) -> bool:
+    """a and b differ by one knob: set, unset or changed."""
+    keys = set(a) | set(b)
+    return sum(a.get(k) != b.get(k) for k in keys) == 1
+
+
+def islands(configs: list[dict]) -> list[list[dict]]:
+    """Connected components of the configurations under single-knob moves (BFS), largest first.
+    Two islands mean two separate explanations; one island means variations of the same one."""
+    left, out = list(range(len(configs))), []
+    while left:
+        comp, queue = [], [left.pop(0)]
+        while queue:
+            i = queue.pop(0)
+            comp.append(i)
+            near = [j for j in left if _one_move(configs[i], configs[j])]
+            for j in near:
+                left.remove(j)
+            queue += near
+        out.append([configs[i] for i in sorted(comp)])
+    return sorted(out, key=len, reverse=True)
 
 
 def implausibilities(runs: dict[tuple, list[dict]], claims: list[tuple[str, str, float]], *,

@@ -305,6 +305,22 @@ class GapReport:
         if r.diagnosis:
             out += ["", "### History matching (every measured configuration, all claims together)",
                     f"- {r.diagnosis['text']}"]
+            joint = [j for j in r.diagnosis.get("joint") or [] if j["config"]]
+            if len(joint) > 1:  # equifinality map: every fit the data can't rule out, grouped by knobs changed
+                groups: dict[str, list[str]] = {}
+                for j in joint:
+                    key = ", ".join(sorted(j["config"])) or "naive"
+                    worst = max(j["I"].values())
+                    groups.setdefault(key, []).append(
+                        ", ".join(f"{k}={v}" for k, v in sorted(j["config"].items())) + f" (max I {worst:g})")
+                out.append(f"- Not ruled out (all claims within 3 sigma): {len(joint)} configurations")
+                out += [f"  - `{k}`: " + "; ".join(v[:4]) + (f"; +{len(v) - 4} more" if len(v) > 4 else "")
+                        for k, v in groups.items()]
+                isl = [i for i in r.diagnosis.get("islands") or [] if any(i)]
+                if len(isl) > 1:  # separate explanations, not one explanation with neighbours
+                    out.append(f"- {len(isl)} separate islands (no single-knob move joins them): " + " | ".join(
+                        "; ".join(", ".join(f"{k}={v}" for k, v in sorted(c.items())) or "naive" for c in i[:3])
+                        for i in isl[:4]))
             sets = r.value_sets and {k: v for k, v in r.value_sets.items() if len(v) > 1}
             if sets:
                 out.append("- Equally good values: " + "; ".join(f"`{k}` in {{{', '.join(v)}}}" for k, v in sets.items()))

@@ -138,7 +138,7 @@ Remaining, in order:
      mode.
    - Validate first with the proposal's synthetic power study (the logged MC Dropout effect sizes plus
      the measured noise) against the current screen, at $0.
-8. [ ] **$ Shared ledger across arms** (cost). The four GapFinder arms recompute the same claim
+8. [x] **Done** (`harness.py --ledger-from`, `eval/gapbench/run_arms.py`: the `gapfinder` arm pays for the ledger once, the other GapFinder arms re-use its recorded answers). **$ Shared ledger across arms** (cost). The four GapFinder arms recompute the same claim
    extraction. Sharing one ledger per task takes a blind test from about $7.50 to about $2-3.
 9a. [x] **Done** (rivals checked over GapFinder's whole search space). **Generator validity: reject tasks a simpler configuration explains** (free; found 2026-10-14).
     - On test-gen-05 (interaction: `eps_start=0.1` + `lr_schedule=inv`), the single change
@@ -178,7 +178,7 @@ Remaining, in order:
     Super checks a fixed list: train/test leakage, hyperparameters shared across splits, eval
     padding/EOS, loss-direction defaults, dataset version, metric definition. Each item is backed by a
     repo grep (code evidence, no runs). Report the top cause family.
-12. [~] **Analysis done** (`eval/noise_model.py`: on RusKey only C5 is detectable; the MDE rule isn't in the engine yet). **Honest noise model** (M4; free).
+12. [x] **Done** (`eval/noise_model.py`; engine rule `mde_inconclusive`: an Unexplained gap below the MDE at the confirmation repeats reads Inconclusive. Score-neutral: both are abstentions; on the recorded runs it re-labels 13 of 70 Unexplained claims, all gaps of 8-10%. Metamorphic relations not done). **Honest noise model** (M4; free).
     - Variance components from fresh loads × forks (one-way ANOVA; the RusKey logs already have many
       loads), and a pooled SD instead of 2×MAD-of-3.
     - A minimum detectable effect per claim: gap below the MDE becomes Inconclusive, which extends
@@ -191,7 +191,7 @@ Remaining, in order:
       wrong split.
     - Report in-space recall, out-of-space specificity, their mean (balanced diagnostic accuracy; the
       abstainer is capped at 0.5), cause-family accuracy and the false-explanation rate.
-14. [ ] **Reporting views at zero extra runs** (proposal Part A, reduced):
+14. [~] **Equifinality map and NROY islands done** (Gap Report "History matching" section; `history.islands`). Knob → claim graph not done. **Reporting views at zero extra runs** (proposal Part A, reduced):
     - an equifinality map (NROY configurations grouped by which knobs changed);
     - NROY "islands" as connected components under single-knob moves (a BFS);
     - a code-derived knob → claim graph, to predict which held-out claims a knob should not move.

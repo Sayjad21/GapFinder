@@ -29,3 +29,13 @@ def test_a_joint_fit_is_in_space_and_the_naive_one_is_reproduced():
 def test_nothing_reaching_the_target_is_out_of_space_likely():
     data = dict([_r({}, [(20, 5.0), (20.5, 5.1), (19.5, 4.9)]), _r({"k": "1"}, [(18, 5.0), (18.2, 5.0)])])
     assert diagnose(data, CLAIMS, "T", disc=0.0).kind == "out_of_space_likely"
+
+
+def test_islands_join_single_knob_neighbours_only():
+    from gapfinder.search.history import islands
+
+    cfgs = [{"a": "1"}, {"a": "2"}, {"a": "2", "b": "x"}, {"c": "9", "d": "9"}]
+    got = islands(cfgs)
+    assert got[0] == [{"a": "1"}, {"a": "2"}, {"a": "2", "b": "x"}]  # a=1 -> a=2 -> add b: one island
+    assert got[1] == [{"c": "9", "d": "9"}]  # two knobs away from everything else: a separate explanation
+    assert islands([]) == []

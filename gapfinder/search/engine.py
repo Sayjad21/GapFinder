@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 from gapfinder.ledger.schemas import Assumption, AssumptionStatus, Attribution, Branch, BranchStatus, ConfidenceLabel
 from gapfinder.models import budget
-from gapfinder.sandbox.noise import NoiseBand, bootstrap_diff_ci, noise_band
+from gapfinder.sandbox.noise import NoiseBand, bootstrap_diff_ci, mde, noise_band
 from gapfinder.sandbox.runner import Orchestrator
 from gapfinder.search.bisect import minimal_set
 from gapfinder.search.hypotheses import _same_number, coverage_values, fill_choices, mark_multipliers_from_flow
@@ -70,6 +70,9 @@ class SearchConfig:
     # multi-claim history matching after each search (gapfinder/search/history.py): turns a bare
     # Unexplained into "explains target, conflicts with held-out" or an out-of-space diagnosis
     history_matching: bool = True
+    # an Unexplained gap smaller than the minimum detectable effect (gapfinder.sandbox.noise.mde, at the
+    # confirmation repeats) reads Inconclusive: a cause that closed it couldn't have been confirmed
+    mde_inconclusive: bool = True
     hm_paper_n: float = 1.0  # runs behind the paper's number (1 = conservative)
     hm_disc: float = 0.05  # discrepancy fraction for scaled surrogates
     # confirmation counts only runs made after a hypothesis was selected (the screening run that picked
@@ -388,6 +391,8 @@ class GapSearch:
             res.notes.append(f"stopped early: {exc}")
             await self._label_partial(t, res)
         res.hypotheses_tested = len(tried)
+        if self.cfg.mde_inconclusive:
+            self._mde_check(t, res)
         if self.cfg.history_matching:
             self._history_match(t, res)
         if res.attribution is not None:
@@ -636,6 +641,23 @@ class GapSearch:
                          for h in retry))
             tried.update(frozenset(h.changes.items()) for h in retry)
         return retry
+
+    def _mde_check(self, t: Target, res: ClaimResult) -> None:
+        """Unexplained -> Inconclusive when the gap is below the minimum detectable effect."""
+        if res.attribution is None or res.attribution.confidence_label != ConfidenceLabel.unexplained.value:
+            return
+        vals = [b.parsed_metrics[t.metric] for b in self.measure_ok({}) if t.metric in b.parsed_metrics]
+        if len(vals) < 3 or res.gap_before is None:
+            return
+        n = self.confirm_repeats(t)
+        m = mde(statistics.stdev(vals), n) / abs(t.paper_value)
+        if abs(res.gap_before) >= m:
+            return
+        res.status = "inconclusive"
+        res.attribution = self._attribution(t, {}, res.gap_before, ConfidenceLabel.inconclusive, [])
+        res.notes.append(f"the gap ({res.gap_before:+.1%}) is below the minimum detectable effect (±{m:.1%} with "
+                         f"{n} runs per configuration at 80% power): even a setting that closed it couldn't have "
+                         "been confirmed, so 'nothing explains it' can't be claimed either")
 
     def _history_match(self, t: Target, res: ClaimResult) -> None:
         """Score every measured configuration against the target and its held-out claims together."""
