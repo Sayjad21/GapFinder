@@ -128,6 +128,9 @@ class ConfidenceLabel(str, Enum):
     unexplained = "Unexplained"
     inconsistency = "Paper-artifact inconsistency"
     inconclusive = "Inconclusive"  # within noise, but the noise is too wide to tell values apart
+    # the target can be matched, but no tested condition matches the target and its held-out claims
+    # together (history matching): a partial finding plus a pointer to a cause outside the settings
+    conflicts_held_out = "Explains target, conflicts with held-out"
 
 
 class Attribution(_Model):

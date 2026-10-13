@@ -72,7 +72,8 @@ class GapReport:
                 counterfactual=c.get("counterfactual") or {},
                 plausibility={k: Plausibility(**p) for k, p in (c.get("plausibility") or {}).items()},
                 screen=c.get("screen") or [], hypotheses_tested=c.get("hypotheses_tested", 0),
-                replay=c.get("replay") or [], notes=c.get("notes") or [], value_sets=c.get("value_sets") or {})
+                replay=c.get("replay") or [], notes=c.get("notes") or [], value_sets=c.get("value_sets") or {},
+                diagnosis=c.get("diagnosis"))
         claims = d.get("claims") or []
         return cls(paper=d.get("paper", "?"), artifact=d.get("artifact", "?"), results=[claim(c) for c in claims],
                    noise=d.get("noise") or {}, naive=d.get("naive") or {}, runs=d.get("runs", 0),
@@ -301,6 +302,12 @@ class GapReport:
         out += ["", "### What did we measure?"] + _measured_lines(c["measured"])
         out += ["", "### Why do we believe it?"] + _belief_lines(c["belief"])
         out += ["", "### What remains unknown?"] + _unknown_lines(c["unknown"])
+        if r.diagnosis:
+            out += ["", "### History matching (every measured configuration, all claims together)",
+                    f"- {r.diagnosis['text']}"]
+            sets = r.value_sets and {k: v for k, v in r.value_sets.items() if len(v) > 1}
+            if sets:
+                out.append("- Equally good values: " + "; ".join(f"`{k}` in {{{', '.join(v)}}}" for k, v in sets.items()))
         if r.notes:
             out += ["", "Notes:"] + [f"- {n}" for n in r.notes]
         return out

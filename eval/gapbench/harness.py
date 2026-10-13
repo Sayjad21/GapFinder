@@ -94,7 +94,10 @@ async def run_gapfinder(task_dir: Path, out: Path, overrides: dict, backend: str
     (out / "assumptions.json").write_text(json.dumps([a.model_dump() for a in assumptions], indent=1))
     (out / "claims.json").write_text(json.dumps([c.model_dump() for c in claims], indent=1))
     orch = Orchestrator(make_backend(backend), spec, EventLog(out / "events.jsonl"), cost=CostMeter())
-    search = GapSearch(orch, [Target(**t) for t in targets], assumptions, SearchConfig(max_runs=200, **overrides), claims=claims,
+    # GapBench's generator makes each "paper" number the median of 7 runs, so it is far less noisy than one
+    # run: history matching counts it as about 4.5 runs (7 / 1.57 for a median)
+    search = GapSearch(orch, [Target(**t) for t in targets], assumptions,
+                       SearchConfig(max_runs=200, **{"hm_paper_n": 4.5, **overrides}), claims=claims,
                        router=router)
     results = await search.run()
     GapReport.from_search(search, results, paper=task["id"]).write(out)

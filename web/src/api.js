@@ -37,4 +37,5 @@ export const LABEL_CLASS = {
   Unexplained: "muted",
   Reproduced: "muted",
   Inconclusive: "warn",
+  "Explains target, conflicts with held-out": "warn",
 };

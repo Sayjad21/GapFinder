@@ -67,6 +67,11 @@ class SearchConfig:
     combine_max_pairs: int = 40
     # among equally good fits (gaps within one noise band), prefer the smallest change (see _change_size)
     parsimony: bool = True
+    # multi-claim history matching after each search (gapfinder/search/history.py): turns a bare
+    # Unexplained into "explains target, conflicts with held-out" or an out-of-space diagnosis
+    history_matching: bool = True
+    hm_paper_n: float = 1.0  # runs behind the paper's number (1 = conservative)
+    hm_disc: float = 0.05  # discrepancy fraction for scaled surrogates
     # confirmation counts only runs made after a hypothesis was selected (the screening run that picked
     # it is excluded: winner's curse), with a Bonferroni-corrected bootstrap over the confirm round
     strict_confirm: bool = True
@@ -138,6 +143,7 @@ class ClaimResult:
     # every measured value of each explaining knob that fits about as well (equifinality): the honest
     # answer when one target claim can't tell e.g. max_steps 400, 500 and 1000 apart
     value_sets: dict[str, list[str]] = field(default_factory=dict)
+    diagnosis: dict | None = None  # history matching over every measured configuration (all claims)
 
 
 def _norm_knob(k: str) -> str:
@@ -382,6 +388,8 @@ class GapSearch:
             res.notes.append(f"stopped early: {exc}")
             await self._label_partial(t, res)
         res.hypotheses_tested = len(tried)
+        if self.cfg.history_matching:
+            self._history_match(t, res)
         if res.attribution is not None:
             res.attribution.hypotheses_tested = len(tried)
         self.orch.events.emit("attribution", claim=t.claim_id, status=res.status,
@@ -628,6 +636,34 @@ class GapSearch:
                          for h in retry))
             tried.update(frozenset(h.changes.items()) for h in retry)
         return retry
+
+    def _history_match(self, t: Target, res: ClaimResult) -> None:
+        """Score every measured configuration against the target and its held-out claims together."""
+        from gapfinder.search.history import diagnose
+
+        claims = [(t.claim_id, t.metric, t.paper_value)] + [
+            (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out and h.metric != t.metric]
+        runs = {tuple(sorted(k)): [b.parsed_metrics for b in v if b.status == BranchStatus.succeeded]
+                for k, v in self._runs.items()}
+        runs = {k: v for k, v in runs.items() if v}
+        d = diagnose(runs, claims, t.claim_id, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc)
+        res.diagnosis = d.to_dict()
+        self.orch.events.emit("note", msg=f"{t.claim_id}: history matching: {d.text}")
+        label = res.attribution.confidence_label if res.attribution else None
+        if label != ConfidenceLabel.unexplained.value:
+            return
+        res.notes.append(f"history matching: {d.text}")
+        if d.kind == "out_of_space_suspected":
+            best = next(r for r in d.per_claim[t.claim_id] if r["config"])
+            c = best["config"]
+            broken = ", ".join(f"{cid} (I={i:g})" for cid, i in best["I"].items() if cid != t.claim_id and i > 3)
+            res.changes, res.gap_after = dict(c), self.gap(t, c)
+            res.attribution = self._attribution(t, c, res.gap_after, ConfidenceLabel.conflicts_held_out,
+                                                [b.result_checkpoint for b in self.measure_ok(c) if b.result_checkpoint])
+            res.value_sets = self.equivalent_values(t, c)
+            res.notes.append(f"{dict(c)} matches {t.claim_id} (I={best['I'][t.claim_id]:g}) but breaks "
+                             f"{broken or 'a held-out claim'}; no tested condition matches all claims, so the rest of "
+                             "the gap probably lies in code, data or evaluation, which GapFinder doesn't change")
 
     def equivalent_values(self, t: Target, changes: Changes) -> dict[str, list[str]]:
         """For each knob of the answer: every measured value (other knobs held at the answer's values)
