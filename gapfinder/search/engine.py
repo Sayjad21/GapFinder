@@ -65,6 +65,8 @@ class SearchConfig:
     # interaction half is often not its knob's best single value), at most combine_max_pairs pairs
     combine_values_per_knob: int = 2
     combine_max_pairs: int = 40
+    # among equally good fits (gaps within one noise band), prefer the smallest change (see _change_size)
+    parsimony: bool = True
     # confirmation counts only runs made after a hypothesis was selected (the screening run that picked
     # it is excluded: winner's curse), with a Bonferroni-corrected bootstrap over the confirm round
     strict_confirm: bool = True
@@ -454,8 +456,15 @@ class GapSearch:
         def tier(c: Changes) -> int:
             g, g0 = abs(self.gap(t, c)), abs(res.gap_before)
             return 0 if self.closes(t, c) else 1 if g0 - g >= self.cfg.partial_frac * g0 else 2
-        candidates.sort(key=lambda c: (tier(c), not self._supported(c), abs(self.gap(t, c)), len(c),
-                                       sorted(c.items())))
+        if self.cfg.parsimony:
+            # candidates whose gaps are within one noise band of each other fit equally well (equifinality):
+            # prefer fewer changed knobs, then the smaller change from the default, then the closer fit
+            band = self.band(t) or 1e-9
+            candidates.sort(key=lambda c: (tier(c), not self._supported(c), round(abs(self.gap(t, c)) / band),
+                                           len(c), self._change_size(c), abs(self.gap(t, c)), sorted(c.items())))
+        else:
+            candidates.sort(key=lambda c: (tier(c), not self._supported(c), abs(self.gap(t, c)), len(c),
+                                           sorted(c.items())))
         best: ClaimResult | None = None
         for c in candidates[: self.cfg.verify_candidates]:
             trial = await self._verify(t, c, res)
@@ -603,6 +612,21 @@ class GapSearch:
                          for h in retry))
             tried.update(frozenset(h.changes.items()) for h in retry)
         return retry
+
+    def _change_size(self, changes: Changes) -> float:
+        """How far a configuration moves from the defaults: |log10(value/default)| per numeric knob (both
+        positive), 1 per other change. Used only to break ties between equally good fits."""
+        import math
+
+        size = 0.0
+        for k, v in changes.items():
+            d = self.spec.knobs[k].default if k in self.spec.knobs else ""
+            try:
+                x, y = float(v), float(d)
+                size += abs(math.log10(x / y)) if x > 0 and y > 0 else 1.0
+            except ValueError:
+                size += 1.0
+        return size
 
     def _fill_choices_from_artifact(self) -> None:
         """For a local artifact, read argparse choices from its code into knobs that don't list them."""
