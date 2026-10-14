@@ -116,6 +116,7 @@ CAUSE_CATEGORIES = ("known_cause", "interaction", "decoy")  # a findable cause e
 ABSTAIN_CATEGORIES = ("no_cause", "noise_only", "incomplete", "out_of_space")  # the right answer is not to attribute
 OUT_OF_SPACE_CATEGORIES = ("out_of_space", "incomplete")  # the cause exists but no exposed setting reaches it
 OUTCOMES = ("correct", "partial", "confidently_wrong", "correct_abstention", "missed")
+SET_K = 3  # a set answer earns `correct_in_set` only with at most this many configurations (pre-registered)
 
 
 def category_of(key: dict) -> str:
@@ -164,13 +165,19 @@ def score_claim(key: dict, pred: dict | None) -> dict:
     if not correct_set and cat not in ABSTAIN_CATEGORIES and proposed:
         got, truth = _knob_dict(knobs), _knob_dict(key["hidden"])
         correct_set = set(got) == set(truth) and all(v in sets.get(k, {got[k]}) for k, v in truth.items())
+    # configuration-set credit (reported next to the exact score, never instead of it): the run's set of
+    # configurations the target can't tell apart contains the true one, and has at most SET_K members
+    equivalent = [_knob_dict(c) for c in (pred.get("equivalent") or [])] or ([_knob_dict(knobs)] if knobs else [])
+    correct_in_set = outcome == "correct" or (
+        cat not in ABSTAIN_CATEGORIES and proposed and len(equivalent) <= SET_K
+        and _knob_dict(key["hidden"]) in equivalent)
     abstained = not missing and not proposed
     column = {"correct": "correct_cause", "partial": "partial", "confidently_wrong": "wrong_confident",
               "correct_abstention": "abstained", "missed": "abstained" if abstained else "missed"}[outcome]
     return {"label": pred["label"], "knobs": pred["knobs"], "confident": confident,
             "correct": outcome in ("correct", "correct_abstention"),
             "false_attr": outcome == "confidently_wrong", "outcome": outcome, "column": column,
-            "correct_set": correct_set,
+            "correct_set": correct_set, "correct_in_set": correct_in_set, "set_size": len(equivalent),
             # the diagnosis bonus no trivial abstainer can earn: "out of space" said where it is true
             "oos_diagnosed": (pred.get("diagnosis") or "").startswith("out_of_space")}
 
@@ -267,6 +274,7 @@ async def score_run(task_dir: Path, run_dir: Path, n: int, answers_dir: Path | N
             "source": source_of(answer["id"]), "answer": answer_signature(claims),
             "correct": all(c["correct"] for c in claims.values()),
             "correct_set": all(c.get("correct_set", c["correct"]) for c in claims.values()),
+            "correct_in_set": all(c.get("correct_in_set", c["correct"]) for c in claims.values()),
             "oos_diagnosed": any(c.get("oos_diagnosed") for c in claims.values()),
             "false_attr": any(c["false_attr"] for c in claims.values()),
             "gap_closed": next(iter(claims.values()))["gap_closed"], "claims": claims,
@@ -398,6 +406,8 @@ def summarise(rows: list[dict]) -> dict:
             "answer_stability": answer_stability(rs),
             # cause runs whose answer was right as a set (true values inside the equally-good sets)
             "correct_set_causes": sum(r.get("correct_set", False) for r in rs if r.get("truth") == "cause"),
+            # cause runs whose configuration set (at most SET_K) contains the true configuration
+            "correct_in_set_causes": sum(r.get("correct_in_set", False) for r in rs if r.get("truth") == "cause"),
             **balanced_scores(rs),
             **outcome_stats(rs),
         }

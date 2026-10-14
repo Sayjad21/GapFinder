@@ -99,7 +99,9 @@ def summary(rows: list[dict]) -> dict:
     for r in rows:
         by_cat[r["category"]][r["outcome"]] += 1
     total = collections.Counter(r["outcome"] for r in rows)
-    return {"runs": len(rows), "outcomes": dict(total), "by_category": {c: dict(v) for c, v in sorted(by_cat.items())},
+    in_set = sum(r.get("correct_in_set", False) for r in rows if r.get("truth") == "cause")
+    return {"runs": len(rows), "outcomes": dict(total), "correct_in_set_causes": in_set,
+            "by_category": {c: dict(v) for c, v in sorted(by_cat.items())},
             "per_task": {f"{r['task']} run{r['run']}": (r["outcome"], {c: (v["label"], v["knobs"])
                                                                         for c, v in r["claims"].items()})
                          for r in rows}}
@@ -123,7 +125,7 @@ def main() -> None:
     os.environ.setdefault("GF_SANDBOX_GUARD_USD", "1000000")
     rows = asyncio.run(score(a.base))
     s = summary(rows)
-    print(json.dumps({k: s[k] for k in ("runs", "outcomes", "by_category")}, indent=1))
+    print(json.dumps({k: s[k] for k in ("runs", "outcomes", "correct_in_set_causes", "by_category")}, indent=1))
     out = a.out or ROOT / "eval" / "results" / f"dev_suite_run{a.base}.json"
     out.write_text(json.dumps({"base": a.base, "code": str(CODE), **s, "rows": rows}, indent=1), encoding="utf-8")
     print("->", out)

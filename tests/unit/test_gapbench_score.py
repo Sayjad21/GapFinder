@@ -301,3 +301,19 @@ def test_clopper_pearson_matches_known_values():
     mid = clopper_pearson(5, 10)  # textbook: (0.1871, 0.8129)
     assert abs(mid["lo"] - 0.1871) < 1e-3 and abs(mid["hi"] - 0.8129) < 1e-3
     assert clopper_pearson(10, 10)["hi"] == 1.0
+
+
+def test_set_credit_needs_the_truth_in_a_small_set():
+    from score import score_claim as sc
+
+    truth = {"normalize": "zscore", "threshold": "0.3"}
+    in_set = sc(KEY, {"label": "Fits but unsupported", "knobs": {"lr": "0.5"},
+                      "equivalent": [{"lr": "0.5"}, truth]})
+    assert in_set["outcome"] == "missed" and in_set["correct_in_set"] and in_set["set_size"] == 2
+    too_big = sc(KEY, {"label": "Fits but unsupported", "knobs": {"lr": "0.5"},
+                       "equivalent": [{"lr": "0.5"}, {"lr": "1"}, {"n": "2"}, truth]})
+    assert not too_big["correct_in_set"]  # more than SET_K configurations: no credit
+    exact = sc(KEY, {"label": "Fits but unsupported", "knobs": truth})
+    assert exact["correct_in_set"] and exact["set_size"] == 1
+    abstain = sc({"id": "n", "type": "no_cause", "hidden": {}}, {"label": "Unexplained", "knobs": {}})
+    assert not abstain["correct_in_set"]

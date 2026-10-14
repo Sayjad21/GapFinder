@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import math
 import random
 import statistics
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ from gapfinder.ledger.assumptions import derive_status
 from gapfinder.search.verify import Plausibility, gap_returns, held_out_ok, plausible
 
 Changes = dict[str, str]
+LL_EQUIVALENT = 2.0  # log-likelihood units: within this of the best, the target can't tell two fits apart
 _LABEL_RANK = {
     ConfidenceLabel.explained.value: 0,
     ConfidenceLabel.inconsistency.value: 0,
@@ -152,6 +154,9 @@ class ClaimResult:
     value_sets: dict[str, list[str]] = field(default_factory=dict)
     diagnosis: dict | None = None  # history matching over every measured configuration (all claims)
     closes: bool = False  # the configuration closes the gap fully (within its noise band)
+    # every configuration the target claim can't tell apart from the answer (likelihood within
+    # LL_EQUIVALENT of the answer's, held-out claims no worse), the answer first
+    equivalent: list[dict] = field(default_factory=list)
 
 
 def _norm_knob(k: str) -> str:
@@ -503,16 +508,28 @@ class GapSearch:
         # candidates: confirmed singles and combos, closest to the paper first
         candidates = [h.changes for h in confirmed] + [c for c in good_combos if self.units(t, c) >= thr
                                                          and self._significant(t, c)]
-        # closes fully > closes at least half > the rest; evidence-backed first within each tier
+        # consistent with the paper > closes at least half > the rest; evidence-backed first within each tier.
+        # "Consistent" is closes() or an implausibility of at most 2 with the candidate's standard error and
+        # the paper's own uncertainty: closes() alone compares the gap with the candidate's run-to-run spread,
+        # which favours noisy candidates over precise ones (test-v11-01, -10)
         def tier(c: Changes) -> int:
             g, g0 = abs(self.gap(t, c)), abs(res.gap_before)
-            return 0 if self.closes(t, c) else 1 if g0 - g >= self.cfg.partial_frac * g0 else 2
+            i = self.implausibility(t, c)
+            return (0 if self.closes(t, c) or (i is not None and i <= 2)
+                    else 1 if g0 - g >= self.cfg.partial_frac * g0 else 2)
         if self.cfg.parsimony:
-            # candidates whose gaps are within one noise band of each other fit equally well (equifinality):
-            # prefer fewer changed knobs, then the smaller change from the default, then the closer fit
-            band = self.band(t) or 1e-9
-            candidates.sort(key=lambda c: (tier(c), not self._supported(c), round(abs(self.gap(t, c)) / band),
-                                           len(c), self._change_size(c), abs(self.gap(t, c)), sorted(c.items())))
+            # equally good fits (equifinality) are those whose likelihood of the paper's number is within
+            # LL_EQUIVALENT of the best: among them prefer fewer changed knobs, then the smaller change from
+            # the default, then the likelier fit. (v1.1 rounded |gap|/band into buckets, so two fits 0.7
+            # points apart could land in different buckets: test-v11-10 run 2.)
+            ll = {frozenset(c.items()): self.loglik(t, c) for c in candidates}
+            top = max((v for v in ll.values() if v is not None), default=None)
+
+            def tied(c: Changes) -> int:
+                v = ll[frozenset(c.items())]
+                return 0 if top is not None and v is not None and v >= top - LL_EQUIVALENT else 1
+            candidates.sort(key=lambda c: (tier(c), not self._supported(c), tied(c), len(c), self._change_size(c),
+                                           -(ll[frozenset(c.items())] or float("-inf")), sorted(c.items())))
         else:
             candidates.sort(key=lambda c: (tier(c), not self._supported(c), abs(self.gap(t, c)), len(c),
                                            sorted(c.items())))
@@ -540,6 +557,10 @@ class GapSearch:
             res.attribution.assumption_set, res.attribution.gap_after = [], res.gap_before
             res.attribution.checkpoint_ids, res.attribution.counterfactual_ok = [], None
         if res.changes:
+            res.equivalent = self.equivalent_configs(t, res.changes, candidates)
+            if len(res.equivalent) > 1:
+                res.notes.append("configurations the target claim can't tell apart from the answer: " + "; ".join(
+                    ", ".join(f"{k}={v}" for k, v in sorted(e["config"].items())) for e in res.equivalent))
             res.value_sets = self.equivalent_values(t, res.changes)
             wider = {k: v for k, v in res.value_sets.items() if len(v) > 1}
             if wider:
@@ -779,6 +800,63 @@ class GapSearch:
             res.notes.append(f"{dict(c)} matches {t.claim_id} (I={best['I'][t.claim_id]:g}) but breaks "
                              f"{broken or 'a held-out claim'}; no tested condition matches all claims, so the rest of "
                              "the gap probably lies in code, data or evaluation, which GapFinder doesn't change")
+
+    def _sd(self, t: Target, changes: Changes) -> tuple[float, float, int] | None:
+        """(mean, run-to-run SD, n) of the target metric at a configuration. The SD is the configuration's
+        own with 3+ runs, else the naive one, never below the noise floor."""
+        vals = [b.parsed_metrics[t.metric] for b in self.measure_ok(changes) if t.metric in b.parsed_metrics]
+        if not vals:
+            return None
+        naive = [b.parsed_metrics[t.metric] for b in self.measure_ok({}) if t.metric in b.parsed_metrics]
+        s0 = statistics.stdev(naive) if len(naive) >= 2 else 0.0
+        s = statistics.stdev(vals) if len(vals) >= 3 else s0
+        floor = self.cfg.noise_floor_frac * abs(t.paper_value)
+        return statistics.fmean(vals), max(s, floor), len(vals)
+
+    def _var(self, t: Target, changes: Changes) -> tuple[float, float] | None:
+        """(mean, variance of mean - paper): the configuration's standard error plus the paper's own
+        uncertainty (its number is one result of about hm_paper_n runs), plus a noise-floor term."""
+        x = self._sd(t, changes)
+        if x is None:
+            return None
+        m, s, n = x
+        floor = self.cfg.noise_floor_frac * abs(t.paper_value)
+        return m, s * s / n + s * s / self.cfg.hm_paper_n + floor * floor
+
+    def implausibility(self, t: Target, changes: Changes) -> float | None:
+        x = self._var(t, changes)
+        return None if x is None else abs(x[0] - t.paper_value) / math.sqrt(x[1])
+
+    def loglik(self, t: Target, changes: Changes) -> float | None:
+        """Gaussian log-likelihood of the paper's number under the configuration: a noisy configuration
+        spreads its probability, so a precise one equally close is likelier (the honest form of 'prefer
+        the precise fit')."""
+        x = self._var(t, changes)
+        if x is None:
+            return None
+        m, v = x
+        return -0.5 * (t.paper_value - m) ** 2 / v - 0.5 * math.log(2 * math.pi * v)
+
+    def equivalent_configs(self, t: Target, answer: Changes, candidates: list[Changes]) -> list[dict]:
+        """The answer and every candidate the target can't tell apart from it: likelihood within
+        LL_EQUIVALENT of the answer's, consistent with the paper (implausibility <= 3), and no held-out
+        claim worse than at the naive run beyond its noise. The answer first, then fewest knobs."""
+        base = self.loglik(t, answer)
+        if base is None:
+            return []
+        held = [h for h in self.targets if h.held_out and h.metric in self.bands]
+        out = [{"config": dict(answer), "loglik": round(base, 3)}]
+        for c in candidates:
+            if c == answer or len(self.measure_ok(c)) < 2:
+                continue
+            v, i = self.loglik(t, c), self.implausibility(t, c)
+            if v is None or v < base - LL_EQUIVALENT or i is None or i > 3:
+                continue
+            if any((gh := self.gap(h, c)) is not None and abs(gh) > abs(self.gap(h, {})) + self.band(h)
+                   for h in held):
+                continue
+            out.append({"config": dict(c), "loglik": round(v, 3)})
+        return out[:1] + sorted(out[1:], key=lambda e: (len(e["config"]), -e["loglik"]))
 
     def equivalent_values(self, t: Target, changes: Changes) -> dict[str, list[str]]:
         """For each knob of the answer: every measured value (other knobs held at the answer's values)
