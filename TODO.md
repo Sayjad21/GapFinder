@@ -388,7 +388,7 @@ v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except
      - RL trajectories decorrelate fast, so the gain may be small there;
      - real artifacts may ignore the tag (RusKey's load isn't reproducible).
 
-8. [ ] **More claims = more identifiability** (ledger and harness).
+8. [~] **Checked on MC Dropout** (recorded runs already hold `energy_ll` and `yacht_ll`; the paper reports LL -1.99 and -1.55). Adding them as held-out claims changes nothing: Energy LL agrees with all five Energy fits, and Yacht LL tracks Yacht RMSE. Claims from the same datasets are correlated, so only an independent dataset (Concrete) would add information, and that costs runs. **More claims = more identifiability** (ledger and harness).
    - Use every claim of the same experiment as a held-out claim. For MC Dropout that means the
      log-likelihoods and Concrete; check what `run_cell.sh` outputs.
    - Where a paper reports a spread (MC Dropout's ±0.19 over 20 splits), add it as a dispersion claim.
