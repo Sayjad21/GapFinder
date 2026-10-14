@@ -151,6 +151,7 @@ class ClaimResult:
     # answer when one target claim can't tell e.g. max_steps 400, 500 and 1000 apart
     value_sets: dict[str, list[str]] = field(default_factory=dict)
     diagnosis: dict | None = None  # history matching over every measured configuration (all claims)
+    closes: bool = False  # the configuration closes the gap fully (within its noise band)
 
 
 def _norm_knob(k: str) -> str:
@@ -354,12 +355,17 @@ class GapSearch:
         for knob, a, stated in open_knobs[: self.cfg.screen_top_k]:
             spec_knob = self.spec.knobs[knob]
             default = spec_knob.default
-            values = [str(v) for v in a.candidate_values if str(v) != default] or [
-                v for v in spec_knob.candidates if v != default]
+            # the default itself is the naive run, in any spelling ("0" for 0.0: test-v11-01 proposed init_q=0)
+            is_default = lambda v: str(v) == default or _same_number(str(v), default)  # noqa: E731
+            values = []
+            for v in [str(v) for v in a.candidate_values if not is_default(v)] or [
+                    v for v in spec_knob.candidates if not is_default(v)]:
+                if not any(v == w or _same_number(v, w) for w in values):
+                    values.append(v)
             if spec_knob.choices:  # a value the program rejects can't be the cause
                 values = [v for v in values if v in spec_knob.choices]
             for v in reversed([_stated_value(s) for s in stated]):
-                if v is not None and v != default:  # the paper's own values come first
+                if v is not None and not is_default(v):  # the paper's own values come first
                     if v in values:
                         values.remove(v)
                     values.insert(0, v)
@@ -513,7 +519,7 @@ class GapSearch:
         best: ClaimResult | None = None
         for c in candidates[: self.cfg.verify_candidates]:
             trial = await self._verify(t, c, res)
-            if best is None or _rank(trial) < _rank(best):
+            if best is None or _better(trial, best):
                 best = trial
             if _rank(best) == 0:
                 break
@@ -545,11 +551,15 @@ class GapSearch:
         band, thr = parent.band, self.cfg.effect_threshold
         closes = lambda c: self.closes(t, c)  # noqa: E731
 
-        # 4. bisect to the minimal set that still closes the gap
+        # 4. bisect to the minimal set that still closes the gap, or that the dropped knob doesn't beat by
+        #    more than one noise band (test-v11-10: a passenger knob that chased noise was kept because the
+        #    single knob missed "closes" by one outlier run)
         if len(changes) > 1 and closes(changes):
+            full = dict(changes)
+
             async def still_closes(sub: Changes) -> bool:
                 await self.measure(sub, 1, "bisect")
-                return closes(sub)
+                return closes(sub) or await self._not_worse_by_a_band(t, sub, full)
             changes = await minimal_set(changes, still_closes)
             await self.measure(changes, self.confirm_repeats(t), "confirm-minimal")
         r.changes, r.gap_after = dict(changes), self.gap(t, changes)
@@ -562,6 +572,16 @@ class GapSearch:
                 await self.measure(without, 1, "counterfactual")
             g_without = self.gap(t, without)
             r.counterfactual[knob] = {"gap_without": g_without, "ok": gap_returns(r.gap_after, g_without, band)}
+        # a knob whose removal doesn't bring the gap back by more than the noise band is a passenger (the
+        # counterfactual's own criterion): once repeats confirm it, verify the configuration without it
+        passengers = [k for k, v in r.counterfactual.items() if not v["ok"]]
+        if self.cfg.verify and 0 < len(passengers) < len(changes):
+            reduced = {k: v for k, v in changes.items() if k not in passengers}
+            if await self._not_worse_by_a_band(t, reduced, changes):
+                trial = await self._verify(t, reduced, parent)
+                trial.notes.append(f"{', '.join(sorted(passengers))} dropped: with repeats, {changes} fits "
+                                   f"{reduced}'s gap by less than one noise band, so it is not needed")
+                return trial
         # 5b. held-out: every other claim must not get worse beyond its noise
         for other in self.targets if self.cfg.verify else ():
             if other.claim_id == t.claim_id:
@@ -592,6 +612,7 @@ class GapSearch:
             r.notes.append("evidence gate off: no evidence was checked, so this cannot be labelled Explained")
         reduced = (abs(r.gap_before) - abs(r.gap_after) >= self.cfg.partial_frac * abs(r.gap_before)
                    and self.units(t, changes) >= thr)
+        r.closes = closes(changes)
         if closes(changes) and cf_ok and ho_ok:
             if not plaus_ok:
                 label = ConfidenceLabel.fits_but_unsupported
@@ -626,6 +647,24 @@ class GapSearch:
         return r
 
     # -------------------------------------------------------------- helpers
+    async def _not_worse_by_a_band(self, t: Target, smaller: Changes, larger: Changes) -> bool:
+        """Occam's margin: the extra knobs in `larger` are not needed if they close the gap by less than one
+        noise band over `smaller` (|gap(smaller)| - |gap(larger)| <= band). An improvement that small is
+        within what repeats of one configuration vary by, so it doesn't justify another change. Both get
+        the confirmation repeats first (new runs, within the budget)."""
+        n = self.confirm_repeats(t)
+        try:
+            await _all(self.measure(smaller, n, "occam"), self.measure(larger, n, "occam"))
+        except (RunBudgetExceeded, budget.BudgetExceeded):
+            pass  # decide on the runs there are
+        if len(self.measure_ok(smaller)) < 2 or len(self.measure_ok(larger)) < 2:
+            return False
+        gs, gl = self.gap(t, smaller), self.gap(t, larger)
+        ok = gs is not None and gl is not None and abs(gs) - abs(gl) <= self.band(t)
+        self.orch.events.emit("note", msg=f"{t.claim_id}: {larger} vs {smaller}: gap {gl:+.1%} vs {gs:+.1%}, band "
+                                          f"+-{self.band(t):.1%}: the extra knob is {'not needed' if ok else 'needed'}")
+        return ok
+
     def confirm_repeats(self, t: Target) -> int:
         """Noisy metrics (run-to-run CV above 5%) get two extra repeats."""
         return self.cfg.confirm_repeats + (2 if self.bands[t.metric].cv > 0.05 else 0)
@@ -856,7 +895,7 @@ class GapSearch:
             if _rank(trial) >= _LABEL_RANK[ConfidenceLabel.unexplained.value]:
                 why = "; ".join(trial.notes) or "did not pass verification"
                 rejected.append(f"{c} (gap {self.gap(t, c):+.1%}) was verified from existing runs and rejected: {why}")
-            if best is None or _rank(trial) < _rank(best):
+            if best is None or _better(trial, best):
                 best = trial
         if best is not None and _rank(best) < _LABEL_RANK[ConfidenceLabel.unexplained.value]:
             for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay"):
@@ -938,4 +977,18 @@ def _stated_value(paper_value: str) -> str | None:
 
 
 def _rank(r: ClaimResult) -> int:
-    return _LABEL_RANK[r.attribution.confidence_label] if r.attribution else 9
+    if not r.attribution:
+        return 9
+    label = r.attribution.confidence_label
+    if label == ConfidenceLabel.fits_but_unsupported.value and not r.closes:
+        # it only narrowed the gap and has no evidence: no better than an evidence-backed partial
+        # (test-v11-10: a worse-fitting pair with a passenger knob outranked the right single knob)
+        return _LABEL_RANK[ConfidenceLabel.partially_explained.value]
+    return _LABEL_RANK[label]
+
+
+def _better(a: ClaimResult, b: ClaimResult) -> bool:
+    """a beats b: a better label rank, then a closer fit."""
+    ga = abs(a.gap_after) if a.gap_after is not None else float("inf")
+    gb = abs(b.gap_after) if b.gap_after is not None else float("inf")
+    return (_rank(a), ga) < (_rank(b), gb)
