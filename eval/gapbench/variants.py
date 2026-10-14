@@ -14,6 +14,11 @@ Rejected candidates, for the record:
   moves the mean by under 2 bands (capped at 200).
 - mlbench test-set epoch selection: under 3 noise bands from the near-chance default.
 - mlbench dropping only the x400 column: some single setting reproduces both claims.
+- mlbench, 2026-10-15 (with pair rivals): a metric swap (balanced accuracy reported as positive-class
+  recall), every tenth test label flipped, a test-row column misaligned, and train/test leakage. The
+  default model is near chance, so none moves the claims by 3 noise bands, or a single setting mimics
+  it. drop_scaled and clip5 pass on some noise draws and are pair-mimicked on others, so a set uses
+  only one of them (QUOTAS: out_of_space 1).
 """
 
 from __future__ import annotations

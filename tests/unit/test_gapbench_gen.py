@@ -24,14 +24,14 @@ SMALL_QUOTAS = (("known_cause", "single_unstated", 1), ("noise_only", "no_cause"
 # ------------------------------------------------------------------ pre-registered constants
 
 def test_quotas_are_the_registered_ten():
-    """The v1.1 protocol: the v1.0 eight plus 2 out-of-space tasks. (The published v1.0 set was drawn with
-    the eight; regenerate it with the generator at tag pre-tasks-1.)"""
+    """The v1.2 draft protocol: 10 tasks, 1 out of space and 2 incomplete (v1.1: 2 and 1; regenerate the
+    v1.1 set at tag v1.1, and the v1.0 set at tag pre-tasks-1)."""
     assert g.N_TASKS == 10
     by_cat = {}
     for cat, _typ, n in g.QUOTAS:
         by_cat[cat] = by_cat.get(cat, 0) + n
-    assert by_cat == {"known_cause": 2, "interaction": 2, "no_cause": 1, "decoy": 1, "noise_only": 1, "incomplete": 1,
-                      "out_of_space": 2}
+    assert by_cat == {"known_cause": 2, "interaction": 2, "no_cause": 1, "decoy": 1, "noise_only": 1, "incomplete": 2,
+                      "out_of_space": 1}
     assert g.ARTIFACTS == ("rlbench", "mlbench")
 
 
@@ -402,3 +402,55 @@ def test_a_named_set_gets_its_own_ids_and_sealed_folder():
     finally:
         g.use_set("gen")
     assert (g.TASK_PREFIX, g.SEALED_DIR, g.SEALED_HASH) == ("test-gen-", "sealed", "sealed.sha256")
+
+
+class RunsMeasurer(FakeMeasurer):
+    """FakeMeasurer plus recorded runs, for the standard-error and pair rival checks."""
+
+    def __init__(self, *a, runs=None, **k):
+        super().__init__(*a, **k)
+        self._runs = runs or {}
+
+
+def _screen_runs(plan, singles, hidden, runs):
+    fam = plan.family
+    naive = {c["metric"]: 100.0 for c in g.CLAIMS[fam]}
+    gen = g.Generator("s", Path("."), quotas=())
+    gen.mz = RunsMeasurer(fam, naive, singles, hidden, {m: 1.0 for m in naive}, plan.hidden, runs=runs)
+    return asyncio.run(gen.screen(plan))
+
+
+def _r(*xs):
+    return {"test_accuracy": list(xs), "balanced_accuracy": list(xs)}
+
+
+def test_a_noisy_single_rival_is_caught_by_standard_errors():
+    """test-v11-01: truth and rival both noisy; the rival's median misses the naive band but the two can't
+    be told apart. Against a precise truth the same noisy rival is no rival (GapFinder's likelihood
+    ranking would prefer the exact, precise fit)."""
+    plan = _plan("known_cause", "single_unstated", {"epochs": "30"})
+    hidden = {"test_accuracy": 130.0, "balanced_accuracy": 130.0}
+    singles = {("lr", "0.5"): {"test_accuracy": 126.0, "balanced_accuracy": 126.0}}  # 4 bands off: old test passes it
+    truth = g._key({"epochs": "30"})
+    rival = _r(110, 140, 126, 118, 135, 126, 122)  # SD ~10
+    runs = {("mlbench", truth): _r(118, 142, 130, 121, 139, 130, 127), ("mlbench", g._key({"lr": "0.5"})): rival}
+    with pytest.raises(g.Reject) as e:
+        _screen_runs(plan, singles, hidden, runs)
+    assert e.value.reason == "rival_single_knob_explains_claim"
+    runs[("mlbench", truth)] = _r(129.8, 130, 130.2, 130, 129.9, 130.1, 130)  # a precise truth
+    assert _screen_runs(plan, singles, hidden, runs)
+    runs[("mlbench", g._key({"lr": "0.5"}))] = _r(125.9, 126, 126.1, 126, 125.8, 126.2, 126)  # precise, 4 off
+    assert _screen_runs(plan, singles, hidden, runs)
+
+
+def test_a_pair_that_reproduces_both_claims_is_a_rival():
+    """v1.1: a pair mimicked both out-of-space tasks; the single-knob check couldn't see it."""
+    plan = _plan("known_cause", "single_unstated", {"epochs": "30"})
+    hidden = {"test_accuracy": 130.0, "balanced_accuracy": 130.0}
+    singles = {("lr", "0.5"): {"test_accuracy": 115.0, "balanced_accuracy": 115.0},
+               ("batch_size", "8"): {"test_accuracy": 114.0, "balanced_accuracy": 114.0}}  # halfway each
+    runs = {("mlbench", g._key({"epochs": "30"})): _r(129.8, 130, 130.2, 130, 129.9, 130.1, 130),
+            ("mlbench", g._key({"lr": "0.5", "batch_size": "8"})): _r(129.7, 130, 130.3, 129.9, 130.1, 130, 130)}
+    with pytest.raises(g.Reject) as e:
+        _screen_runs(plan, singles, hidden, runs)
+    assert e.value.reason == "rival_pair_explains_claim"

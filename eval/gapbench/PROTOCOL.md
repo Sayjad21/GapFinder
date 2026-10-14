@@ -230,3 +230,34 @@ Dry runs on throwaway seeds (generator checks) are not test runs and their tasks
     - each next to the always-Unexplained row, and per arm.
   - **One run of the set.** If a run fails for an infrastructure reason, it is re-run with the same
     command, and the re-run is listed. Nothing is re-run because of its result.
+
+## Amendment for the next sealed test (v1.2), DRAFT (2026-10-15): not final until committed with the tag plan
+
+The v1.1 tasks (`test-v11-*`) are public, so they are dev data. GapFinder's phase-3 changes were checked on
+them and the other public tasks with `eval/dev_suite.py`. v1.2 needs its own new set (`--set v12`).
+
+- **Generator changes since v1.1** (`gen_tasks.py`):
+  - **Rival test as GapFinder sees it.** A configuration is a rival when either test holds:
+    - every claim is within one naive noise band (as before);
+    - or it passes both of these, on every claim:
+      - its median is within 2 combined standard errors (its own and the paper's) of the paper's number;
+      - its log-likelihood is within 2 of the truth's expected one on a fresh re-measurement.
+  - **Pair rivals.** Pairs among the 8 single settings closest to the paper are measured, and a draw is
+    rejected if one reproduces both claims. Pairs that keep a planted value are skipped.
+  - **The artifact is fixed per slot**, alternating rlbench and mlbench. Only after half the attempts
+    fail may another artifact be used; this is recorded as `artifact_fallback` in the sealed log.
+    Re-drawing the artifact on every attempt skewed a dry run to 10 of 10 mlbench.
+- **Quotas: 1 out-of-space and 2 incomplete tasks** (v1.1: 2 and 1), still 10 tasks with 3 out-of-space
+  cases. With pair rivals, each mlbench bug is pair-mimicked on some noise draws, so a dry run couldn't
+  fill a second out-of-space task. Four more candidate bugs were screened and none passed (listed in
+  `variants.py`).
+- **Scoring additions** (next to the exact score, never instead of it): `correct_in_set`, which credits
+  a run when the truth is in its set of configurations the target can't tell apart, and the set has at
+  most 3 members (`SET_K`).
+- **Run plan:** as v1.1 (5 arms × 3 runs, `run_arms.py`, `--cap 0.5`). The billed cap is to be set when
+  the tag is made (about $4 expected).
+- **Success criteria, stated before the seed:**
+  - confidently wrong 0/30;
+  - exact correct causes above v1.1's 7/15, or equal with `correct_in_set` clearly higher;
+  - balanced accuracy above 0.73;
+  - out-of-space diagnosed > 0.

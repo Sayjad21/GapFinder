@@ -65,8 +65,10 @@ QUOTAS: tuple[tuple[str, str | None, int], ...] = (
     ("no_cause", "no_cause", 1),
     ("decoy", "single_unstated", 1),
     ("noise_only", "no_cause", 1),
-    ("incomplete", "single_unstated", 1),
-    ("out_of_space", "out_of_space", 2),
+    ("incomplete", "single_unstated", 2),
+    # 1, not 2 (v1.1 had 2): the mlbench bugs are pair-mimicked on some noise draws, and a second
+    # out-of-space task couldn't always be filled; the extra incomplete task is out of space too
+    ("out_of_space", "out_of_space", 1),
 )
 
 #: out_of_space: the paper's numbers come from an older, buggy copy of the artifact (eval/gapbench/variants.py:
@@ -157,6 +159,9 @@ MAX_RESTARTS = 8               # if a category can't be filled, the whole genera
                                # enough that some noise draws leave a category with no valid task. The
                                # number of restarts is recorded in the sealed log.
 DECOY_DRAWS = 30               # random decoy candidates tried per attempt
+RIVAL_SE_Z = 2.0  # a rival matches a claim when its median is within this many combined standard errors
+RIVAL_LL = 2.0  # ...and its log-likelihood is within this of the truth's expected one (engine's LL_EQUIVALENT)
+RIVAL_PAIR_TOP = 8  # pair rivals: pairs among this many single settings closest to the paper's primary number
 RIVALS_OVER_SEARCH_SPACE = True  # rivals are checked over every value GapFinder can test (pools plus its
                                  # coverage values: choices, log ladder, multiplier factors), not only the
                                  # pools: on test-gen-05, eps_start=0.0 (a ladder value outside the pool)
@@ -511,6 +516,7 @@ class Screen:
 
     def __init__(self, mz: Measurer, plan: Plan, paper: dict[str, float]):
         self.mz, self.plan, self.paper = mz, plan, paper
+        self.paper_runs: dict[str, list[float]] = {}  # the runs behind the paper's numbers, when there are any
         claims = CLAIMS[plan.family]
         self.primary, self.held = claims[0]["metric"], claims[1]["metric"]
 
@@ -538,11 +544,48 @@ class Screen:
                                             self.mz.band(self.plan.family, self.held), partial=False)
 
     def rivals(self, skip: set[tuple[str, str]], skip_knobs: set[str] = frozenset()) -> list[tuple[str, str]]:
-        """Single pool settings that reproduce both claims (each within one noise band of the paper's
-        number): a second, equally good answer the key doesn't name."""
+        """Single pool settings that reproduce both claims, by either test: each claim within one naive
+        noise band of the paper's number, or within RIVAL_SE_Z combined standard errors (`matches`). The
+        second test catches a noisy rival whose median lands near the paper by its own spread
+        (test-v11-01: max_steps=2000, SD up to 147, fitted both claims as well as the planted pair)."""
         return [(k, v) for k, vs in sorted(rival_values(self.plan.family).items()) for v in vs
                 if (k, v) not in skip and k not in skip_knobs
-                and self.single_closes_primary(k, v, partial=False) and self.single_reproduces_held_out(k, v)]
+                and ((self.single_closes_primary(k, v, partial=False) and self.single_reproduces_held_out(k, v))
+                     or self.matches({k: v}))]
+
+    def _se(self, values: list[float]) -> float:
+        """Standard error of a median of these runs (1.2533 sigma / sqrt(n) for normal noise)."""
+        return 1.2533 * statistics.stdev(values) / len(values) ** 0.5 if len(values) >= 2 else float("inf")
+
+    def matches(self, changes: dict[str, str]) -> bool:
+        """A rival the way GapFinder's own selection sees it (engine: consistency tier, LL_EQUIVALENT):
+        the configuration's medians are within RIVAL_SE_Z combined standard errors of the paper's numbers on
+        every claim, AND its log-likelihood of those numbers is within RIVAL_LL of what the truth would
+        score on a fresh re-measurement (expected z^2 = 1). Without the second test a noisy configuration
+        passes on its own wide error even against an exact, precise truth (a dry run: n=6000, SD 0.07,
+        against a deterministic normalize=minmax)."""
+        import math
+
+        fam = self.plan.family
+        recorded = getattr(self.mz, "_runs", {})  # a test double may keep medians only
+        runs = recorded.get((fam, _key(changes)))
+        if not runs:
+            return False
+        ll_rival = ll_truth = 0.0
+        for metric in (self.primary, self.held):
+            vals = runs.get(metric) or []
+            src = self.paper_runs.get(metric) or recorded.get((fam, _key({})), {}).get(metric) or []
+            if len(vals) < 2:
+                return False
+            floor = (0.01 * abs(self.paper[metric])) ** 2  # the engine's noise floor (noise_floor_frac)
+            se_r, se_p = self._se(vals), self._se(src) if len(src) >= 2 else 0.0
+            d = abs(statistics.median(vals) - self.paper[metric])
+            if d > RIVAL_SE_Z * (se_r ** 2 + se_p ** 2) ** 0.5:
+                return False
+            var_r, var_t = se_r ** 2 + se_p ** 2 + floor, 2 * se_p ** 2 + floor
+            ll_rival += -0.5 * d * d / var_r - 0.5 * math.log(2 * math.pi * var_r)
+            ll_truth += -0.5 - 0.5 * math.log(2 * math.pi * var_t)
+        return ll_rival >= ll_truth - RIVAL_LL
 
 
 _RIVAL_CACHE: dict[str, dict[str, list[str]]] = {}
@@ -685,6 +728,11 @@ class Generator:
                 raise Reject("hidden_runs_failed")
             paper = {m: round(v, 4) for m, v in paper.items()}
         sc = Screen(self.mz, plan, paper)
+        recorded = getattr(self.mz, "_runs", {})
+        if plan.variant:
+            sc.paper_runs = recorded.get((fam + f"@{plan.variant}", _key({})), {})
+        elif plan.hidden and not plan.offset:
+            sc.paper_runs = recorded.get((fam, _key(plan.hidden)), {})
         if cat == "noise_only":
             if any(sc.units(m) > NOISE_ONLY_MAX_UNITS for m in metrics):
                 raise Reject("paper_value_outside_noise")
@@ -695,10 +743,33 @@ class Generator:
             raise Reject("one_knob_alone_closes_gap")
         if sc.rivals(set(plan.hidden.items()), set(plan.unexposed)):
             raise Reject("rival_single_knob_explains_claim")
+        if await self.pair_rivals(sc):
+            raise Reject("rival_pair_explains_claim")
         if cat == "decoy":
             plan.decoy = self.find_decoy(sc)
             plan.omitted.append(next(iter(plan.decoy)))
         return paper
+
+    async def pair_rivals(self, sc: Screen) -> list[dict[str, str]]:
+        """Pairs GapFinder's combine round could reach that reproduce both claims (`Screen.matches`): pairs
+        among the RIVAL_PAIR_TOP single settings closest to the paper's primary number, on different knobs.
+        A pair that keeps a planted value is not a different answer (the planted knob plus a passenger), so
+        it is skipped, as is the planted pair itself. Found on v1.1: a pair mimicked both out-of-space tasks."""
+        plan, fam = sc.plan, sc.plan.family
+        planted = set(plan.hidden.items())
+        singles = []
+        for k, vs in sorted(rival_values(fam).items()):
+            if k in plan.unexposed:
+                continue
+            for v in vs:
+                m = self.mz.median(fam, {k: v}, sc.primary)
+                if m is not None and (k, v) not in planted:
+                    singles.append((abs(m - sc.paper[sc.primary]), k, v))
+        top = [(k, v) for _, k, v in sorted(singles)[:RIVAL_PAIR_TOP]]
+        pairs = [{a[0]: a[1], b[0]: b[1]} for i, a in enumerate(top) for b in top[i + 1:] if a[0] != b[0]]
+        pairs = [p for p in pairs if not (set(p.items()) & planted)]
+        await asyncio.gather(*(self.mz.measure(fam, p) for p in pairs))
+        return [p for p in pairs if sc.matches(p)]
 
     def find_decoy(self, sc: Screen) -> dict[str, str]:
         """A random other knob value that closes the primary gap but breaks the held-out claim."""
@@ -739,8 +810,15 @@ class Generator:
     async def make_one(self, index: int, category: str, typ: str) -> Done:
         task_id = f"{TASK_PREFIX}{index + 1:02d}"
         rejections: dict[str, int] = {}
+        # the artifact is fixed per slot (alternating), so the set stays balanced: re-drawing it on every
+        # attempt skews the accepted tasks toward whichever artifact passes the checks more often (a dry run
+        # with the stricter rival tests gave 10 of 10 mlbench). After half the attempts, any artifact.
+        preferred = self.artifacts[index % len(self.artifacts)]
         for attempt in range(1, MAX_ATTEMPTS + 1):
-            plan = draw_plan(self.rng, category, typ, self.artifacts)
+            fixed = category != "out_of_space" and attempt <= MAX_ATTEMPTS // 2
+            if attempt == MAX_ATTEMPTS // 2 + 1 and category != "out_of_space":
+                rejections["artifact_fallback"] = 1  # recorded in the sealed log
+            plan = draw_plan(self.rng, category, typ, (preferred,) if fixed else self.artifacts)
             try:
                 if plan.variant and (plan.family, plan.variant) in self.used_variants:
                     raise Reject("variant_already_used")  # two out-of-space tasks must be two different bugs
