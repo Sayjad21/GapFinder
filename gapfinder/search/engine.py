@@ -208,7 +208,17 @@ class GapSearch:
                 raise RunBudgetExceeded(f"run budget of {self.cfg.max_runs} reached "
                                         f"(wanted {need} more run(s) of {dict(changes) or 'naive'} for {label!r})")
             self.runs_used += need
-            have.extend(await self.orch.fanout([changes] * need, [label] * need, fresh_setup=fresh))
+            new = await self.orch.fanout([changes] * need, [label] * need, fresh_setup=fresh)
+            have.extend(new)
+            from gapfinder.search.triage import looks_like_infra
+
+            flaky = [b for b in new if b.status != BranchStatus.succeeded and looks_like_infra(b)]
+            if flaky and (self.cfg.max_runs is None or self.runs_used + len(flaky) <= self.cfg.max_runs):
+                # the environment failed, not the configuration: run it again once, same values
+                self.runs_used += len(flaky)
+                have.extend(await self.orch.fanout([changes] * len(flaky),
+                                                   [f"{label} (retry after infra failure)"] * len(flaky),
+                                                   fresh_setup=fresh))
             ok = [b for b in have if b.status == BranchStatus.succeeded]
         return ok
 
@@ -609,23 +619,34 @@ class GapSearch:
         return self.cfg.confirm_repeats + (2 if self.bands[t.metric].cv > 0.05 else 0)
 
     async def _triage_failures(self, hyps: list[Hypothesis], tried: set) -> list[Hypothesis]:
-        """Super reads why a hypothesis's runs all failed; an invalid value gets one corrected retry."""
-        if self.router is None:
-            return []
-        from gapfinder.search.triage import triage
+        """Super reads why a hypothesis's runs all failed; an invalid value gets one corrected retry. A
+        failure whose log shows an environment problem is retried once with the same value (no model call)."""
+        from gapfinder.search.triage import looks_like_infra, shows_rejection, triage
 
-        retry = []
+        retry, again = [], []
         for h in hyps:
             runs = self._runs.get(frozenset(h.changes.items()), [])
             if not runs or any(b.status == BranchStatus.succeeded for b in runs):
                 continue
             if any(x["knob"] == h.knob and x["value"] == h.value for x in self.triaged):
                 continue  # already triaged (e.g. while explaining another claim)
+            if len(runs) == 1 and looks_like_infra(runs[-1]):  # the environment failed, not the value
+                self.triaged.append({"knob": h.knob, "value": h.value, "kind": "infra", "retried": h.value,
+                                     "why": "the log shows an environment failure; the same value is run once more"})
+                self.orch.events.emit("note", msg=f"triage {h.knob}={h.value}: infra (same value retried)")
+                again.append(h)
+                continue
+            if self.router is None:
+                continue
             try:
                 tr = await triage(self.router, h.knob, h.value, self.spec.knobs[h.knob].default, runs[-1])
             except Exception as exc:  # triage is best-effort
                 self.triaged.append({"knob": h.knob, "value": h.value, "kind": "other", "why": f"triage failed: {exc}"})
                 continue
+            if tr.kind == "invalid_value" and not shows_rejection(runs[-1]):
+                # no rejection message in the log: keep the value rather than lose the hypothesis
+                tr = tr.model_copy(update={"kind": "other", "suggestion": None,
+                                           "why": f"{tr.why} [not taken as invalid_value: the log shows no rejection]"})
             rec = {"knob": h.knob, "value": h.value, "kind": tr.kind, "why": tr.why, "suggestion": tr.suggestion}
             self.triaged.append(rec)
             self.orch.events.emit("note", msg=f"triage {h.knob}={h.value}: {tr.kind} ({tr.why[:120]})")
@@ -636,11 +657,13 @@ class GapSearch:
                     and self._renderable(fixed, ClaimResult(target=self.targets[0], status="", gap_before=0, band=0))):
                 retry.append(fixed)
                 rec["retried"] = s
-        if retry:
+        if retry or again:
             await _all(*(self.measure(h.changes, self.cfg.screen_repeats, f"screen {h.knob}={h.value} (triaged)")
-                         for h in retry))
+                         for h in retry),
+                       *(self.measure(h.changes, self.cfg.screen_repeats,
+                                      f"screen {h.knob}={h.value} (retry after infra failure)") for h in again))
             tried.update(frozenset(h.changes.items()) for h in retry)
-        return retry
+        return retry  # the same-value retries are already in the caller's list
 
     def _mde_check(self, t: Target, res: ClaimResult) -> None:
         """Unexplained -> Inconclusive when the gap is below the minimum detectable effect."""
@@ -685,7 +708,13 @@ class GapSearch:
             return
         res.notes.append(f"history matching: {d.text}")
         if d.kind == "out_of_space_suspected":
-            best = next(r for r in d.per_claim[t.claim_id] if r["config"])
+            fits = [r for r in d.per_claim[t.claim_id] if r["config"]]
+            repeated = [r for r in fits if len(self.measure_ok(r["config"])) >= 2]
+            if not repeated:  # one screening run is not enough to name a configuration
+                res.notes.append(f"closest fit {fits[0]['config']} (I={fits[0]['I'][t.claim_id]:g}) has a single run; "
+                                 "not labelled until it is repeated")
+                return
+            best = repeated[0]
             c = best["config"]
             broken = ", ".join(f"{cid} (I={i:g})" for cid, i in best["I"].items() if cid != t.claim_id and i > 3)
             res.changes, res.gap_after = dict(c), self.gap(t, c)
