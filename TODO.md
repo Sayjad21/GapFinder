@@ -149,7 +149,7 @@ Remaining, in order:
       each planted knob's other candidate values) and reject a draw if any configuration simpler than
       the planted one lands within the noise band on every claim.
     - Re-check test-gen-06 run 15 (`n=5000` chosen instead of 600) the same way.
-9. [ ] **$ Fresh sealed blind test on v1.1** (tag `v1.1` first; new seed after the tag).
+9. [x] **Done** (`eval/results/gapbench_test_v11.md`: GapFinder 0/30 confidently wrong, 7+1 of 15 causes, 15/15 abstentions, balanced 0.73 vs 0.50 trivial; the true configuration was tested in 12/15 cause runs; out-of-space tasks turned out pair-mimicable, so the generator's rival check needs pairs). **$ Fresh sealed blind test on v1.1** (tag `v1.1` first; new seed after the tag).
    - Add generator task types for order-of-magnitude changes, relative wording ("10× the baseline"),
      multiplier knobs and pure interactions.
    - Report the confidently-wrong count first, the always-Unexplained row, and exact binomial
