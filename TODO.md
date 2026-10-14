@@ -293,7 +293,7 @@ code differ by about ±2 correct runs.
 v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except the final sealed test
 (about $4).
 
-1. [ ] **Replay simulator: a free test bench for selection policies** (`eval/replay_sim.py`, new).
+1. [~] **Replaced for GapBench by `eval/dev_suite.py`** (real local re-runs from recorded ledgers, $0). Still missing for MC Dropout: the recorded sandbox runs can't evaluate a new policy (it wants runs that were never made), so a policy check there needs a new sandbox run. **Replay simulator: a free test bench for selection policies** (`eval/replay_sim.py`, new).
    - **Why first:** CRN, racing and allocation change *which* runs happen, so `--resume` can't test
      them. Without this, every policy idea costs a full run.
    - **What it does:** build a per-configuration pool of recorded results, from all dev GapBench runs
@@ -305,7 +305,7 @@ v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except
    - **Limit:** it can only choose among measured configurations. A policy that wants a new
      configuration needs a real local run (free on GapBench).
 
-2. [ ] **Fix candidate generation where it is plainly wrong** (`gapfinder/search/hypotheses.py`).
+2. [x] **Done** (`634d827`). **Fix candidate generation where it is plainly wrong** (`gapfinder/search/hypotheses.py`).
    - Complement steps `1-(1-d)/k` only for knobs bounded in [0, 1): names or help text with discount,
      gamma, decay, momentum, beta, dropout, prob, ratio, fraction or split. A learning rate,
      temperature or threshold gets the plain log ladder (lr 0.1 → 0.01, 1.0, 0.05, 0.2, …). Evidence:
@@ -318,7 +318,7 @@ v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except
    - **Risk:** more values means more noise winners. That's why items 3-5 come next; don't ship this
      alone.
 
-3. [ ] **Score with standard errors, not spreads; rank pessimistically** (`engine.py`: `closes`,
+3. [x] **Done in revised form** (`efb2f63`: closes() unchanged for labels; ranking uses a consistency tier and likelihood ties). **Score with standard errors, not spreads; rank pessimistically** (`engine.py`: `closes`,
    `band_at`, the candidate sort).
    - Accept a candidate when its implausibility against the paper is at most 3. The variance term for
      the candidate's mean is `s_c^2/n_c`, with `s_c` = max(own SD, pooled naive SD), plus the paper's
@@ -332,7 +332,7 @@ v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except
    - **Acceptance:** 0 confidently wrong stays 0, and none of the 4 v1.1 known-cause or decoy runs that
      were correct is lost.
 
-4. [ ] **Answer with an equivalence set, and score it honestly** (`history.py`, `ClaimResult`,
+4. [x] **Done** (`efb2f63`; large sets stay a hedge instead of Inconclusive, see Progress). **Answer with an equivalence set, and score it honestly** (`history.py`, `ClaimResult`,
    `gap_report.py`, `score.py`).
    - The answer is the set of configurations that can't be told apart from the best on every claim. Use
      a known-σ test with the calibrated noise, i.e. a light model-confidence set, not Hansen's
@@ -351,7 +351,7 @@ v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except
    - **Free check:** `--resume` on the dev runs. Task 01 runs 1-2 should return a set containing the
      true pair, and task 10 run 2 a set containing `{max_steps=100}`.
 
-5. [ ] **Racing replaces "confirm by the first screen, then 40 one-run pairs"** (`engine.py` confirm and
+5. [x] **Done** (`6dc3dea` racing: cost only; `659f4e2` conditional forward step: interactions 11 -> 14 of 24). **Racing replaces "confirm by the first screen, then 40 one-run pairs"** (`engine.py` confirm and
    combine).
    - Successive halving, or top-two Thompson sampling, over the target-fit candidates, in batches sized
      to the available concurrency (sandbox runs are parallel, so batches beat OCBA's one-at-a-time
@@ -365,7 +365,7 @@ v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except
      ≥2 runs and lands inside the reported set in most replays, within 150 runs. The replays are
      post-hoc: this case shaped the policy.
 
-6. [ ] **Minimisation by equivalence (TOST), without losing interactions** (`engine.py` bisect and the
+6. [x] **Done, as an Occam margin rather than TOST** (`e0f13d1`). **Minimisation by equivalence (TOST), without losing interactions** (`engine.py` bisect and the
    parsimony tie-break).
    - Drop a knob when the reduced configuration is equivalent within a margin δ (the noise band at the
      confirmation repeats) by two one-sided tests. Keep the dropped variant *in the set*, so a real
@@ -398,7 +398,7 @@ v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except
    - On generated tasks, consider a third reported number per paper (e.g. rlbench `max_reward` or a
      learning-curve point). That would change the benchmark, so pre-register it in item 9.
 
-9. [ ] **Generator: identifiability checked the way GapFinder can see it** (`gen_tasks.py`).
+9. [x] **Done** (`1201f0c`: likelihood-aware single rivals, pair rivals, a fixed artifact per slot, quotas 1 out-of-space + 2 incomplete; a dry run gives 10 balanced tasks in about 1.5 h). **Generator: identifiability checked the way GapFinder can see it** (`gen_tasks.py`).
    - Rival check by implausibility with the rival's *own* standard error (I ≤ 3 on every claim), not
      "within one naive band". Task 01's `max_steps=2000` (SD up to 147) passed today's check.
    - Extend the check to the pairs the combine round can reach: the top 8 single settings by
