@@ -73,6 +73,11 @@ class SearchConfig:
     combine_max_pairs: int = 40
     # among equally good fits (gaps within one noise band), prefer the smallest change (see _change_size)
     parsimony: bool = True
+    # confirmation as a two-stage race: every screen survivor gets 2 fresh runs, then only the likeliest
+    # (top half, at least race_keep, plus ties and strong ledger leads) get the full repeats; the runs
+    # saved go to later rounds (test-v11-05: 14 survivors x ~5 runs used a third of the budget)
+    racing: bool = True
+    race_keep: int = 4
     # multi-claim history matching after each search (gapfinder/search/history.py): turns a bare
     # Unexplained into "explains target, conflicts with held-out" or an out-of-space diagnosis
     history_matching: bool = True
@@ -458,9 +463,24 @@ class GapSearch:
         reps = self.confirm_repeats(t)
         # strict: the confirmation runs come on top of the screening run(s) that selected the hypothesis
         extra = self.cfg.screen_repeats if self.cfg.strict_confirm else 0
-        await _all(*(self.measure(h.changes, reps + extra, "confirm") for h in survivors))
-        self._family = max(1, len(survivors))
-        confirmed = [h for h in survivors if self.units(t, h.changes) >= thr and self._significant(t, h.changes)]
+        racers = survivors
+        if self.cfg.racing and len(survivors) > self.cfg.race_keep and reps > 2:
+            await _all(*(self.measure(h.changes, 2 + extra, "confirm (race)") for h in survivors))
+            ll = {h: self.loglik(t, h.changes) for h in survivors}
+            order = sorted(survivors, key=lambda h: -(ll[h] if ll[h] is not None else float("-inf")))
+            best = ll[order[0]]
+            n_keep = max(self.cfg.race_keep, (len(order) + 1) // 2)
+            racers = [h for i, h in enumerate(order)
+                      if i < n_keep or self._strong_lead(h)
+                      or (best is not None and ll[h] is not None and ll[h] >= best - LL_EQUIVALENT)]
+            dropped = [h for h in survivors if h not in racers]
+            if dropped:
+                self.orch.events.emit("note", msg=f"{t.claim_id}: race: {len(dropped)} of {len(survivors)} survivors "
+                                                  "stop at 2 runs (less likely than the leaders): " + ", ".join(
+                                                      f"{h.knob}={h.value}" for h in dropped))
+        await _all(*(self.measure(h.changes, reps + extra, "confirm") for h in racers))
+        self._family = max(1, len(survivors))  # the correction still counts every hypothesis raced
+        confirmed = [h for h in racers if self.units(t, h.changes) >= thr and self._significant(t, h.changes)]
         self.orch.events.emit("round", name="confirm", claim=t.claim_id, confirmed=len(confirmed))
 
         # 3. combine: all confirmed together, plus pairs among the top screened knobs
