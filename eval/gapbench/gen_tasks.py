@@ -81,6 +81,16 @@ ARTIFACTS = ("rlbench", "mlbench")
 REPEATS = {"rlbench": 11, "mlbench": 7}  # runs per configuration, as in the dev tasks
 SPLIT = "test"
 TASK_PREFIX = "test-gen-"
+SEALED_DIR, SEALED_HASH = "sealed", "sealed.sha256"
+
+
+def use_set(name: str) -> None:
+    """Name a task set: 'gen' is the published v1.0 set (test-gen-*, sealed/, sealed.sha256); any other
+    name gets its own ids and sealed folder (e.g. 'v11': test-v11-*, sealed-v11/, sealed-v11.sha256), so a
+    new set never overwrites an old one."""
+    global TASK_PREFIX, SEALED_DIR, SEALED_HASH
+    TASK_PREFIX, SEALED_DIR, SEALED_HASH = (("test-gen-", "sealed", "sealed.sha256") if name == "gen" else
+                                            (f"test-{name}-", f"sealed-{name}", f"sealed-{name}.sha256"))
 
 #: claims per artifact: C1 is the primary claim, C2 the held-out claim
 CLAIMS = {
@@ -791,7 +801,7 @@ def _write(path: Path, text: str) -> None:
 
 
 def existing_outputs(out_root: Path) -> list[Path]:
-    return [p for sub in ("tasks", "sealed") if (out_root / sub).is_dir()
+    return [p for sub in ("tasks", SEALED_DIR) if (out_root / sub).is_dir()
             for p in (out_root / sub).glob(f"{TASK_PREFIX}*")]
 
 
@@ -802,7 +812,7 @@ def write_outputs(out_root: Path, done: list[Done], overwrite: bool = False, res
         raise FileExistsError(f"{out_root} already holds generated tasks; pass --overwrite to replace them")
     for p in old:
         shutil.rmtree(p)
-    tasks, sealed = out_root / "tasks", out_root / "sealed"
+    tasks, sealed = out_root / "tasks", out_root / SEALED_DIR
     log = {}
     for d in done:
         t = tasks / d.task_id
@@ -825,7 +835,7 @@ def write_outputs(out_root: Path, done: list[Done], overwrite: bool = False, res
                           "attempts": d.attempts, "rejections": d.rejections}
     _write(sealed / "generation_log.json", json.dumps({"restarts": restarts, "tasks": log}, indent=1))
     digest = hash_tree(sealed)
-    _write(out_root / "sealed.sha256", digest + "\n")
+    _write(out_root / SEALED_HASH, digest + "\n")
     return digest
 
 
@@ -863,10 +873,12 @@ def main(argv=None) -> int:
     p.add_argument("--n", type=int, default=N_TASKS, help=f"number of tasks; the quotas fix it at {N_TASKS}")
     p.add_argument("--out-root", type=Path, default=GB, help="where tasks/, sealed/ and sealed.sha256 go")
     p.add_argument("--overwrite", action="store_true", help="replace generated tasks already in --out-root")
+    p.add_argument("--set", default="gen", help="task set name: 'gen' (v1.0, test-gen-*) or e.g. 'v11' (test-v11-*)")
     p.add_argument("--debug", action="store_true", help="on failure, print the rejection reasons (never with the real seed)")
     a = p.parse_args(argv)
     if a.n != N_TASKS:
         p.error(f"--n must be {N_TASKS}: the category quotas are pre-registered for {N_TASKS} tasks")
+    use_set(a.set)
     seed = a.seed_file.read_text(encoding="utf-8").strip() if a.seed_file else a.seed
     if not seed:
         p.error("empty seed")

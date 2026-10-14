@@ -393,3 +393,12 @@ def test_variants_are_patched_copies_and_invisible_to_the_repo_map(tmp_path):
             assert out.resolve() != orig and (out / vs[v][1]).read_bytes() != before[vs[v][1]]
         assert {p.name: p.read_bytes() for p in orig.iterdir() if p.is_file()} == before  # artifact untouched
         assert "GAPBENCH" not in build_repo_map(orig).summary()  # no switch for GapFinder to see
+
+
+def test_a_named_set_gets_its_own_ids_and_sealed_folder():
+    try:
+        g.use_set("v11")
+        assert (g.TASK_PREFIX, g.SEALED_DIR, g.SEALED_HASH) == ("test-v11-", "sealed-v11", "sealed-v11.sha256")
+    finally:
+        g.use_set("gen")
+    assert (g.TASK_PREFIX, g.SEALED_DIR, g.SEALED_HASH) == ("test-gen-", "sealed", "sealed.sha256")

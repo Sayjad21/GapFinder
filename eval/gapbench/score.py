@@ -316,7 +316,8 @@ def answer_stability(rs: list[dict]) -> dict:
 
 def source_of(task_id: str) -> str:
     """Where a task came from, by id: the sealed generator, the AI author, or the dev set."""
-    for prefix, source in (("test-gen-", "generator"), ("test-ai-", "ai_author"), ("dev-", "dev")):
+    for prefix, source in (("test-gen-", "generator"), ("test-v11-", "generator_v11"), ("test-ai-", "ai_author"),
+                           ("dev-", "dev")):
         if task_id.startswith(prefix):
             return source
     return "other"

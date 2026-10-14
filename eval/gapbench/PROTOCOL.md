@@ -208,3 +208,25 @@ Dry runs on throwaway seeds (generator checks) are not test runs and their tasks
     `out_of_space` or `incomplete` task;
   - the **always-Unexplained row**: recall 0, specificity 1, balanced 0.5, diagnosis 0.
 - `out_of_space` is scored as an abstention category: any confident attribution is confidently wrong.
+- **Pre-registered run plan for the v1.1 sealed test** (written 2026-10-14, before the seed exists):
+  - **Frozen system:** GapFinder at git tag `v1.1`. The tag is pushed before the seed is made. No change to
+    `gapfinder/`, `eval/gapbench/harness.py`, `score.py` or `gen_tasks.py` until scoring is done.
+  - **Task set:** `--set v11`. Ids `test-v11-01` to `test-v11-10`, answers in `eval/gapbench/sealed-v11/`
+    (git-ignored until the reveal), hash in `eval/gapbench/sealed-v11.sha256`. The seed is
+    `secrets.token_hex(16)`, written to `sealed-v11/seed.txt` after the tag. The generator runs without
+    `--debug`, and nobody reads `sealed-v11/` or its log before scoring.
+  - **Arms and runs:**
+    - `gapfinder`, `gapfinder-noverify`, `gapfinder-noevidence`, `gapfinder-random` and
+      `baseline-super`, runs 1-3, through `eval/gapbench/run_arms.py`;
+    - the `gapfinder` arm pays for each task's ledger once (`--fresh`), and the other GapFinder arms
+      re-use its recorded model answers (`--ledger-from`);
+    - per-arm cap `--cap 0.5` per task, baseline `--steps 40`, random-arm seed 0 + run number.
+  - **Money:** billed spend is capped at $22.50 in total (`GF_SPEND_CAP_USD`, set for these processes
+    only). The estimate is about $4.5 on top of the $17.18 already billed. The local backend makes no
+    sandbox charge.
+  - **Reported first:**
+    - confidently wrong, with its exact Clopper-Pearson interval;
+    - then correct causes, correct sets, balanced accuracy and the out-of-space diagnosis rate;
+    - each next to the always-Unexplained row, and per arm.
+  - **One run of the set.** If a run fails for an infrastructure reason, it is re-run with the same
+    command, and the re-run is listed. Nothing is re-run because of its result.
