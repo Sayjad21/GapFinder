@@ -78,6 +78,12 @@ class SearchConfig:
     # saved go to later rounds (test-v11-05: 14 survivors x ~5 runs used a third of the budget)
     racing: bool = True
     race_keep: int = 4
+    # forward step in the combine round: the best confirmed singles (anchors) are paired with every
+    # screened value of the other top knobs, not just those values that scored well alone. An
+    # interaction partner can move the metric the wrong way on its own (test-v11-05: epochs=75 alone moved
+    # away from the paper and was never paired with normalize=minmax)
+    forward_anchors: int = 2
+    forward_max_pairs: int = 30
     # multi-claim history matching after each search (gapfinder/search/history.py): turns a bare
     # Unexplained into "explains target, conflicts with held-out" or an out-of-space diagnosis
     history_matching: bool = True
@@ -519,6 +525,25 @@ class GapSearch:
         for _, c in pairs[: self.cfg.combine_max_pairs]:
             if c not in combos:
                 combos.append(c)
+        # ...only when no confirmed single already explains the target (consistent with the paper): a second
+        # knob is then needed, and otherwise the extra pairs only add chances for a spurious fit (dev suite:
+        # unconditional, 26 and 24 of 39 against 29 and 25)
+        def consistent(h: Hypothesis) -> bool:
+            i = self.implausibility(t, h.changes)
+            return self.closes(t, h.changes) or (i is not None and i <= 2)
+        if self.cfg.coverage and self.cfg.forward_anchors > 0 and confirmed and not any(map(consistent, confirmed)):
+            lls = {h: self.loglik(t, h.changes) for h in confirmed}
+            anchors = sorted(confirmed, key=lambda h: -(lls[h] if lls[h] is not None else float("-inf")))
+            forward = []
+            for anchor in anchors[: self.cfg.forward_anchors]:
+                for k, vals in ranked.items():
+                    if k == anchor.knob:
+                        continue
+                    for v in vals:
+                        c = {anchor.knob: anchor.value, k: v.value}
+                        if c not in combos and c not in forward:
+                            forward.append(c)
+            combos.extend(forward[: self.cfg.forward_max_pairs])
         await _all(*(self.measure(c, 1, "combine") for c in combos))
         tried.update(frozenset(c.items()) for c in combos)
         good_combos = [c for c in combos if self.units(t, c) >= thr]
