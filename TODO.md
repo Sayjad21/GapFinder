@@ -250,6 +250,45 @@ proposal):
 | test-v11-01 runs 1-2: `max_steps=2000` | paper mean 353.4, min 43.4. Truth (500 + γ 0.999): mean 322-400, min 49-136. `max_steps=2000`: mean 352-393, min 45-72, but SD 44-147 against a naive 4-20 | **not identifiable** from these two claims; also, `closes()` uses the candidate's own spread, so a noisier configuration gets a wider acceptance band |
 | MC Dropout v1.1 | 5 configurations fit Energy. The documented pair broke Yacht least (worst I 5.78) but had 1 run; the label went to the first one repeated | ranking by single noisy runs; budget spent on 29 one-run pairs |
 
+**Progress (2026-10-15).** Every check below is post-hoc on the 22 public dev tasks, with
+`eval/dev_suite.py` (recorded ledgers, $0). One suite run is 66 searches; two replicates of the same
+code differ by about ±2 correct runs.
+
+| Code | Correct causes (of 39 cause runs), two replicates | Confidently wrong | Abstentions (of 27) | Search runs |
+|---|---|---|---|---|
+| v1.1 (tag) | 23, 25 | 0 | 27, 27 | ~6,100 |
+| + items 2, 3, 4, 6 (`efb2f63`) | 29, 27 | 0 | 27, 27 | ~7,200 |
+| + racing, item 5 (`6dc3dea`) | 29, 25 | 0 | 27, 27 | ~6,900 |
+| tried and reverted: pairing values by "movement either way" | 21 | 0 | 27 | n/a |
+
+- **Done:**
+  - item 2: fraction steps only for fraction-like knobs; ladder (10, 2, 5, 50, 100); cap 6-10 from
+    the budget;
+  - item 3: a "consistent with the paper" tier, and likelihood ties instead of rounded buckets;
+  - item 4: `ClaimResult.equivalent`, shown in the report and scored as `correct_in_set`;
+  - item 6: an Occam margin for passenger knobs (an extra knob must buy more than one noise band);
+    hedges no longer outrank evidence-backed fits; defaults are filtered in any spelling;
+  - item 5: two-stage confirmation race.
+- **What the fixes actually were:** the real causes found while fixing differ from the proposal's:
+  - task 10's passenger won because a "Fits but unsupported" outranked a "Partially explained" even
+    when it didn't close the gap;
+  - TOST equivalence was the wrong test; the counterfactual's own margin is the right one.
+- **Decision: no Inconclusive for large sets.** A set larger than K = 3 stays a hedge with the set
+  reported, and is not turned into Inconclusive. Of 11 runs with a set larger than 3, the pick was
+  right in 6 (chance is about 1 in 8), so the pick carries information.
+- **Remaining misses are interactions:**
+  - **test-gen-05 (0/6):** not identifiable at this noise; the truth itself measures 15-23 against a
+    paper value of 17.3, and 8-9 configurations fit;
+  - **test-v11-01:** also not identifiable (§4.13 of CONTEXT_v11.md);
+  - **test-v11-05:** the pair `normalize=minmax + epochs=75` is often never formed, because 75 alone
+    moves *away* from the paper and the combine round pairs values by their solo score. Ranking by
+    movement either way fixed nothing and broke known-cause tasks, so it was reverted. The next idea
+    is a forward step: pair the confirmed best single with each value of the other top knobs.
+- **Item 9 (generator):** the standard-error rival test and the pair-rival test are built and unit
+  tested. A dry generation with another seed failed (known_cause: 62 single-rival rejections), so
+  the standard-error test may be too strict on mlbench. This is being checked before it is
+  committed.
+
 **Order:** the free foundation first, then fixes checked on dev data, then one new sealed test. All
 v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except the final sealed test
 (about $4).
