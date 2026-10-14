@@ -197,7 +197,7 @@ Remaining, in order:
     - a code-derived knob → claim graph, to predict which held-out claims a knob should not move.
 15. [ ] **Evidence as a prior, and confirmation by racing** (M5; low priority). Our logs show the evidence
     gate was not the main cause of misses, so do this only if item 1's re-analysis says otherwise.
-16. [ ] **$ Post-hoc MC Dropout rerun on the new version.** Expected: "Partially explained (Energy) +
+16. [x] **Done, partly right** (`eval/external/mc-dropout/RESULT_v11.md`: out-of-space suspected and the documented code leads; the label names `epochx=1, hidden=10`, an equally good Energy fit; the documented pair was measured once before the 150-run budget ran out; three engine fixes came out of it). **$ Post-hoc MC Dropout rerun on the new version.** Expected: "Partially explained (Energy) +
     Out-of-space suspected", with shared-split tuning as the top checklist item. Label it not blind.
 17. [ ] **RusKey positive control** (this file, P0-1 "Positive control on RusKey"). It costs $0 billed but
     needs the sandbox guard raised and S's OK. It answers "can GapFinder find a real cause in a real

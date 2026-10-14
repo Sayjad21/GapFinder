@@ -321,6 +321,14 @@ class GapReport:
                     out.append(f"- {len(isl)} separate islands (no single-knob move joins them): " + " | ".join(
                         "; ".join(", ".join(f"{k}={v}" for k, v in sorted(c.items())) or "naive" for c in i[:3])
                         for i in isl[:4]))
+            tid = r.target.claim_id
+            fits = [x for x in (r.diagnosis.get("per_claim") or {}).get(tid, []) if x["config"]]
+            if r.diagnosis.get("kind", "").startswith("out_of_space") and len(fits) > 1:
+                # every configuration that matches the target alone: they can't be told apart on it
+                out.append(f"- Fit {tid} alone ({len(fits)}; worst claim's implausibility in brackets, lowest is "
+                           "the least inconsistent): " + "; ".join(
+                               ", ".join(f"{k}={v}" for k, v in sorted(x["config"].items()))
+                               + f" ({max(x['I'].values()):g})" for x in sorted(fits, key=lambda x: max(x["I"].values()))[:6]))
             leads = r.diagnosis.get("leads") or []
             if leads:  # where a cause outside the settings could hide; static reading only
                 out.append("- Leads outside the settings (static code checks, nothing run; check these first):")

@@ -714,7 +714,11 @@ class GapSearch:
                 res.notes.append(f"closest fit {fits[0]['config']} (I={fits[0]['I'][t.claim_id]:g}) has a single run; "
                                  "not labelled until it is repeated")
                 return
-            best = repeated[0]
+            # among the configurations that fit the target, the held-out claims break the tie: take the
+            # one whose worst claim is least implausible (the history-matching criterion), not the one
+            # closest on the target alone (MC Dropout v1.1: five configurations fit Energy; the
+            # documented one broke Yacht least)
+            best = min(repeated, key=lambda r: (max(r["I"].values()), r["I"][t.claim_id]))
             c = best["config"]
             broken = ", ".join(f"{cid} (I={i:g})" for cid, i in best["I"].items() if cid != t.claim_id and i > 3)
             res.changes, res.gap_after = dict(c), self.gap(t, c)
