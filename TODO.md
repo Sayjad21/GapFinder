@@ -374,7 +374,7 @@ v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except
    - **Free check:** `--resume` on test-v11-10 run 2 (expected `{max_steps=100}` first in the set) and
      test-v11-01 (the pair still in the set).
 
-7. [ ] **Common random numbers: measure first, adopt only if it pays** (`gapfinder/sandbox/runner.py`
+7. [x] **Measured, not adopted** (`eval/crn_measure.py`, `eval/results/crn_measure.json`: variance reduction factor 0.25-0.97 on 7 of 8 configuration pairs, 2.1 on one; trajectories and SGD paths decorrelate under any setting change, so shared seeds buy nothing here). **Common random numbers: measure first, adopt only if it pays** (`gapfinder/sandbox/runner.py`
    `_tag`).
    - Today every run gets a random `RUN_TAG`, which seeds the GapBench artifacts and MC Dropout's
      splits. Instead, the k-th repeat of every configuration gets the same tag (derived from the search
