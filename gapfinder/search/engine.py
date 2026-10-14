@@ -60,7 +60,11 @@ class SearchConfig:
     # ladder around a numeric default, up to this many values per knob (paper and ledger values first).
     # In 14 of v1.0's 18 blind-test misses a true value was never tested at all.
     coverage: bool = True
-    coverage_candidates: int = 6
+    coverage_candidates: int = 6  # values per knob at least (the ledger's first, then coverage values)
+    # ...and up to this many when the run budget allows: per knob, coverage_budget_frac x max_runs spread
+    # over the open knobs (test-v11-05: a fixed 6 cut epochs=75 on a task with few open knobs)
+    coverage_max: int = 10
+    coverage_budget_frac: float = 0.3
     # the combine round pairs this many of each top knob's best-scoring values (the true value of an
     # interaction half is often not its knob's best single value), at most combine_max_pairs pairs
     combine_values_per_knob: int = 2
@@ -360,19 +364,27 @@ class GapSearch:
                         values.remove(v)
                     values.insert(0, v)
             if self.cfg.coverage:
-                for v in coverage_values(spec_knob):
+                for v in coverage_values(spec_knob, knob):
                     if v not in values and not any(_same_number(v, w) for w in values):
                         values.append(v)
             affordable = [v for v in values if spec_knob.affordable(v)]
             for v in values:
                 if not spec_knob.affordable(v) and (knob, v) not in self.untestable:
                     self.untestable.append((knob, v))
-            per_knob = self.cfg.coverage_candidates if self.cfg.coverage else self.cfg.candidates_per_knob
+            per_knob = self._per_knob_cap(len(open_knobs[: self.cfg.screen_top_k])) if self.cfg.coverage                 else self.cfg.candidates_per_knob
             for v in affordable[:per_knob]:
                 out.append(Hypothesis(knob, v, a.id))
         if self.cfg.rank == "random":
             rng.shuffle(out)
         return out
+
+    def _per_knob_cap(self, n_open: int) -> int:
+        """Values per knob: at least coverage_candidates, more when the budget spread over the open knobs
+        allows, at most coverage_max."""
+        if self.cfg.max_runs is None or n_open <= 0:
+            return self.cfg.coverage_candidates
+        share = int(self.cfg.coverage_budget_frac * self.cfg.max_runs / n_open)
+        return max(self.cfg.coverage_candidates, min(self.cfg.coverage_max, share))
 
     async def explain(self, t: Target) -> ClaimResult:
         g0, band = self.gap(t, {}), self.band(t)

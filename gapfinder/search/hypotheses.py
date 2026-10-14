@@ -22,9 +22,14 @@ from gapfinder.ledger.schemas import Assumption
 from gapfinder.sandbox.spec import HarnessSpec
 
 FACTORS = (2, 5, 10)
-# v1.1 value coverage: coarse first, so the span is covered before the resolution (a 50x change, e.g.
-# MC Dropout's epochx 500 -> 10, is reached within the first few candidates)
-LADDER = (10, 2, 50, 5, 100)
+# value coverage: coarse first (x10 leads, so an order-of-magnitude error is reached at once), then the
+# common x2 and x5 before the far x50 and x100. v1.1 had (10, 2, 50, 5, 100), which pushed x5 past the
+# 6-value cap (test-v11-05: epochs 15 -> 75 never tested)
+LADDER = (10, 2, 5, 50, 100)
+# knobs whose default lies in (0, 1) but which are not fractions: values above 1 are meaningful, and the
+# fraction ladder's complement steps (1 - (1 - d)/k) are not (test-v11-04: lr 0.1 -> 0.91 won a run)
+_UNBOUNDED_NAME = re.compile(r"(?:^|_)(?:lr|eta|learning|step_size|temperature|temp|tau|length_?scale|"
+                             r"weight_decay|wd|l1|l2|lambda|reg|sigma|std|scale|clip|margin|init)(?:$|_)", re.I)
 # a multiplier knob's natural values are the factors a paper states ("10x more iterations")
 MULTIPLIER_FACTORS = ("1", "2", "5", "10", "100")
 _MULT_NAME = re.compile(r"(?:_|^)(?:mult|multiplier|scale|factor|times)$|^[a-z]{3,}x$", re.I)
@@ -66,9 +71,10 @@ def generate_values(default: str, factors: tuple[int, ...] = FACTORS) -> list[st
     return out
 
 
-def coverage_values(knob) -> list[str]:
+def coverage_values(knob, name: str = "") -> list[str]:
     """Values a knob can take that a reader of the paper may never propose: every accepted choice of a
-    categorical flag, or a coarse-first log ladder around a numeric default."""
+    categorical flag, or a coarse-first log ladder around a numeric default. `name` (the knob's name)
+    tells a fraction (a discount, a probability, a split) from a small unbounded number (a learning rate)."""
     if knob.choices:
         return [c for c in knob.choices if c != knob.default]
     d = knob.default.strip()
@@ -78,7 +84,7 @@ def coverage_values(knob) -> list[str]:
     if re.fullmatch(r"\d+", d) and int(d) >= 2:  # an integer knob's boundary value 1 (one layer, one thread)
         ladder = generate_values(d, LADDER)
         return ladder[:2] + ["1"] + [v for v in ladder[2:] if v != "1"]
-    if _NUM.fullmatch(d) and 0 < float(d) < 1 and "." in d:
+    if _NUM.fullmatch(d) and 0 < float(d) < 1 and "." in d and not _UNBOUNDED_NAME.search(name.lstrip("-")):
         return _with_zero(fraction_values(float(d)))
     vals = generate_values(knob.default, LADDER)
     if "." in d and _NUM.fullmatch(d) and float(d) > 0:  # a float knob's boundary value 0 (no exploration, no noise)

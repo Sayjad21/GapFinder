@@ -25,7 +25,7 @@ def test_every_choice_of_a_categorical_knob_is_a_candidate():
 
 def test_the_ladder_reaches_far_values_early():
     vals = generate_values("500", LADDER)
-    assert vals[:2] == ["50", "5000"] and "10" in vals[:6]  # MC Dropout: epochx 500 -> 10
+    assert vals[:2] == ["50", "5000"] and "10" in vals[:8]  # x10 first; a multiplier knob gets 10 directly
     assert "600" in generate_values("1200", LADDER)[:4]  # gen-06: n 1200 -> 600
 
 
@@ -55,3 +55,23 @@ def test_a_multiplier_knob_gets_the_literal_factors_first(tmp_path):
     assert spec.knobs["epochx"].multiplier and not spec.knobs["hidden"].multiplier
     assert coverage_values(spec.knobs["epochx"])[:4] == ["1", "2", "5", "10"]  # MC Dropout's epochx=10, by construction
     assert "1" in coverage_values(spec.knobs["hidden"])[:3]  # one hidden layer, the paper's setting
+
+
+def test_a_learning_rate_is_not_treated_as_a_fraction():
+    lr = coverage_values(Knob(layer="config", default="0.1"), "lr")
+    assert "0.91" not in lr and "1" in lr[:3] and "0.01" in lr[:3]  # test-v11-04: lr=0.91 won a run
+    gamma = coverage_values(Knob(layer="config", default="0.99"), "gamma")
+    assert all(float(v) < 1 for v in gamma) and "0.999" in gamma[:3]  # a discount stays a fraction
+
+
+def test_x5_comes_before_x50():
+    assert "75" in coverage_values(Knob(layer="config", default="15"), "epochs")[:7]  # test-v11-05
+
+
+def test_per_knob_cap_grows_with_budget_over_open_knobs():
+    from types import SimpleNamespace
+    from gapfinder.search.engine import GapSearch, SearchConfig
+
+    cap = lambda max_runs, n: GapSearch._per_knob_cap(SimpleNamespace(cfg=SearchConfig(max_runs=max_runs)), n)  # noqa: E731
+    assert cap(None, 5) == 6 and cap(200, 30) == 6  # no budget, or many open knobs: the floor
+    assert cap(200, 8) == 7 and cap(200, 2) == 10  # few open knobs: deeper, up to the ceiling

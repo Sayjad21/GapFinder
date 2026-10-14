@@ -565,7 +565,7 @@ def rival_values(family: str) -> dict[str, list[str]]:
         mark_multipliers_from_flow(spec, flag_scales(root))
         for k in out:
             knob = spec.knobs[k]
-            for v in coverage_values(knob)[:6]:
+            for v in coverage_values(knob, k)[:10]:  # the engine's largest per-knob cap (coverage_max)
                 if v != knob.default and v not in out[k] and knob.affordable(v):
                     out[k].append(v)
     _RIVAL_CACHE[family] = out
