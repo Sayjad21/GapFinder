@@ -18,6 +18,15 @@ author** (see "Who writes hidden tasks" below).
 
 ## NEXT STEPS (updated 2026-10-13, after D's handover session; read this first)
 
+**Update 2026-10-14 (after v1.1).** GapFinder v1.1 is tagged, and its sealed blind test is scored:
+- 0/30 confidently wrong;
+- 7 correct + 1 partial of 15 cause runs;
+- the true configuration was measured in 12 of 15 cause runs.
+
+Hypothesis coverage is largely solved. **The current bottleneck is choosing among equally good fits:
+see section B3 below** and [docs/CONTEXT_v11.md](docs/CONTEXT_v11.md). Billed spend: $21.04.
+The text below this update is the 2026-10-13 state.
+
 **Where things stand.** Engineering and evaluation are done and pushed; GapFinder is frozen as tag
 `v1.0`. Done in D's session (details lower down, and in the files linked):
 - GapBench blind test **run twice** (run 2 on `v1.0`): GapFinder **0 of 48 runs confidently wrong**,
@@ -218,6 +227,187 @@ Remaining, in order:
    story.
 2. Then 4, 8 and 9, which are paid.
 3. Then 13 and 16.
+
+### B3. Phase 3: choose among equally good fits (the current bottleneck; written 2026-10-14)
+
+**Why.**
+- The sealed v1.1 test ([gapbench_test_v11.md](eval/results/gapbench_test_v11.md)) measured the exact
+  true configuration in 12 of 15 cause runs, but scored 7 correct and 1 partial.
+- The misses are now about what GapFinder picks and reports, not what it reaches. MC Dropout v1.1 is
+  the same story ([RESULT_v11.md](eval/external/mc-dropout/RESULT_v11.md)).
+- The full context is in [docs/CONTEXT_v11.md](docs/CONTEXT_v11.md).
+- This plan uses the local PDF "Cross-Domain Equifinality Methodologies", checked against the recorded
+  runs. What it gets right, wrong, or only half right is at the end of this section.
+
+**What the recorded runs show for each miss** (checked against the run logs, not taken from the
+proposal):
+
+| Miss | What actually happened | Kind |
+|---|---|---|
+| test-v11-04 run 2: `lr=0.91` | 0.91 is a fraction-ladder value. Any default in (0, 1) gets complement steps, `1-(1-d)/k`, so lr 0.1 yields 0.91, 0.82 and 0.982: meaningless for a learning rate | **coverage bug** (bad candidate values), then a noise win |
+| test-v11-05 runs 1-3: no `epochs=75` | the ladder for 15 is 2, 150, 1, 8, 30, 750, 3, **75**, …; after the ledger's 10 and 20, the 6-value cap cuts it | coverage cap |
+| test-v11-10 run 2: extra `lr_schedule=linear` | `max_steps=100` alone gives 98.2-99.8 (plus one 88.4); with linear, 96.2-99.0 (paper 94.9). A 0.7-point tie fell in a different rounded "noise bucket", so the pair won | minimisation tie-break |
+| test-v11-01 runs 1-2: `max_steps=2000` | paper mean 353.4, min 43.4. Truth (500 + γ 0.999): mean 322-400, min 49-136. `max_steps=2000`: mean 352-393, min 45-72, but SD 44-147 against a naive 4-20 | **not identifiable** from these two claims; also, `closes()` uses the candidate's own spread, so a noisier configuration gets a wider acceptance band |
+| MC Dropout v1.1 | 5 configurations fit Energy. The documented pair broke Yacht least (worst I 5.78) but had 1 run; the label went to the first one repeated | ranking by single noisy runs; budget spent on 29 one-run pairs |
+
+**Order:** the free foundation first, then fixes checked on dev data, then one new sealed test. All
+v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except the final sealed test
+(about $4).
+
+1. [ ] **Replay simulator: a free test bench for selection policies** (`eval/replay_sim.py`, new).
+   - **Why first:** CRN, racing and allocation change *which* runs happen, so `--resume` can't test
+     them. Without this, every policy idea costs a full run.
+   - **What it does:** build a per-configuration pool of recorded results, from all dev GapBench runs
+     (v1.0 test, posthoc, v1.1 test: thousands of runs) and MC Dropout's 147. Simulate a search policy
+     by drawing from those pools instead of running. Configurations that were never measured are "not
+     available". Score with `score.py`'s rules, and count runs used.
+   - **Acceptance:** replaying today's policy reproduces the recorded v1.1 outcomes closely, e.g. the
+     same label in at least 80% of runs. Report how far it is from that.
+   - **Limit:** it can only choose among measured configurations. A policy that wants a new
+     configuration needs a real local run (free on GapBench).
+
+2. [ ] **Fix candidate generation where it is plainly wrong** (`gapfinder/search/hypotheses.py`).
+   - Complement steps `1-(1-d)/k` only for knobs bounded in [0, 1): names or help text with discount,
+     gamma, decay, momentum, beta, dropout, prob, ratio, fraction or split. A learning rate,
+     temperature or threshold gets the plain log ladder (lr 0.1 → 0.01, 1.0, 0.05, 0.2, …). Evidence:
+     task 04 run 2.
+   - Ladder order `(10, 2, 5, 50, 100)`, so ×10 stays first (coarse-first, the reason for the original
+     order) and ×5 comes before ×50.
+   - Per-knob cap `clamp(floor(B_screen / open_knobs), 6, 10)` instead of a fixed 6. Evidence: task 05.
+   - **Free check:** `harness.py --ledger-from` on test-v11-04 and -05 (local). Unit tests: lr gets no
+     0.91, epochs 15 gets 75 within the cap.
+   - **Risk:** more values means more noise winners. That's why items 3-5 come next; don't ship this
+     alone.
+
+3. [ ] **Score with standard errors, not spreads; rank pessimistically** (`engine.py`: `closes`,
+   `band_at`, the candidate sort).
+   - Accept a candidate when its implausibility against the paper is at most 3. The variance term for
+     the candidate's mean is `s_c^2/n_c`, with `s_c` = max(own SD, pooled naive SD), plus the paper's
+     own uncertainty. A noisy candidate with few runs stays "not ruled out" (it goes into the set), but
+     can't *win*.
+   - Rank candidates by an upper bound of their implausibility (UCB), not their point estimate. This
+     corrects the winner's curse of 60-100 one-run screens.
+   - Evidence: task 01 (an SD-128 configuration accepted by its own wide band), MC Dropout (the first
+     run's 1.657 decided the label).
+   - **Free check:** the replay simulator, plus `--resume` re-labelling on the dev runs.
+   - **Acceptance:** 0 confidently wrong stays 0, and none of the 4 v1.1 known-cause or decoy runs that
+     were correct is lost.
+
+4. [ ] **Answer with an equivalence set, and score it honestly** (`history.py`, `ClaimResult`,
+   `gap_report.py`, `score.py`).
+   - The answer is the set of configurations that can't be told apart from the best on every claim. Use
+     a known-σ test with the calibrated noise, i.e. a light model-confidence set, not Hansen's
+     bootstrap, which needs many replications per configuration. The set may mix knob subsets (e.g.
+     `{max_steps=2000}` and `{max_steps=500, gamma=0.999}`).
+   - **Selection is lexicographic:** fit the target first, then use the held-out claims only to order
+     within that set.
+     - The proposal's "race everything on the worst claim" would put `epochx=1, hidden=4` (worst
+       I 5.04) ahead of the documented MC Dropout pair (5.78).
+     - Using held-out claims for ranking has to be stated in the report, because they're no longer
+       purely held out. The "must not get worse" check stays.
+   - Labels: a set of size ≥ 2 is a hedge, "Fits but unsupported: one of {…}", never confident. A
+     set larger than K (pre-registered, K = 3) is Inconclusive.
+   - Scorer: a new `correct_in_set` (truth in the set, set size ≤ K), reported **next to** the exact
+     score, never instead of it, and pre-registered before the next seed.
+   - **Free check:** `--resume` on the dev runs. Task 01 runs 1-2 should return a set containing the
+     true pair, and task 10 run 2 a set containing `{max_steps=100}`.
+
+5. [ ] **Racing replaces "confirm by the first screen, then 40 one-run pairs"** (`engine.py` confirm and
+   combine).
+   - Successive halving, or top-two Thompson sampling, over the target-fit candidates, in batches sized
+     to the available concurrency (sandbox runs are parallel, so batches beat OCBA's one-at-a-time
+     allocation).
+   - Pairs enter only if both their single-knob parts are not ruled out, ordered by fit, with at most
+     about a third of the budget going to pairs.
+   - Stop when the set is separated or the budget ends; the output is item 4's set.
+   - Evidence: MC Dropout, where 29 pairs got one run each and the documented pair never got a second
+     run in 150.
+   - **Free check:** the replay simulator on MC Dropout's pools. Acceptance: the documented pair gets
+     ≥2 runs and lands inside the reported set in most replays, within 150 runs. The replays are
+     post-hoc: this case shaped the policy.
+
+6. [ ] **Minimisation by equivalence (TOST), without losing interactions** (`engine.py` bisect and the
+   parsimony tie-break).
+   - Drop a knob when the reduced configuration is equivalent within a margin δ (the noise band at the
+     confirmation repeats) by two one-sided tests. Keep the dropped variant *in the set*, so a real
+     interaction (task 01's γ, worth about +20-50 within noise) is reported, not erased.
+   - Replace the rounded "noise bucket" with that test (the cause of task 10 run 2).
+   - **Free check:** `--resume` on test-v11-10 run 2 (expected `{max_steps=100}` first in the set) and
+     test-v11-01 (the pair still in the set).
+
+7. [ ] **Common random numbers: measure first, adopt only if it pays** (`gapfinder/sandbox/runner.py`
+   `_tag`).
+   - Today every run gets a random `RUN_TAG`, which seeds the GapBench artifacts and MC Dropout's
+     splits. Instead, the k-th repeat of every configuration gets the same tag (derived from the search
+     seed and k), so differences between configurations are paired.
+   - **Measure first, free and local:** the correlation and variance-reduction factor of paired runs
+     across 5-10 configuration pairs on rlbench and mlbench. Adopt only if the factor is at least about
+     1.5.
+   - **Caveats:**
+     - CRN helps comparisons *between* configurations, not the distance to the paper's fixed number;
+     - use a different seed block for confirmation than for screening (strict confirm);
+     - RL trajectories decorrelate fast, so the gain may be small there;
+     - real artifacts may ignore the tag (RusKey's load isn't reproducible).
+
+8. [ ] **More claims = more identifiability** (ledger and harness).
+   - Use every claim of the same experiment as a held-out claim. For MC Dropout that means the
+     log-likelihoods and Concrete; check what `run_cell.sh` outputs.
+   - Where a paper reports a spread (MC Dropout's ±0.19 over 20 splits), add it as a dispersion claim.
+     This is the defensible version of the proposal's "second-moment fingerprinting".
+   - Don't compare a candidate's variance to the naive variance. The paper doesn't report that, so it
+     identifies nothing.
+   - On generated tasks, consider a third reported number per paper (e.g. rlbench `max_reward` or a
+     learning-curve point). That would change the benchmark, so pre-register it in item 9.
+
+9. [ ] **Generator: identifiability checked the way GapFinder can see it** (`gen_tasks.py`).
+   - Rival check by implausibility with the rival's *own* standard error (I ≤ 3 on every claim), not
+     "within one naive band". Task 01's `max_steps=2000` (SD up to 147) passed today's check.
+   - Extend the check to the pairs the combine round can reach: the top 8 single settings by
+     proximity, so 28 pairs, local runs.
+   - Instead of only rejecting a draw, record the **answer set** (every configuration equivalent to the
+     truth), and reject only when it has more than K members.
+   - This also fixes the out-of-space category: on v1.1 every out-of-space task was mimicked by a pair,
+     so `out_of_space_diagnosed` was 0/9. If no bug survives a pair check on mlbench, add a third claim
+     (item 8) rather than drop the category.
+
+10. [ ] **$ Sealed v1.2 test** (about $4; needs a cap raise; same protocol as v1.1).
+    - Pre-register, before the seed:
+      - set scoring (`correct_in_set`, K);
+      - the generator changes (items 8-9);
+      - the arms.
+    - Tag `v1.2`, then make the seed, generate (`--set v12`), run with `run_arms.py`, and reveal.
+    - **Success:**
+      - confidently wrong 0/30 (exact upper bound ≤ 12%);
+      - exact correct causes > 7/15, or the same with `correct_in_set` clearly higher;
+      - balanced accuracy above v1.1's 0.73;
+      - out-of-space diagnosed > 0 on tasks that are truly out of space.
+
+**Order if time is short:** 2 and 6 (small, deterministic, free), then 3 and 4 (the core), then 1 and
+5. Items 7 and 8 are optional. Then 9 and 10.
+
+**What the PDF gets right, and what we drop or change.**
+- **Kept:**
+  - set answers instead of point answers: model confidence sets, made lighter (item 4);
+  - racing instead of greedy confirmation: NSGS/OCBA, made batch-parallel (item 5);
+  - TOST for minimisation (item 6);
+  - CRN, but only after a measurement (item 7);
+  - a dynamic per-knob cap (item 2);
+  - pair rivals in the generator (item 9).
+- **Corrected:**
+  - `lr=0.91` is a bad-candidate bug, not only a noise win;
+  - MC Dropout had 29 measured pairs, not 36, and 16, not 31, broke Yacht;
+  - racing everything on the worst claim does *not* favour the documented pair; only lexicographic
+    selection does. Nothing "guarantees" it;
+  - the "Plackett-Burman sieve" is just top-k pairs.
+- **Dropped:**
+  - the stationary bootstrap: our runs aren't a time series, and 1-5 runs per configuration are too
+    few for it. Use the calibrated σ instead;
+  - Bartlett/Levene "variance vs naive" as identification: replaced by standard-error-aware acceptance
+    (item 3) and reported-spread claims (item 8);
+  - backward conformal e-sets: a pre-registered size cap K does the same job.
+- **Added, not in the proposal:**
+  - the replay simulator (item 1), without which none of the policy changes can be checked for free;
+  - the warning that ranking on held-out claims spends them, so they stop being independent checks.
 
 ### C. Optional / after the hackathon
 10. [ ] Candidate B, Paragraph Vector on IMDB (P0-1): a second external case; 1-2 days, risky (the shuffle
