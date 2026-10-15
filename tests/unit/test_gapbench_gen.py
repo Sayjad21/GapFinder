@@ -454,3 +454,21 @@ def test_a_pair_that_reproduces_both_claims_is_a_rival():
     with pytest.raises(g.Reject) as e:
         _screen_runs(plan, singles, hidden, runs)
     assert e.value.reason == "rival_pair_explains_claim"
+
+
+
+def test_a_pair_whose_partner_is_flat_alone_is_a_rival():
+    """test-v13-06: zscore + n=6000 fits like the planted pair, but n alone barely moves the metric, so a
+    pair check among the closest singles never forms it. The anchor x every-value check does."""
+    plan = _plan("known_cause", "single_unstated", {"epochs": "30"})
+    hidden = {"test_accuracy": 130.0, "balanced_accuracy": 130.0}
+    singles = {("lr", "0.5"): {"test_accuracy": 116.0, "balanced_accuracy": 116.0}}  # the closest single
+    singles.update({(k, v): {"test_accuracy": 112.0, "balanced_accuracy": 112.0}  # eight decoys, closer than n
+                    for k, v in [("lr", "0.1"), ("lr", "0.25"), ("lr", "0.01"), ("label_noise", "0.1"),
+                                 ("label_noise", "0.25"), ("label_noise", "0.0"), ("threshold", "0.3"),
+                                 ("threshold", "0.6")]})
+    runs = {("mlbench", g._key({"epochs": "30"})): _r(129.8, 130, 130.2, 130, 129.9, 130.1, 130),
+            ("mlbench", g._key({"lr": "0.5", "n": "6000"})): _r(129.7, 130, 130.3, 129.9, 130.1, 130, 130)}
+    with pytest.raises(g.Reject) as e:
+        _screen_runs(plan, singles, hidden, runs)
+    assert e.value.reason == "rival_pair_explains_claim"

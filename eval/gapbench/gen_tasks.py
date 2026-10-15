@@ -162,6 +162,7 @@ DECOY_DRAWS = 30               # random decoy candidates tried per attempt
 RIVAL_SE_Z = 2.0  # a rival matches a claim when its median is within this many combined standard errors
 RIVAL_LL = 2.0  # ...and its log-likelihood is within this of the truth's expected one (engine's LL_EQUIVALENT)
 RIVAL_PAIR_TOP = 8  # pair rivals: pairs among this many single settings closest to the paper's primary number
+RIVAL_ANCHORS, RIVAL_MAX_PAIRS = 1, 120  # ...plus the closest single(s) x every value of every other knob
 RIVALS_OVER_SEARCH_SPACE = True  # rivals are checked over every value GapFinder can test (pools plus its
                                  # coverage values: choices, log ladder, multiplier factors), not only the
                                  # pools: on test-gen-05, eps_start=0.0 (a ladder value outside the pool)
@@ -765,9 +766,22 @@ class Generator:
                 m = self.mz.median(fam, {k: v}, sc.primary)
                 if m is not None and (k, v) not in planted:
                     singles.append((abs(m - sc.paper[sc.primary]), k, v))
-        top = [(k, v) for _, k, v in sorted(singles)[:RIVAL_PAIR_TOP]]
+        ranked = sorted(singles)
+        top = [(k, v) for _, k, v in ranked[:RIVAL_PAIR_TOP]]
         pairs = [{a[0]: a[1], b[0]: b[1]} for i, a in enumerate(top) for b in top[i + 1:] if a[0] != b[0]]
-        pairs = [p for p in pairs if not (set(p.items()) & planted)]
+        # as GapFinder's forward step does: the closest singles (anchors) with every value of every
+        # other knob, so a partner that barely moves the metric alone is still paired (test-v13-06:
+        # zscore + n=6000 fitted as well as the planted zscore + n=12000; n alone barely moves the metric)
+        anchors = [(k, v) for _, k, v in ranked[:RIVAL_ANCHORS]]
+        # every other knob: a partner that barely moves the metric alone can't be ranked by its solo effect
+        partner_knobs = sorted(k for k in rival_values(fam) if k not in {a for a, _ in anchors} and k not in plan.unexposed)
+        for ak, av in anchors:
+            for k in partner_knobs:
+                for v in rival_values(fam)[k]:
+                    p = {ak: av, k: v}
+                    if p not in pairs:
+                        pairs.append(p)
+        pairs = [p for p in pairs if not (set(p.items()) & planted)][:RIVAL_MAX_PAIRS]
         await asyncio.gather(*(self.mz.measure(fam, p) for p in pairs))
         return [p for p in pairs if sc.matches(p)]
 

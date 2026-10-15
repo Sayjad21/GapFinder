@@ -306,3 +306,15 @@ all 32 public tasks with `eval/dev_suite.py` (post-hoc).
 
   The aim is to show that the post-v1.2 changes don't lose ground on a fresh set. The dev suite showed
   them accuracy-neutral and about 10% cheaper, and better on interactions.
+
+## Generator change for the next sealed test (2026-10-16, written before any seed for it exists)
+
+- **Wider pair rivals.** The rival check now also pairs the single setting closest to the paper (the
+  anchor) with every value of every other exposed knob, up to 120 pairs (`RIVAL_ANCHORS`,
+  `RIVAL_MAX_PAIRS` in `gen_tasks.py`). This mirrors GapFinder's forward step. It rejects interaction
+  tasks where a partner that barely moves the metric alone fits as well as the planted pair (the
+  test-v13-06 failure, found after that set was scored).
+- **Effect on generation:** a dry run on a throwaway seed (`--set dry`) filled all 10 slots in 66
+  minutes with 2 restarts. Tasks from the next set are therefore stricter on interactions than v1.1-v1.3
+  tasks, and results across sets are not directly comparable on that category.
+- The full amendment (tag, criteria, budget) is written before the seed, as for earlier sets.

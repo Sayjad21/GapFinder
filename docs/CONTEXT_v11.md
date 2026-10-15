@@ -261,6 +261,12 @@ resume `run-v13-patch`):
    - A task whose planted pair has an equally good rival that GapFinder can reach is rejected, or
      scored by set (pre-registered).
    - This is a benchmark change. Do it before the next sealed set and say so in PROTOCOL.md.
+   - **Done (2026-10-16):** rival pairs now also include the closest single setting (the anchor)
+     × every value of every other exposed knob, capped at 120 pairs (`RIVAL_ANCHORS`,
+     `RIVAL_MAX_PAIRS`). Unit test: `test_a_pair_whose_partner_is_flat_alone_is_a_rival`. A dry run on a
+     throwaway seed filled all 10 tasks in 66 minutes with 2 restarts. The new pairs rejected 6
+     candidates, and interaction slots took up to 130 attempts. Noted in PROTOCOL.md for the next
+     sealed test.
 5. **Paired per-task analysis instead of totals on the dev suite.**
    - Report per-task differences between two versions over ≥ 3 replicates, with a sign test, so a
      ±5-run total swing doesn't hide or fake an effect.
