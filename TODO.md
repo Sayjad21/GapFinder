@@ -329,6 +329,22 @@ including the v1.2 set), two replicates each, post-hoc:
   test-v13-01 itself: `zscore + 0.3` fits as well as `minmax + 0.4`.
 - **Replicate noise on this suite is now about ±5 runs.**
 
+**Statistical power, read before claiming any engine gain (2026-10-16, `eval/compare_suites.py`).** The
+paired per-task comparison (correct cause runs per task over two replicates per side, exact sign test
+over the tasks that changed) gives:
+
+| Comparison | Correct cause runs | Tasks better / worse | Sign test |
+|---|---|---|---|
+| v1.1 → phase 3 | 48 → 56 of 78 | 5 / 3 | p = 0.73 |
+| v1.3 → fraction-ladder fix | 101 → 97 of 138 | 4 / 5 | p = 1.0 |
+
+With 13-23 cause tasks, no engine change since v1.1 is significant at the task level. What is robust:
+- 0 confidently wrong in every arm and every test;
+- the real-paper (MC Dropout) results, which are qualitative.
+
+A claim about accuracy gains needs more tasks (a larger sealed set or more dev tasks), not more
+replicates of the same tasks.
+
 **Order:** the free foundation first, then fixes checked on dev data, then one new sealed test. All
 v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except the final sealed test
 (about $4).
