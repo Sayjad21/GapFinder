@@ -83,6 +83,14 @@ class SearchConfig:
     # screened value of the other top knobs, not just those values that scored well alone. An
     # interaction partner can move the metric the wrong way on its own (test-v11-05: epochs=75 alone moved
     # away from the paper and was never paired with normalize=minmax)
+    # confirmation escrow: screening and the combine round may use at most (1 - escrow_frac) of max_runs;
+    # the rest is kept for confirming the likeliest configurations (MC Dropout v1.2: the closest pair,
+    # +1.3%, had one run when the budget ended; 7 of 15 sealed v1.2 cause runs hit the cap)
+    escrow_frac: float = 0.25
+    # coarse-flat early stop: a numeric knob whose two coarse ladder rungs (x10, /10) both leave the metric
+    # within this many noise bands of the naive run doesn't get its finer rungs screened (0 = off). On the
+    # dev tasks no planted value sat behind flat coarse rungs (smallest coarse movement 0.8 bands).
+    coarse_stop_bands: float = 0.5
     forward_anchors: int = 2
     forward_max_pairs: int = 30
     # multi-claim history matching after each search (gapfinder/search/history.py): turns a bare
@@ -211,6 +219,8 @@ class GapSearch:
             self.assumptions[k] = head.model_copy(update={"evidence": evidence, "candidate_values": cands})
         self._runs: dict[frozenset, list[Branch]] = {}
         self.untestable: list[tuple[str, str]] = []  # (knob, value) above the spec's cost limit
+        self._coarse: set[tuple[str, str]] = set()  # coarse ladder rungs (screened first)
+        self._fine: set[tuple[str, str]] = set()  # finer rungs (screened only if the coarse ones move the metric)
         self.runs_used = 0
         self.bands: dict[str, NoiseBand] = {}
         self.naive: dict[str, float] = {}
@@ -387,9 +397,13 @@ class GapSearch:
                         values.remove(v)
                     values.insert(0, v)
             if self.cfg.coverage:
-                for v in coverage_values(spec_knob, knob):
+                ladder = coverage_values(spec_knob, knob)
+                plain = not spec_knob.choices and not spec_knob.multiplier
+                for i, v in enumerate(ladder):
                     if v not in values and not any(_same_number(v, w) for w in values):
                         values.append(v)
+                        if plain:  # numeric ladder: rungs 0-1 are coarse, the rest fine (two-stage screening)
+                            (self._coarse if i < 2 else self._fine).add((knob, v))
             affordable = [v for v in values if spec_knob.affordable(v)]
             for v in values:
                 if not spec_knob.affordable(v) and (knob, v) not in self.untestable:
@@ -400,6 +414,12 @@ class GapSearch:
         if self.cfg.rank == "random":
             rng.shuffle(out)
         return out
+
+    def _exploration_room(self) -> int | None:
+        """Runs screening and combining may still use before reaching the confirmation escrow."""
+        if self.cfg.max_runs is None or not self.cfg.escrow_frac:
+            return None
+        return max(0, int(self.cfg.max_runs * (1 - self.cfg.escrow_frac)) - self.runs_used)
 
     def _per_knob_cap(self, n_open: int) -> int:
         """Values per knob: at least coverage_candidates, more when the budget spread over the open knobs
@@ -451,7 +471,32 @@ class GapSearch:
         thr = self.cfg.effect_threshold
         hyps = [h for h in self.hypotheses() if self._renderable(h, res)]
 
-        # 1. screen: one knob per branch, one run each
+        # 1. screen: one knob per branch, one run each (within the exploration share of the budget)
+        room = self._exploration_room()
+        new = [h for h in hyps if len(self._runs.get(frozenset(h.changes.items()), [])) < self.cfg.screen_repeats]
+        if room is not None and len(new) * self.cfg.screen_repeats > room:  # recorded runs (resume) cost nothing
+            done_already = [h for h in hyps if h not in new]
+            self.orch.events.emit("note", msg=f"{t.claim_id}: escrow: screening {room // max(1, self.cfg.screen_repeats)} "
+                                              f"of {len(hyps)} hypotheses, keeping the rest for confirmation")
+            by_knob: dict[str, list[Hypothesis]] = {}
+            for h in new:  # round robin over knobs: every knob keeps its first (coarse, ledger) values
+                by_knob.setdefault(h.knob, []).append(h)
+            rr = [lst[i] for i in range(max(map(len, by_knob.values()))) for lst in by_knob.values() if i < len(lst)]
+            hyps = done_already + rr[: room // max(1, self.cfg.screen_repeats)]
+        if self.cfg.coarse_stop_bands > 0 and any((h.knob, h.value) in self._fine for h in hyps):
+            first = [h for h in hyps if (h.knob, h.value) not in self._fine]
+            await _all(*(self.measure(h.changes, self.cfg.screen_repeats, f"screen {h.knob}={h.value}")
+                         for h in first))
+            flat = set()
+            for k in {h.knob for h in hyps if (h.knob, h.value) in self._fine}:
+                moves = [self._movement(t, {k: v}) for (kk, v) in self._coarse if kk == k
+                         and self.value({k: v}, t.metric) is not None]
+                if moves and max(moves) < self.cfg.coarse_stop_bands:
+                    flat.add(k)
+            if flat:
+                self.orch.events.emit("note", msg=f"{t.claim_id}: coarse rungs flat (under {self.cfg.coarse_stop_bands:g} "
+                                                  f"bands), finer rungs skipped for: {', '.join(sorted(flat))}")
+            hyps = first + [h for h in hyps if (h.knob, h.value) in self._fine and h.knob not in flat]
         await _all(*(self.measure(h.changes, self.cfg.screen_repeats, f"screen {h.knob}={h.value}")
                      for h in hyps))
         tried.update(frozenset(h.changes.items()) for h in hyps)
@@ -545,6 +590,13 @@ class GapSearch:
                         if c not in combos and c not in forward:
                             forward.append(c)
             combos.extend(forward[: self.cfg.forward_max_pairs])
+        room = self._exploration_room()
+        fresh = [c for c in combos if not self._runs.get(frozenset(c.items()))]
+        if room is not None and len(fresh) > room:
+            self.orch.events.emit("note", msg=f"{t.claim_id}: escrow: combine tries {room} of {len(fresh)} new pairs, "
+                                              "keeping the rest of the budget for confirmation")
+            keep = set(map(lambda c: frozenset(c.items()), fresh[:room]))
+            combos = [c for c in combos if self._runs.get(frozenset(c.items())) or frozenset(c.items()) in keep]
         await _all(*(self.measure(c, 1, "combine") for c in combos))
         tried.update(frozenset(c.items()) for c in combos)
         good_combos = [c for c in combos if self.units(t, c) >= thr]
@@ -885,6 +937,13 @@ class GapSearch:
             return 0 if top is not None and v is not None and v >= top - LL_EQUIVALENT else 1
         return sorted(candidates, key=lambda c: (tier(c), not self._supported(c), tied(c), len(c), self._change_size(c),
                                                  -(ll[frozenset(c.items())] or float("-inf")), sorted(c.items())))
+
+    def _movement(self, t: Target, changes: Changes) -> float:
+        """How far a configuration moves the target metric from the naive run, in noise bands, either way."""
+        v, v0, band = self.value(changes, t.metric), self.naive.get(t.metric), self.band(t)
+        if v is None or v0 is None or not band:
+            return 0.0
+        return abs(v - v0) / (band * abs(t.paper_value))
 
     def _sd(self, t: Target, changes: Changes) -> tuple[float, float, int] | None:
         """(mean, run-to-run SD, n) of the target metric at a configuration. The SD is the configuration's

@@ -155,7 +155,7 @@ async def test_diff_guard_rejects_source_edit(tmp_path):
 
 # 9. budget cap ----------------------------------------------------------------
 async def test_budget_cap_writes_partial_report(tmp_path):
-    s, [r] = await search(tmp_path, {"alpha": "2.0"}, max_runs=8)
+    s, [r] = await search(tmp_path, {"alpha": "2.0"}, max_runs=8, escrow_frac=0)
     assert r.status == "partial"
     rep = GapReport.from_search(s, [r], paper="toy")
     md, js = rep.write(tmp_path / "report")
@@ -210,7 +210,7 @@ async def test_costly_values_reported_not_run_and_stated_values_judged_against_n
 async def test_budget_exhausted_result_is_not_a_confident_unverified_label(tmp_path):
     """Regression: an unverified best guess used to be labelled 'Partially explained'."""
     s, [r] = await search(tmp_path, {"gamma": "2.0", "CACHE": "on"},
-                          assumptions=[a for a in ALL if a.knob != "alpha"], max_runs=12)
+                          assumptions=[a for a in ALL if a.knob != "alpha"], max_runs=12, escrow_frac=0)
     assert r.status == "partial"
     if r.attribution.confidence_label not in ("Unexplained", "Fits but unsupported"):
         assert r.counterfactual and r.held_out  # anything confident was actually verified
@@ -288,7 +288,7 @@ async def test_budget_exhausted_single_screen_run_is_not_labelled(tmp_path):
         seen = seen or ch == {"alpha": "2.0"}
         keep.append(ev)
     m = await paper(tmp_path, {"alpha": "2.0"})
-    s2 = GapSearch(orch(tmp_path, "resumed"), targets(m), ALL, SearchConfig())
+    s2 = GapSearch(orch(tmp_path, "resumed"), targets(m), ALL, SearchConfig(escrow_frac=0))  # the exhausted path
     s2.cfg.max_runs = s2.seed(keep)
     [r2] = await s2.run()
     assert r2.status == "partial" and r2.attribution.confidence_label == "Unexplained"
@@ -312,7 +312,7 @@ async def test_a_value_that_always_fails_is_not_rerun_on_every_call(tmp_path):
 
 async def test_budget_stop_leaves_no_branch_unrecorded(tmp_path):
     """Regression (RusKey ablation): runs in flight when the budget ran out were never recorded."""
-    s, [r] = await search(tmp_path, {"alpha": "2.0"}, max_runs=8)
+    s, [r] = await search(tmp_path, {"alpha": "2.0"}, max_runs=8, escrow_frac=0)
     assert r.status == "partial"
     ev = list(s.orch.events.read())
     created = {e["branch"]["id"] for e in ev if e["type"] == "branch_created"}
