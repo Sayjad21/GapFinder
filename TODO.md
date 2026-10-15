@@ -23,8 +23,8 @@ author** (see "Who writes hidden tasks" below).
 - 7 correct + 1 partial of 15 cause runs;
 - the true configuration was measured in 12 of 15 cause runs.
 
-Hypothesis coverage is largely solved. **The current bottleneck is choosing among equally good fits:
-see section B3 below** and [docs/CONTEXT_v11.md](docs/CONTEXT_v11.md). Billed spend: $21.04.
+Hypothesis coverage is largely solved, and phase 3 (selection) is done and measured. **Next: section B4
+(phase 4)**; the bottlenecks are in docs/CONTEXT_v11.md §0.6. Earlier: section B3 and [docs/CONTEXT_v11.md](docs/CONTEXT_v11.md). Billed spend: $21.04.
 The text below this update is the 2026-10-13 state.
 
 **Where things stand.** Engineering and evaluation are done and pushed; GapFinder is frozen as tag
@@ -477,6 +477,101 @@ v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except
 - **Added, not in the proposal:**
   - the replay simulator (item 1), without which none of the policy changes can be checked for free;
   - the warning that ranking on held-out claims spends them, so they stop being independent checks.
+
+### B4. Phase 4: what to do about the post-v1.2 bottlenecks (written 2026-10-15)
+
+The bottlenecks are in [docs/CONTEXT_v11.md](docs/CONTEXT_v11.md) §0.6. This plan reviews the local
+file "Cross-Domain Solutions for GapFinder.md". Every factual premise was checked against the recorded
+runs before deciding.
+
+**Checks on the proposal's premises** (recorded runs, $0):
+
+| Premise | Data | Verdict |
+|---|---|---|
+| Passengers are "sloppy" knobs, flat on their own 1D screen (lr=0.5 in test-v12-08, lr_schedule=linear in test-v11-10) | `lr` on test-v12-08 is one of the stiffest knobs: its ladder moves mean reward from 184 to 9-166. `lr_schedule` on test-v11-10 moves it 1.8-3 naive SDs (inv 145, linear 161, naive 184) | **False.** And a "flat alone, so penalise it" rule would delete true interaction partners: `gamma=0.999`, half of test-v11-01's truth, is exactly flat alone (184.9 vs naive 184.3) |
+| A value-level ledger prior ("boost paper-mentioned values, penalise unmentioned coverage values like lr=1") breaks noisy ties toward the truth | Over 29 planted values on the dev tasks, **13 (45%) are coverage-only**, never proposed by the ledger. That includes test-v12-08's own truth, `max_steps=100`, coverage-only like the rival `lr=1` | **Harmful.** It would undo the v1.1 coverage gains and wouldn't resolve test-v12-08 |
+| A KGE variance-ratio penalty: configurations whose variance far exceeds the naive one are noisy mimics | test-v11-01: the truth's own SD is 30-67 against a naive 4-20 | **False.** It would penalise the truth. The likelihood ranking already prefers the precise fit among equally close ones |
+| Box-Hill discrimination: run the tied candidates under a perturbation (half n, half epochs) and see which "preserves the expected sensitivity" | There is nothing to compare the perturbed runs with: the paper reports no number at the perturbed condition | **Invalid** unless the paper reports that condition, which is then simply one more claim (item 5) |
+| Trajectory signatures: a convergence ratio from logs as a third observable | Same problem: the paper must report the curve for it to discriminate | **Valid only as item 5** (paper-reported curves), or as a benchmark change (a pre-registered third number per generated paper) |
+
+**Adopted, in order. All free to build and check on the dev suite; MC Dropout checks need sandbox runs:**
+
+1. [ ] **Patch knobs: test out-of-space leads without touching the files** (bottleneck 3; the proposal's
+   "ephemeral AST patch knobs").
+   - **How:** a static lead from `code_checks.py`, e.g. `net/net.py:70 batch_size = 128`, becomes a knob
+     `@ast:net/net.py:70:batch_size`.
+     - A run with that knob sets `GF_AST_PATCH=net/net.py:70:batch_size=32`.
+     - A `sitecustomize.py` on `PYTHONPATH` (uploaded with the run, like `run_cell.sh`) installs a
+       `sys.meta_path` loader. The loader reads the module source, swaps the literal on that line with
+       `ast.NodeTransformer`, and compiles it in memory.
+     - The main script is not imported through the import system, so it needs a wrapper:
+       `python -m gf_patch_run experiment.py` uses `runpy` with the same hook.
+     - Nothing on disk changes, so the diff guard, the repo map and the prompt caches are untouched.
+   - **Rules:**
+     - only when history matching says out of space;
+     - only the top-weighted leads;
+     - the same verification as any knob (counterfactual, held-out, likelihood ranking);
+     - reported as a *code* change ("Explains with a code patch: batch_size 128 → 32"), never as a
+       setting;
+     - candidate values from the ladder, plus powers of two for batch- or size-like names (32 = 128/4 is
+       not on today's ladder).
+   - **Limits:**
+     - Python-only;
+     - literals only, so a grid search or a loop structure can't be patched this way;
+     - MC Dropout's `T = 10000` is already patched by the harness for scale.
+   - **Checks:**
+     - unit tests: the hook swaps exactly one literal and leaves files byte-identical, and `test_try_it`
+       still passes;
+     - an integration test on a toy artifact with a hard-coded constant;
+     - then an MC Dropout sandbox run (unbilled; needs S's OK): does `batch_size=32`, together with
+       `epochx=10, hidden=1`, move Yacht toward the paper?
+2. [ ] **Confirmation escrow** (bottleneck 2).
+   - Screening and combine may use at most about 75% of `max_runs`. The rest is held for the
+     configurations most likely by the paper's numbers (target-fit set first) to reach their full
+     repeats.
+   - Evidence: MC Dropout v1.2, where the closest pair (+1.3%) had 1 run when the budget ended; 7 of 15
+     sealed v1.2 cause runs hit the cap.
+   - Check: two dev-suite replicates (cost and accuracy) and a free MC Dropout re-label of the recorded
+     runs (`--resume`).
+3. [ ] **Coarse-flat early stop on the ladder** (bottleneck 2; the proposal's monotone early stopping,
+   adapted).
+   - The ladder is coarse first (×10, ÷10). If both coarse rungs leave the metric within 0.5 noise bands,
+     skip that knob's finer rungs.
+   - The proposal's version (stop the extremes when the moderate rungs are flat) is the wrong way round
+     for a coarse-first ladder.
+   - **Risk:** non-monotone responses. Measure how many true values on the dev tasks sit behind a flat
+     ×10/÷10 pair before adopting.
+4. [ ] **Pooled screening of low-prior knobs** (bottleneck 2; group testing).
+   - Pool about 3 low-prior knobs at one value each into one run. If the run stays within one band of
+     naive, prune all three.
+   - **Risks:**
+     - masking (two effects cancelling);
+     - pure-interaction partners pruned (gamma above is flat alone, so it would be pruned; a pool is
+       only safe for knobs the combine round wouldn't pair anyway);
+     - combinations that crash.
+   - Adopt only if the dev suite shows fewer runs with no loss of interaction runs.
+5. [ ] **More independent claims, including reported curves** (bottleneck 1; the valid part of the
+   proposal's signature idea).
+   - Targets beyond one target and one held-out claim: other datasets and figures, learning-curve points
+     the paper plots, error bars.
+   - This needs ledger support (the claim ledger already extracts claims; targets are chosen by hand).
+   - For GapBench, a pre-registered third reported number per generated paper (benchmark change).
+
+**Not adopted, with the evidence above:**
+- the stiffness-weighted Occam margin;
+- the value-level ledger prior;
+- the KGE variance penalty;
+- Box-Hill perturbation probes;
+- single-split multi-fidelity screening (specific to MC Dropout, and the scaled surrogate is already
+  noisy).
+
+**Order:**
+1. Items 2 and 3 first (small, free, measurable on the dev suite).
+2. Then item 1 (the biggest structural gain: it turns "out of space" into a testable explanation).
+3. Then item 4.
+4. Item 5 when a real paper offers more claims.
+
+A sealed v1.3 test after 1-3 (about $4; needs the cap raised).
 
 ### C. Optional / after the hackathon
 10. [ ] Candidate B, Paragraph Vector on IMDB (P0-1): a second external case; 1-2 days, risky (the shuffle
