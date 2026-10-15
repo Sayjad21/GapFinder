@@ -29,6 +29,7 @@ from gapfinder.ledger.assumptions import derive_status
 from gapfinder.search.verify import Plausibility, gap_returns, held_out_ok, plausible
 
 Changes = dict[str, str]
+HM_TIE = 2.0  # history matching: a repeated fit may be named only within this many implausibility units of the best fit
 LL_EQUIVALENT = 2.0  # log-likelihood units: within this of the best, the target can't tell two fits apart
 _LABEL_RANK = {
     ConfidenceLabel.explained.value: 0,
@@ -835,7 +836,18 @@ class GapSearch:
             # one whose worst claim is least implausible (the history-matching criterion), not the one
             # closest on the target alone (MC Dropout v1.1: five configurations fit Energy; the
             # documented one broke Yacht least)
-            best = min(repeated, key=lambda r: (max(r["I"].values()), r["I"][t.claim_id]))
+            worst = lambda r: (max(r["I"].values()), r["I"][t.claim_id])  # noqa: E731
+            best = min(repeated, key=worst)
+            top = min(fits, key=worst)
+            if max(best["I"].values()) > max(top["I"].values()) + HM_TIE:
+                # the only repeated fits are much less consistent than an unrepeated one: naming them would
+                # report the wrong configuration (MC Dropout v1.2: epochx=2, worst I 24, over fits at I 6-9)
+                leads = sorted(fits, key=worst)[:3]
+                res.notes.append("history matching: the most consistent fits have a single run, so none is named; "
+                                 "unconfirmed leads: " + "; ".join(
+                                     f"{r['config']} (worst I {max(r['I'].values()):g}, "
+                                     f"{len(self.measure_ok(r['config']))} run(s))" for r in leads))
+                return
             c = best["config"]
             broken = ", ".join(f"{cid} (I={i:g})" for cid, i in best["I"].items() if cid != t.claim_id and i > 3)
             res.changes, res.gap_after = dict(c), self.gap(t, c)
