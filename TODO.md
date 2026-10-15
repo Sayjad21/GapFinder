@@ -319,6 +319,16 @@ including the v1.2 set), two replicates each, post-hoc:
 - **The sealed v1.2 misses on test-v12-08 were largely invocation noise:** the v1.2 tag scores it 6/6 on
   the dev suite.
 
+**v1.3 (2026-10-16):**
+- **Sealed test** ([gapbench_test_v13.md](eval/results/gapbench_test_v13.md)):
+  - 0/30 confidently wrong, 9/15 causes, balanced 0.80, out-of-space diagnosed 6/9;
+  - two pre-registered criteria missed;
+  - every miss is on the two interaction tasks.
+- **Tried after it and reverted:** ±0.1/±0.2 steps for mid-range fractions (test-v13-01's threshold 0.4).
+  The dev suite on 42 tasks gave 52 and 45 of 69, against 53 and 48 for the v1.3 tag, and no gain on
+  test-v13-01 itself: `zscore + 0.3` fits as well as `minmax + 0.4`.
+- **Replicate noise on this suite is now about ±5 runs.**
+
 **Order:** the free foundation first, then fixes checked on dev data, then one new sealed test. All
 v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except the final sealed test
 (about $4).
