@@ -140,7 +140,149 @@ The real cause, found in the run logs, often differed from what the proposals as
 
 ---
 
-### 0.6 Bottlenecks after the post-v1.2 engine fixes (latest, 2026-10-15). Start here to design the next step
+### 0.7 After v1.3 (2026-10-16): latest state and recommended next steps. Read this first
+
+#### What changed since §0.6 (phase 4, TODO.md section B4)
+
+| Change | Where | Measured effect |
+|---|---|---|
+| Confirmation escrow: screening and combine use at most 75% of `max_runs` | `engine.py` `escrow_frac` | dev suite accuracy-neutral (42, 41 of 54), about 6% fewer runs. On MC Dropout it is what finally confirmed the documented pair |
+| Coarse-flat early stop: finer ladder rungs only if the two coarse rungs (×10, ÷10) move the metric ≥ 0.5 bands | `coarse_stop_bands` | checked first: no planted dev value sat behind flat coarse rungs; neutral, cheaper |
+| **Patch knobs**: out-of-space code leads tested in memory | `gapfinder/sandbox/ast_patch.py`, runner, engine `_patch_round` | toy end-to-end test passes. **Works on the real Sandboxes image (Python 3.6)**; see MC Dropout below |
+| Web report: history-matching section (diagnosis, target fits, code leads) and equally-good configurations; MC Dropout is a featured demo run | `web/src/Report.jsx`, `demo/runs/mc-dropout-v12` | the app shows the out-of-space story end to end |
+| Tried and reverted: ±0.1/±0.2 steps for mid-range fractions | `hypotheses.py` | 52, 45 vs 53, 48 of 69 on the 42-task dev suite; no gain on test-v13-01 |
+
+**How patch knobs work:**
+- A literal lead from `code_checks.py` (e.g. `net/net.py:70 batch_size = 128`) becomes the knob
+  `@ast:net/net.py:70:batch_size`.
+- A run with it uploads GapFinder's own `.gf_patch/sitecustomize.py`, sets `GF_AST_PATCH` and puts the
+  hook on `PYTHONPATH`. The hook rewrites that one literal when the module is imported. No file
+  changes, so the diff guard, the repo map and the caches are untouched.
+- **Trigger:** only when history matching says out of space.
+- **Scope:** the top 3 literal leads in imported (non-entry) modules.
+- **Values:** powers of two first for size-like names, then the ladder. Each value is tried with and
+  without the best target fit.
+- **Adoption:** only a patch configuration that fits *every* claim after repeats is verified and
+  reported, as a code patch.
+
+#### Results
+
+**Sealed v1.3 GapBench test** (blind; `eval/results/gapbench_test_v13.md`):
+
+| | v1.1 | v1.2 | v1.3 |
+|---|---|---|---|
+| Confidently wrong | 0/30 | 0/30 | 0/30 |
+| Correct causes (of 15) | 7 + 1 partial | 12 | 9 + 1 partial |
+| Interaction runs (of 6) | 0 + 1 partial | 5 | 0 + 1 partial |
+| Balanced accuracy | 0.73 | 0.90 | 0.80 |
+| Out-of-space diagnosed | 0/9 | 4/9 | 6/9 |
+| Super baseline, confidently wrong | 19/30 | 8/30 | 22/30 |
+
+- v1.3 missed two of its four pre-registered criteria: correct causes ≥ 12 and balanced accuracy ≥ 0.85.
+- **Every v1.3 miss is on its two interaction tasks; everything else was 24/24.**
+  - test-v13-01: `zscore + threshold 0.3` fits as well as the true `minmax + 0.4`.
+  - test-v13-06: `n` = 5000-12000 all fit with `zscore`; the truth was in the equivalence set, but the
+    set had over 3 members.
+- The sealed-set totals swing with how hard the drawn interaction tasks are. The like-for-like dev suite
+  showed the post-v1.2 changes accuracy-neutral, with about ±5 runs of replicate noise on 69 cause runs.
+
+**MC Dropout on v1.3** (real paper, not blind; `eval/external/mc-dropout/run-v13`, plus the patch-round
+resume `run-v13-patch`):
+- **Label: "Explains target, conflicts with held-out: `epochx=10, hidden=1`"**, the documented pair,
+  for the first time. v1.1 and v1.2 named other, equally good Energy fits. The diagnosis is out-of-space
+  suspected, with the documented pair the least inconsistent of the 5 Energy fits (worst I 10.0).
+- **Patch round** (3 leads: `batch_size = 128` on net.py:70, `lengthscale = 0.01` on :71, the prediction
+  `batch_size = 500` on :122). With the documented pair as the base, one run each so far:
+
+  | Pair plus patch | Energy (paper 1.66) | Yacht (paper 1.11) |
+  |---|---|---|
+  | none | ~1.7 | ~2.9 |
+  | batch_size 64 | 1.37 | **1.18** |
+  | batch_size 32 (the paper's value) | 0.75 | 0.76 |
+  | batch_size 16 | 0.59 | 0.53 |
+  | lengthscale 0.001-0.1 | 1.66-1.86 | 2.1-3.5 |
+  | prediction batch 62-4000 | 1.63-1.81 | 2.3-2.9 |
+
+- **The training batch size is the only constant that moves the held-out Yacht claim.** That is the first
+  time anything explained Yacht. It interacts with the epoch budget: smaller batches mean more SGD steps,
+  so `epochx` and `batch_size` trade off.
+- The paper's own value (32) overshoots in our scaled surrogate (T=100 Monte Carlo passes, 3 splits
+  instead of 20, grid search kept). Batch 64 comes closest on both claims.
+- The resume is confirming the best patch configuration. Whatever it reports, the claim is "a code
+  constant (training batch size) explains most of the held-out conflict", not "the paper used 64".
+
+**Spend:** $28.84 billed of about $50. Sandboxes report about $12,000 (unbilled in the Beta).
+
+#### Current bottlenecks (updated from §0.6)
+
+1. **Identifiability of interactions on synthetic tasks.** This is the remaining GapBench loss: two
+   knobs with several value combinations that fit equally well. The generator's pair-rival check
+   (pairs among the 8 single settings closest to the paper) misses pairs whose parts don't move the
+   metric alone (test-v13-06: `n` only matters with normalisation), so some unidentifiable tasks get
+   through.
+2. **No blind real-paper evidence.** MC Dropout shaped v1.1-v1.3. The patch-knob result is real but
+   post-hoc.
+3. **Patch rounds are budget-starved.** The patch round runs last, so on MC Dropout it got 5 of its 36
+   configurations before the 200-run cap and needed a resume.
+4. **Measurement noise on the dev suite (±5 runs)** hides changes smaller than about 10%. Totals
+   compared over two replicates can't separate small changes.
+
+#### Recommended next steps, in priority order
+
+1. **Finish and write up the MC Dropout patch result** (running; $0 billed).
+   - Confirm the best pair + `batch_size` configuration with repeats, then re-run history matching on
+     all claims.
+   - Write `RESULT_v13.md` with the table above.
+   - Be explicit about the limits:
+     - not blind;
+     - a scaled surrogate;
+     - the paper states 32 and our best fit is 64;
+     - the per-split grid search (the other documented cause) can't be patched as a literal.
+2. **Give the patch round its own budget.**
+   - Today it runs after screening, confirmation and combine have used the budget.
+   - When history matching already says out of space before verification (it can be computed after the
+     combine round), reserve a share for the patch round: about 15% of `max_runs`, plus its
+     confirmation.
+   - Free to build. Check on MC Dropout by resuming from recorded runs, then a fresh sandbox run.
+3. **A blind real paper.** This is the most important evidence still missing.
+   - **Candidate:** a paper with an independent reproduction report that documents the cause of a
+     gap, sealed before running. Examples are ML Reproducibility Challenge reports with author code,
+     or Paragraph Vector on IMDB (TODO P0-1 Candidate B).
+   - **Protocol:**
+     - someone other than the person running GapFinder writes and hashes the answer key;
+     - GapFinder is frozen at a tag;
+     - the ledger costs about $0.3-1;
+     - sandbox runs are unbilled.
+   - **Criteria:** pre-registered like GapBench. Name the documented cause (exact or in a set of ≤ 3),
+     or diagnose out of space with the right code lead; 0 confident mistakes.
+4. **Make the benchmark's interaction tasks identifiable the way GapFinder searches.**
+   - In `gen_tasks.py`, build rival pairs the way the engine's combine round does (top knobs by screen
+     score and ledger prior, values by score, plus the forward step), not just the 8 closest singles.
+   - A task whose planted pair has an equally good rival that GapFinder can reach is rejected, or
+     scored by set (pre-registered).
+   - This is a benchmark change. Do it before the next sealed set and say so in PROTOCOL.md.
+5. **Paired per-task analysis instead of totals on the dev suite.**
+   - Report per-task differences between two versions over ≥ 3 replicates, with a sign test, so a
+     ±5-run total swing doesn't hide or fake an effect.
+   - Cheap: the per-task rows already exist.
+6. **Patch-knob extensions,** after step 1 shows the value:
+   - main-script literals, through a `runpy` wrapper when the command is a direct `python script.py`;
+   - leads in data files (`n_epochs.txt`-style), which MC Dropout already exposes as harness knobs.
+   - Keep the rule: only when out of space; verify like any knob; report as a code change.
+7. **Submission tasks** (deadline 2026-10-30):
+   - README "Results" table with v1.1-v1.3 sealed and the MC Dropout story;
+   - web Scoreboard;
+   - Devpost text and video script updated with patch knobs and the out-of-space diagnosis;
+   - repo public and Pages (S).
+
+**Don't:**
+- tune further tie-break rules on the dev suite. Every recent attempt was neutral within noise;
+- add value-level priors (45% of true values come from coverage only);
+- add variance-based penalties (the truth inflates variance too).
+
+---
+
+### 0.6 Bottlenecks after the post-v1.2 engine fixes (2026-10-15; superseded by 0.7)
 
 **Where the numbers are.** On the dev suite (32 public tasks, 54 cause runs, 42 no-cause runs, two
 replicates each, post-hoc):
