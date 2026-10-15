@@ -111,7 +111,7 @@ The real cause, found in the run logs, often differed from what the proposals as
 - **The least-inconsistent ranking among the Energy fits is not stable between runs:** the documented
   pair was first in v1.1 and second in v1.2.
 
-### 0.5 The problems now (the next bottleneck)
+### 0.5 The problems after v1.2 (superseded by 0.6)
 
 1. **The budget on slow artifacts: the closest candidate doesn't get its confirmation runs.** On MC
    Dropout (40-60 min per run), the combine round tries up to 40 pairs once each, and then confirms
@@ -137,6 +137,126 @@ The real cause, found in the run logs, often differed from what the proposals as
    draws, so the category holds one task per set.
 
 **Spend so far:** $25.26 billed of about $50. Sandboxes report about $8,500 (unbilled in the Beta).
+
+---
+
+### 0.6 Bottlenecks after the post-v1.2 engine fixes (latest, 2026-10-15). Start here to design the next step
+
+**Where the numbers are.** On the dev suite (32 public tasks, 54 cause runs, 42 no-cause runs, two
+replicates each, post-hoc):
+
+| Code | Correct causes (of 54) | Interactions (of 21) | Abstentions (of 42) | Confidently wrong |
+|---|---|---|---|---|
+| v1.2 tag | 42, 42 | 10, 10 | 42, 42 | 0 |
+| now (`1c51bf3`) | 42, 41 (+1-2 partial) | 14, 12 | 42, 42 | 0 |
+
+Blind (sealed v1.2): 12/15 causes, 0/30 confidently wrong, balanced accuracy 0.90.
+
+**What the flat total means.** The last round of engine changes moved errors between tasks rather than
+removing them:
+- interactions went up;
+- single runs of known-cause tasks went down: gen-03, the equally-good `max_steps` task, and one run
+  each of v11-04, v11-08, v11-10 and v12-08.
+
+Tie-break rules have hit their limit. Every alternative tried was neutral or worse:
+- "smaller change wins a tie" lost test-v12-01;
+- "closer median wins" lets noise decide;
+- unconditional extra pairs and movement-ranked pairs each lost 3-8 runs.
+
+The remaining misses are mostly ties the data can't break.
+
+#### Bottleneck 1: the claims don't carry enough information (identifiability)
+
+- **Symptom:**
+  - on noisy artifacts, several configurations fit the paper's numbers equally well;
+  - equivalence sets of 8-15 configurations are common on rlbench;
+  - MC Dropout has 5 configurations fitting Energy alone, all breaking Yacht;
+  - RusKey has 11 configurations jointly not ruled out.
+- **Evidence it's information, not logic:**
+  - the same frozen code scores a task 3/3 in one invocation and 1/3 in another (sealed v1.2's
+    test-v12-08 was 1/3; the same code on the dev suite was 6/6);
+  - the v1.2 generator, which checks identifiability the way GapFinder sees it, needed restarts,
+    because most rlbench draws aren't identifiable with two claims.
+- **What exists:** the answer is reported as a set (`ClaimResult.equivalent`) and credited by the scorer
+  as `correct_in_set`; history matching says "out of space" when no configuration fits all claims.
+- **What doesn't help:**
+  - extra claims from the *same* runs and datasets (MC Dropout's LL claims track RMSE);
+  - common random numbers (no variance reduction).
+- **Open directions:**
+  - **Independent claims:** use every number the paper reports for the same experiment as a held-out
+    claim: other datasets, other figures, learning-curve points, error bars. Today the targets file holds
+    one target and one held-out claim, chosen by hand.
+  - **More runs, aimed where they discriminate:** spend extra repeats only on the configurations in the
+    equivalence set, until they separate or the budget ends. Sequential, like a best-arm race on the set
+    itself.
+  - **Priors:** the ledger's evidence (what the paper says, what the code says) as a prior over the set,
+    so a tie is broken by "which one did the authors more likely use", not by noise. The evidence gate
+    exists but is binary.
+  - **Honest output:** accept that some gaps are only identifiable to a set, report "one of these N" as
+    the answer, and score it with `correct_in_set` (K = 3 is pre-registered).
+
+#### Bottleneck 2: run budget on slow artifacts
+
+- **Symptom:**
+  - 7 of 15 cause runs in the sealed v1.2 test hit the 200-run cap;
+  - on MC Dropout (40-60 min per run) the 150-run budget ran out with the closest pair (+1.3%) run once.
+- **Cause:** the wider search space (6-10 values per knob, pairs, forward step) costs runs.
+- **What exists:** racing in confirmation (survivors and pairs), likelihood-ordered combo confirmation, and
+  a budget-exhausted path that now uses the full search's ordering.
+- **Open directions:**
+  - a budget plan per phase (screen / confirm / combine / verify shares) instead of first come, first
+    served;
+  - screening in stages (coarse values first, refine near the best);
+  - stopping screening a knob once its effect is clearly flat.
+
+#### Bottleneck 3: out-of-space causes are diagnosed but cannot be tested
+
+- **Symptom:**
+  - on MC Dropout, GapFinder says "out-of-space suspected" and its static code leads (`code_checks.py`)
+    name all three documented out-of-flag differences: grid search per split, `batch_size = 128`,
+    `T = 10000`;
+  - but no lead can be run. The diff guard forbids source edits during the search.
+- **Why it matters:** this is the only route from "Unexplained, out of space" to "explained" for causes in
+  code, data or evaluation. For many real papers that is where the cause lives.
+- **Open direction: "patch knobs".**
+  - Turn a lead into a declared, reviewable code patch (e.g. `batch_size = 128 -> 32` in `net/net.py`),
+    exposed as one more knob.
+  - Run it under the same verification: counterfactual, held-out, evidence.
+  - Keep the diff guard for everything else.
+  - **Risks:**
+    - patches widen the search space;
+    - a patch can't be checked against the paper's text as easily as a flag value;
+    - the harness spec has to allow it.
+
+#### Bottleneck 4: no blind real-paper evidence
+
+- **Symptom:** all blind evidence is the synthetic GapBench. MC Dropout is not blind any more: v1.1 and v1.2
+  were built after its answer was revealed.
+- **Why it matters:** several rules are general but were shaped by seen cases:
+  - the multiplier factors and name pattern;
+  - the unbounded-name list (`lr`, `tau`, …);
+  - the infra-error patterns;
+  - the thresholds (likelihood tie 2, history-matching tie 2, value caps 6-10).
+- **Open directions:**
+  - one blind real paper (TODO lists Paragraph Vector on IMDB, P0-1 Candidate B);
+  - tasks written by an independent AI author (P0-2 Source 2, TODO item 18).
+
+#### Bottleneck 5: the benchmark's out-of-space category is thin
+
+- **Symptom:**
+  - mlbench's default model is near chance, so subtle bugs don't show;
+  - the two strong bugs (`drop_scaled`, `clip5`) are pair-mimicked on some noise draws;
+  - four more candidate bugs failed;
+  - the set holds one out-of-space task (plus two "incomplete" tasks).
+- **Open direction:** an artifact whose default model is decent, so data and metric bugs show and can't be
+  mimicked by settings; or a third reported number per task (pre-registered).
+
+**Constraints for any fix:**
+- $25.26 of about $50 billed. Model calls are the only billed cost.
+- Sandboxes are unbilled in the Beta (about $8,500 reported).
+- The dev suite is free (`eval/dev_suite.py`, about 1.5 h per replicate) and every change needs two
+  replicates (noise ±2-4 runs).
+- Any claim needs a new sealed set: tag, then seed, generate, run, reveal; about $4 per set.
 
 ---
 
