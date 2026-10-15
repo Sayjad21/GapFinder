@@ -16,15 +16,45 @@ GapFinder against a standard coding agent. Every number links to a log in this r
 
 ![Replay of a RusKey run: the checkpoint tree, claim bars against the paper, and the budget](docs/img/replay.png)
 
-> Status (2026-10-13): runs end to end in Token Factory Sandboxes on a real systems paper
-> (RusKey, Figure 6). GapBench-mini dev set: 4/4 with no false attributions. Blind test, run twice
-> on 8 tasks from a sealed generator (run 1, then run 2 on the frozen tag `v1.0`): GapFinder was
-> confidently wrong in 0 of 24 runs both times and abstained correctly in 9 of 9, but it solved only
-> 4 of 8 tasks (run 1) and 6 of 8 (run 2) in the median run. Tasks from an independent AI author are
-> not written yet. The MC Dropout external case is done (see Results): no cause found.
-> Plan: [docs/PLAN.md](docs/PLAN.md) · spikes: [tests/spikes/](tests/spikes/README.md).
+> Status (2026-10-16): **v1.3**.
+> - **Blind sealed tests** (GapBench, a fresh generated set for each version, seed made after the
+>   version tag): GapFinder was **confidently wrong in 0 of 90 runs** across v1.1-v1.3, against 8-22 of
+>   30 per test for a standard coding agent. It named the planted cause in 7, 12 and 9 of 15 runs. The
+>   misses are interactions where several settings fit the paper's numbers equally well.
+> - **On a real paper (MC Dropout, not blind):** v1.3 names the documented cause (`epochx=10,
+>   hidden=1`), says the rest is outside the settings, and points to the right lines of code.
+> - **New:** it tests hard-coded constants in memory ("patch knobs") without editing a file.
+>
+> Plan: [docs/PLAN.md](docs/PLAN.md) · full context: [docs/CONTEXT_v11.md](docs/CONTEXT_v11.md) ·
+> spikes: [tests/spikes/](tests/spikes/README.md).
 
 ## Results
+
+**Latest (v1.1-v1.3).** Each version was frozen with a git tag before a new sealed set was generated from
+a seed made after the tag. 10 tasks × 3 runs per arm; the pre-registration is in
+[PROTOCOL.md](eval/gapbench/PROTOCOL.md).
+
+| Sealed test | GapFinder: confidently wrong (exact 95% CI) | Correct causes (of 15) | Correct abstentions (of 15) | Balanced accuracy | Out-of-space diagnosed | Coding-agent baseline: confidently wrong |
+|---|---|---|---|---|---|---|
+| [v1.1](eval/results/gapbench_test_v11.md) | **0/30** (0-12%) | 7 (+1 partial) | 15 | 0.73 | 0/9 | 19/30 |
+| [v1.2](eval/results/gapbench_test_v12.md) | **0/30** (0-12%) | 12 | 15 | 0.90 | 4/9 | 8/30 |
+| [v1.3](eval/results/gapbench_test_v13.md) | **0/30** (0-12%) | 9 (+1 partial) | 15 | 0.80 | 6/9 | 22/30 |
+
+How to read the table:
+- Always answering "Unexplained" would score balanced accuracy 0.50.
+- **v1.3 missed two of its four pre-registered criteria** (correct causes ≥ 12, balanced accuracy
+  ≥ 0.85). Every v1.3 miss is on its two interaction tasks, where several settings fit the paper's
+  numbers equally well.
+- The sets differ, so v1.1 → v1.3 is not a paired comparison.
+- On the public dev tasks, a paired per-task comparison of v1.1 against the phase-3 code (22 tasks, two
+  replicates each, `eval/compare_suites.py`) found 5 tasks better and 3 worse (sign test p = 0.73): no
+  significant change per task. What holds up is safety.
+
+| Real paper (not blind) | Result | Data |
+|---|---|---|
+| MC Dropout (Gal & Ghahramani, ICML 2016) on v1.3, 244 Sandboxes runs | **Names the documented cause** (`epochx=10, hidden=1`, confirmed) and labels it "explains the target, conflicts with the held-out claim". History matching: **out of space suspected**. Static code leads name the documented out-of-flag differences (per-split grid search, `batch_size = 128`, `T = 10000`). A **patch round** tested three hard-coded constants in memory on the real sandbox: only the training batch size moves held-out Yacht (pair + 64: Yacht 1.18 vs the paper's 1.11), and no patch fits both claims within noise, so none was adopted. v1.0 had said "Unexplained" and never tried the documented values. | [RESULT_v13.md](eval/external/mc-dropout/RESULT_v13.md) |
+
+**Earlier results (v1.0):**
 
 | What | Result | Data |
 |---|---|---|
@@ -137,6 +167,16 @@ already handle.
 
 ## Honest limitations
 
+- Small samples.
+  - Each sealed test has 15 cause runs over 5 tasks.
+  - The dev suite has 23 cause tasks, and its replicates of identical code differ by about ±5 runs.
+  - Accuracy changes between versions are within that noise; the safety result (0 confidently wrong in
+    90 blind runs) is the robust one.
+- No blind real paper yet. MC Dropout was not blind: its answer key was revealed before v1.1. The protocol
+  for one is in [BLIND_CASE.md](eval/external/BLIND_CASE.md); it needs a second person to seal the
+  answer.
+- Patch knobs test literals in Python modules only. A loop, a grid search or a data pipeline can't be
+  patched this way.
 - CPU only: Sandboxes VMs have 4 vCPUs and 3.9 GB, so GPU papers and the paper's full data scale
   are out of reach.
 - The harness spec (how to build, load and run the artifact, and which knobs exist) still needs a
