@@ -1,4 +1,4 @@
-# GapFinder: context handover after v1.1 (2026-10-14)
+# GapFinder: context handover (after v1.1, updated after v1.2 on 2026-10-15)
 
 This document is written so that someone with no prior context can design the next fix. It covers:
 - what the system is;
@@ -8,6 +8,135 @@ This document is written so that someone with no prior context can design the ne
 - where the system stands now, and the current bottleneck with concrete cases.
 
 Paths are relative to the repo root (github.com/Sayjad21/GapFinder).
+
+---
+
+## 0. Update after v1.2 (2026-10-15): read this first
+
+Sections 1-8 below describe the state after v1.1, and the bottleneck it had: choosing among equally
+good fits. That bottleneck was worked on in "phase 3" (TODO.md section B3). This section says what
+changed, what each change did measured, what was tried and reverted, the v1.2 results, and the
+problems that remain.
+
+### 0.1 The measurement tool added: the dev suite (`eval/dev_suite.py`)
+
+- **What it is:** a free (local, $0) regression check. It re-runs only the search, from recorded
+  ledgers (`harness.py --ledger-from`), on all 22 tasks whose answers are public: 4 dev,
+  8 v1.0, 10 v1.1. That's 66 searches, scored with `score.py`.
+- `--code <checkout>` runs the same suite on any older version (e.g. a git worktree at tag `v1.1`).
+- **Noise:** two runs of identical code differ by about ±2 correct runs out of 39, because the RL
+  artifact measures differently on every invocation. Every change was judged on **two replicates**.
+- **Results are post-hoc:** these tasks shaped the changes.
+
+| Code | Correct causes (of 39), two replicates | Confidently wrong | Abstentions (of 27) | Search runs |
+|---|---|---|---|---|
+| v1.1 (tag) | 23, 25 | 0 | 27 | ~6,100 |
+| + candidate fixes, likelihood selection, Occam margin (`efb2f63`) | 29, 27 | 0 | 27 | ~7,200 |
+| + racing (`6dc3dea`) | 29, 25 | 0 | 27 | ~6,900 |
+| + conditional forward step (`659f4e2`): v1.2 engine | 28, 26 (interaction runs 11 → 14 of 24) | 0 | 27 | ~6,900 |
+| tried and reverted: pair values ranked by "movement either way" | 21 | 0 | 27 | n/a |
+| tried and reverted: unconditional forward step | 26, 24 | 0 | 27 | ~7,400 |
+
+### 0.2 What changed in the engine, and the real bug behind each change
+
+The real cause, found in the run logs, often differed from what the proposals assumed.
+
+| Change | Evidence that led to it | What the logs showed |
+|---|---|---|
+| Fraction ladder only for fraction-like knobs (discount, decay, dropout, probability, split, threshold); learning rates, temperatures etc. get a plain log ladder (`hypotheses.py`, `_UNBOUNDED_NAME`) | test-v11-04 run 2 answered `lr=0.91` | 0.91 = 1-(1-0.1)/10: a complement step meant for fractions, applied to a learning rate. A candidate-generation bug, not only a noise win |
+| Ladder (10, 2, 5, 50, 100); per-knob cap 6-10 from 0.3 × budget / open knobs | test-v11-05 never tried `epochs=75` | ×5 sat behind ×50 and was cut by the fixed cap of 6 |
+| Occam margin in bisect and for passenger knobs: an extra knob must close the gap by more than one noise band (the counterfactual's own criterion) | test-v11-10 run 2 kept `lr_schedule=linear` | the pair failed its counterfactual (proof the knob is a passenger) but was labelled "Fits but unsupported". **That hedge outranked the correct single knob's "Partially explained"**: the label-ranking bug. A TOST equivalence test was tried first and was the wrong test (the passenger "chased noise" and fitted 3 points closer) |
+| A "Fits but unsupported" that doesn't close the gap ranks no higher than "Partially explained"; ties go to the closer fit (`_rank`, `_better`) | the same | the same |
+| Defaults filtered in any spelling | test-v11-01 proposed `init_q=0` (default 0.0) | string comparison |
+| Ranking: a "consistent with the paper" tier (closes() or implausibility ≤ 2 with standard error plus the paper's own uncertainty), then likelihood ties (within 2 log units = equally good) replace rounded \|gap\|/band buckets; `closes()` itself, used for labels, is unchanged | test-v11-01 (`max_steps=2000`, run SD 44-147, accepted by its own wide band); test-v11-10 (two fits 0.7 points apart in different rounded buckets) | closes() compares the gap with the candidate's own spread, which favours noisy candidates |
+| `ClaimResult.equivalent`: every configuration the target can't tell apart (within the likelihood tie, held-out no worse); in the report; scored as `correct_in_set` (truth in a set of ≤ 3) | equifinality | sets are often large on noisy RL (8-15). **Decision: a large set stays a hedge, not Inconclusive**: of 11 runs with a set over 3, the pick was right in 6 (chance about 1 in 8) |
+| Two-stage confirmation race: every survivor gets 2 runs, only the likeliest get the full repeats | budget burn (14 survivors × ~5 runs) | saves about 4% of runs on GapBench, no accuracy change. It matters only where the budget binds |
+| Conditional forward step: when no confirmed single is consistent with the paper, the two best singles are paired with every screened value of the other top knobs | test-v11-05: `epochs=75` alone moved *away* from the paper and was never paired with `minmax` | unconditional, it added spurious pair fits elsewhere (26, 24); conditional: 28, 26 and interactions 11 → 14 of 24 |
+| History matching names a repeated fit only within 2 implausibility units of the best fit; otherwise it stays Unexplained (out-of-space suspected) with the best fits listed as unconfirmed leads (`HM_TIE`, commit `3acc5cd`, after v1.2) | MC Dropout v1.2 labelled `epochx=2` (worst I 24) | the "≥2 runs" rule plus "least inconsistent among those" picked the only repeated fit, however bad |
+
+**Measured and not adopted:**
+- **Common random numbers** (paired RUN_TAGs across configurations): variance reduction factor
+  0.25-0.97 on 7 of 8 pairs. Trajectories decorrelate under any setting change
+  (`eval/results/crn_measure.json`).
+- **Extra claims from the same datasets** (MC Dropout's LL claims): they add no discrimination;
+  Energy LL agrees with all Energy fits.
+
+### 0.3 What changed in the benchmark generator (`gen_tasks.py`)
+
+- **Rivals checked the way GapFinder sees them.** A configuration is a rival if either test holds:
+  - within one naive noise band on every claim (as before);
+  - or within 2 combined standard errors **and** with a log-likelihood within 2 of the truth's
+    expected one.
+
+  The likelihood part matters. Without it, noisy rivals passed against an exact, precise truth.
+- **Pair rivals:** pairs among the 8 single settings closest to the paper are checked. v1.1's
+  out-of-space tasks were mimicked by pairs.
+- **The artifact is fixed per slot** (alternating, with a recorded fallback). Re-drawing it every
+  attempt skewed a dry run to 10 of 10 mlbench, because rlbench passes the stricter checks less often.
+- **Quotas: 1 out-of-space and 2 incomplete tasks** (v1.1: 2 and 1).
+  - The mlbench bugs (`drop_scaled`, `clip5`) are pair-mimicked on some noise draws.
+  - Four more candidate bugs failed: a metric swap, flipped test labels, a misaligned column, and
+    leakage. The near-chance default model hides subtle bugs.
+- **Finding:** at rlbench's noise, with two claims, most draws aren't identifiable. Generation needs
+  restarts (about 1.5 h for 10 tasks).
+
+### 0.4 Results
+
+**Sealed v1.2 GapBench test** (blind; tag `v1.2`, seed after the tag, `eval/results/gapbench_test_v12.md`):
+
+| Arm | Confidently wrong (exact 95% CI) | Correct causes (of 15) | Correct abstentions (of 15) | Balanced acc. | Out-of-space diagnosed |
+|---|---|---|---|---|---|
+| GapFinder v1.2 | 0/30 (0-11.6%) | 12 | 15 | 0.90 | 4/9 |
+| GapFinder, verification off | 12/30 | 10 | 8 | 0.60 | 5/9 |
+| Super baseline agent | 8/30 | 5 (+1 partial) | 0 | 0.17 | 0/9 |
+| Always Unexplained | 0/30 | 0 | 15 | 0.50 | 0 |
+
+- **All four pre-registered criteria were met.**
+- **The sets differ from v1.1** (7/15, balanced 0.73). v1.2 tasks are identifiable by construction,
+  which helps every arm (the baseline went 3 → 5/15). The like-for-like gain from the code alone is
+  the dev suite's 24 → about 27-28 of 39.
+- **Interactions were 5/6** (v1.1: 0/6 plus 1 partial).
+- **Misses:**
+  - the rlbench decoy, test-v12-08 (truth `max_steps=100`): one run answered `lr=1`, another
+    `max_steps=100` plus a passenger `lr=0.5`;
+  - one interaction run, test-v12-01 (truth `minmax` + `n=6000`), answered `zscore` + `n=2400`.
+
+**MC Dropout on v1.2** (not blind; 148 sandbox runs; `eval/external/mc-dropout/RESULT_v12.md`):
+- Both documented values were confirmed alone (6 runs each). The documented pair was **the closest
+  configuration tested** (Energy 1.682 vs 1.66, +1.3%), but measured once: the 150-run budget ran out
+  while confirming other pairs.
+- The label went to `epochx=2` (the HM bug above, since fixed). Re-labelled from the recorded runs
+  with the fix, both the v1.1 and v1.2 runs read "Unexplained, out-of-space suspected", with the
+  documented pair first and second among the leads.
+- **The least-inconsistent ranking among the Energy fits is not stable between runs:** the documented
+  pair was first in v1.1 and second in v1.2.
+
+### 0.5 The problems now (the next bottleneck)
+
+1. **The budget on slow artifacts: the closest candidate doesn't get its confirmation runs.** On MC
+   Dropout (40-60 min per run), the combine round tries up to 40 pairs once each, and then confirms
+   "good" combos in an order that isn't by closeness. The documented pair, closest of all at +1.3%,
+   had one run when the budget ended. Planned fix (TODO): confirm combos closest to the paper first,
+   by likelihood.
+2. **Equally good ladder values on noisy RL.** test-v12-08: `lr=1` (a ×10 ladder value) fits about as
+   well as the truth `max_steps=100`, and a passenger `lr=0.5` survives next to the truth. This is the
+   noisy-RL equifinality pattern of v1.1's task 04. The Occam margin removes some passengers but not
+   this one. Open question: how much should a knob that the paper's other evidence says nothing about
+   be penalised against one the ledger ranked?
+3. **One target plus one held-out claim often can't identify the cause.** MC Dropout (5 Energy fits,
+   all breaking Yacht) and RusKey (11 jointly NROY) are like this. The honest output is a set plus a
+   diagnosis, and that's what v1.2 reports. Only more independent claims (another dataset, figure or
+   metric that isn't a re-statement) add information.
+4. **Generality is unproven beyond GapBench.**
+   - Several rules are general but were shaped by seen cases: the multiplier factor list and name
+     pattern, the unbounded-name list, the infra-error patterns, and the thresholds (likelihood tie 2,
+     HM tie 2, caps 6-10).
+   - The only blind real-paper evidence is still none: MC Dropout is not blind.
+   - TODO lists two candidates for a blind real case: Paragraph Vector, and AI-author tasks.
+5. **Out-of-space benchmark tasks are borderline.** The mlbench bugs are pair-mimicked on some noise
+   draws, so the category holds one task per set.
+
+**Spend so far:** $25.26 billed of about $50. Sandboxes report about $8,500 (unbilled in the Beta).
 
 ---
 
