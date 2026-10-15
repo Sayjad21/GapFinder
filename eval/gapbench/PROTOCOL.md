@@ -231,7 +231,7 @@ Dry runs on throwaway seeds (generator checks) are not test runs and their tasks
   - **One run of the set.** If a run fails for an infrastructure reason, it is re-run with the same
     command, and the re-run is listed. Nothing is re-run because of its result.
 
-## Amendment for the next sealed test (v1.2), DRAFT (2026-10-15): not final until committed with the tag plan
+## Amendment for the v1.2 sealed test (final, 2026-10-15, written before its seed exists)
 
 The v1.1 tasks (`test-v11-*`) are public, so they are dev data. GapFinder's phase-3 changes were checked on
 them and the other public tasks with `eval/dev_suite.py`. v1.2 needs its own new set (`--set v12`).
@@ -254,8 +254,22 @@ them and the other public tasks with `eval/dev_suite.py`. v1.2 needs its own new
 - **Scoring additions** (next to the exact score, never instead of it): `correct_in_set`, which credits
   a run when the truth is in its set of configurations the target can't tell apart, and the set has at
   most 3 members (`SET_K`).
-- **Run plan:** as v1.1 (5 arms × 3 runs, `run_arms.py`, `--cap 0.5`). The billed cap is to be set when
-  the tag is made (about $4 expected).
+- **Run plan:**
+  - **Frozen system:** GapFinder at git tag `v1.2`, pushed before the seed is made. No change to
+    `gapfinder/`, `eval/gapbench/harness.py`, `score.py` or `gen_tasks.py` until scoring is done.
+  - **Task set:** `--set v12`, ids `test-v12-01` to `-10`, answers in `eval/gapbench/sealed-v12/`
+    (git-ignored until the reveal), hash in `sealed-v12.sha256`. The seed is `secrets.token_hex(16)`,
+    made after the tag. No `--debug`, and nobody reads `sealed-v12/` before scoring.
+  - **Arms:** `gapfinder`, `gapfinder-noverify`, `gapfinder-noevidence`, `gapfinder-random` and
+    `baseline-super`, runs 1-3, through `run_arms.py`, with `--cap 0.5` per arm per task, baseline
+    `--steps 40` and random seed 0 + run number.
+  - **Money:** billed spend capped at $25.50 in total for these processes (about $4 expected on top of
+    $21.04).
+  - **Scoring:** `score.py`'s functions on the `test-v12-*` tasks only, as in v1.1.
+  - **One run of the set:** infrastructure failures are re-run with the same command and listed.
+- **Comparison:** v1.1's sealed result on its own set is the reference, not a paired comparison: the
+  sets differ. The dev suite (`eval/dev_suite.py`) gives the like-for-like v1.1 vs v1.2 comparison on
+  the public tasks, labelled post-hoc.
 - **Success criteria, stated before the seed:**
   - confidently wrong 0/30;
   - exact correct causes above v1.1's 7/15, or equal with `correct_in_set` clearly higher;
