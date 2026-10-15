@@ -409,7 +409,7 @@ v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except
      so `out_of_space_diagnosed` was 0/9. If no bug survives a pair check on mlbench, add a third claim
      (item 8) rather than drop the category.
 
-10. [ ] **$ Sealed v1.2 test** (about $4; needs a cap raise; same protocol as v1.1).
+10. [x] **Done** (`eval/results/gapbench_test_v12.md`: GapFinder 0/30 confidently wrong, 12/15 causes, 15/15 abstentions, balanced 0.90, out-of-space diagnosed 4/9; all four pre-registered criteria met; the sets differ from v1.1, see the file). **$ Sealed v1.2 test** (about $4; needs a cap raise; same protocol as v1.1).
     - Pre-register, before the seed:
       - set scoring (`correct_in_set`, K);
       - the generator changes (items 8-9);
