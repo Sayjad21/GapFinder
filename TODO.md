@@ -289,6 +289,20 @@ code differ by about ±2 correct runs.
   the standard-error test may be too strict on mlbench. This is being checked before it is
   committed.
 
+**After the v1.2 tests (2026-10-15):**
+- **GapBench sealed v1.2:** 0/30 confidently wrong, 12/15 causes, balanced accuracy 0.90; all
+  pre-registered criteria met ([gapbench_test_v12.md](eval/results/gapbench_test_v12.md)).
+- **MC Dropout v1.2:** the search improved, but the label didn't
+  ([RESULT_v12.md](eval/external/mc-dropout/RESULT_v12.md)).
+- **Next (dev work, not blind):**
+  - **Relabel rule:** history matching may label a repeated fit only when it is within the likelihood tie
+    of the best fit; otherwise it reports the best fit as an unconfirmed lead. (`epochx=2`, I=24, was
+    labelled over fits at I 6-9.)
+  - **Combine confirmation order:** confirm the pairs closest to the paper first, so the closest pair
+    gets its repeats before the budget runs out (the documented pair: +1.3%, 1 run).
+  - **Equifinal ladder values on noisy RL** (`lr=1` on the v1.2 decoy): the remaining GapBench miss
+    pattern.
+
 **Order:** the free foundation first, then fixes checked on dev data, then one new sealed test. All
 v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except the final sealed test
 (about $4).
