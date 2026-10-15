@@ -14,6 +14,9 @@ replayable checkpoint IDs. It says "unexplained" when it should.
 RusKey run (no login, no cost). Then open **Gap Report** for the verdicts and **Scoreboard** for
 GapFinder against a standard coding agent. Every number links to a log in this repo.
 
+**New to the project?** [docs/learn/](docs/learn/README.md) explains it from the start in plain words:
+what it is, how to use it, the architecture, each component, the design choices and how it got here.
+
 ![Replay of a RusKey run: the checkpoint tree, claim bars against the paper, and the budget](docs/img/replay.png)
 
 > Status (2026-10-16): **v1.3**.
