@@ -548,37 +548,30 @@ class GapSearch:
         await _all(*(self.measure(c, 1, "combine") for c in combos))
         tried.update(frozenset(c.items()) for c in combos)
         good_combos = [c for c in combos if self.units(t, c) >= thr]
-        await _all(*(self.measure(c, reps, "confirm-combo") for c in good_combos))
+        # closest to the paper first: runs take budget in launch order, so when it runs short the likeliest
+        # pairs are the ones confirmed (MC Dropout v1.2: the documented pair, +1.3% and the closest of all,
+        # had one run when the budget ended while other pairs were being confirmed)
+        ll_c = {frozenset(c.items()): self.loglik(t, c) for c in good_combos}
+        good_combos.sort(key=lambda c: -(ll_c[frozenset(c.items())] if ll_c[frozenset(c.items())] is not None
+                                         else float("-inf")))
+        racing_combos = good_combos
+        if self.cfg.racing and len(good_combos) > self.cfg.race_keep and reps > 2:
+            await _all(*(self.measure(c, 2, "confirm-combo (race)") for c in good_combos))
+            ll_c = {frozenset(c.items()): self.loglik(t, c) for c in good_combos}
+            order = sorted(good_combos, key=lambda c: -(ll_c[frozenset(c.items())] if ll_c[frozenset(c.items())]
+                                                        is not None else float("-inf")))
+            best_c = ll_c[frozenset(order[0].items())]
+            n_keep = max(self.cfg.race_keep, (len(order) + 1) // 2)
+            racing_combos = [c for i, c in enumerate(order)
+                             if i < n_keep or (best_c is not None and ll_c[frozenset(c.items())] is not None
+                                               and ll_c[frozenset(c.items())] >= best_c - LL_EQUIVALENT)]
+        await _all(*(self.measure(c, reps, "confirm-combo") for c in racing_combos))
         self.orch.events.emit("round", name="combine", claim=t.claim_id, tried=len(combos), kept=len(good_combos))
 
         # candidates: confirmed singles and combos, closest to the paper first
         candidates = [h.changes for h in confirmed] + [c for c in good_combos if self.units(t, c) >= thr
                                                          and self._significant(t, c)]
-        # consistent with the paper > closes at least half > the rest; evidence-backed first within each tier.
-        # "Consistent" is closes() or an implausibility of at most 2 with the candidate's standard error and
-        # the paper's own uncertainty: closes() alone compares the gap with the candidate's run-to-run spread,
-        # which favours noisy candidates over precise ones (test-v11-01, -10)
-        def tier(c: Changes) -> int:
-            g, g0 = abs(self.gap(t, c)), abs(res.gap_before)
-            i = self.implausibility(t, c)
-            return (0 if self.closes(t, c) or (i is not None and i <= 2)
-                    else 1 if g0 - g >= self.cfg.partial_frac * g0 else 2)
-        if self.cfg.parsimony:
-            # equally good fits (equifinality) are those whose likelihood of the paper's number is within
-            # LL_EQUIVALENT of the best: among them prefer fewer changed knobs, then the smaller change from
-            # the default, then the likelier fit. (v1.1 rounded |gap|/band into buckets, so two fits 0.7
-            # points apart could land in different buckets: test-v11-10 run 2.)
-            ll = {frozenset(c.items()): self.loglik(t, c) for c in candidates}
-            top = max((v for v in ll.values() if v is not None), default=None)
-
-            def tied(c: Changes) -> int:
-                v = ll[frozenset(c.items())]
-                return 0 if top is not None and v is not None and v >= top - LL_EQUIVALENT else 1
-            candidates.sort(key=lambda c: (tier(c), not self._supported(c), tied(c), len(c), self._change_size(c),
-                                           -(ll[frozenset(c.items())] or float("-inf")), sorted(c.items())))
-        else:
-            candidates.sort(key=lambda c: (tier(c), not self._supported(c), abs(self.gap(t, c)), len(c),
-                                           sorted(c.items())))
+        candidates = self._order_candidates(t, candidates, res.gap_before)
         best: ClaimResult | None = None
         for c in candidates[: self.cfg.verify_candidates]:
             trial = await self._verify(t, c, res)
@@ -642,6 +635,17 @@ class GapSearch:
         # a knob whose removal doesn't bring the gap back by more than the noise band is a passenger (the
         # counterfactual's own criterion): once repeats confirm it, verify the configuration without it
         passengers = [k for k, v in r.counterfactual.items() if not v["ok"]]
+        if self.cfg.verify and len(passengers) == len(changes) > 1:
+            # every knob alone gets most of the way (test-v12-08: max_steps=100 alone 2.1% off, lr=0.5 alone
+            # 11.6%, both 1.3%): keep the best single-knob reduction that the extra knobs don't beat by a band
+            subs = sorted(({k: v for k, v in changes.items() if k != drop} for drop in changes),
+                          key=lambda c: abs(self.gap(t, c)) if self.gap(t, c) is not None else float("inf"))
+            for reduced in subs:
+                if await self._not_worse_by_a_band(t, reduced, changes):
+                    trial = await self._verify(t, reduced, parent)
+                    trial.notes.append(f"{sorted(set(changes) - set(reduced))} dropped: each knob of {changes} alone "
+                                       f"gets most of the way, and {reduced} is within one noise band of the full set")
+                    return trial
         if self.cfg.verify and 0 < len(passengers) < len(changes):
             reduced = {k: v for k, v in changes.items() if k not in passengers}
             if await self._not_worse_by_a_band(t, reduced, changes):
@@ -858,6 +862,30 @@ class GapSearch:
                              f"{broken or 'a held-out claim'}; no tested condition matches all claims, so the rest of "
                              "the gap probably lies in code, data or evaluation, which GapFinder doesn't change")
 
+    def _order_candidates(self, t: Target, candidates: list[Changes], gap_before: float) -> list[Changes]:
+        """Best first, the same order on every path (the full search and the budget-exhausted one):
+        consistent with the paper > closes at least half > the rest; evidence-backed first within each tier;
+        then equally good fits (likelihood within LL_EQUIVALENT of the best) by fewest knobs, smallest change
+        from the default, likeliest. "Consistent" is closes() or an implausibility of at most 2 (closes()
+        alone favours noisy candidates: test-v11-01, -10). v1.1 rounded |gap|/band into buckets, so two fits
+        0.7 points apart could land in different buckets (test-v11-10 run 2)."""
+        def tier(c: Changes) -> int:
+            g, g0 = abs(self.gap(t, c)), abs(gap_before)
+            i = self.implausibility(t, c)
+            return (0 if self.closes(t, c) or (i is not None and i <= 2)
+                    else 1 if g0 - g >= self.cfg.partial_frac * g0 else 2)
+        if not self.cfg.parsimony:
+            return sorted(candidates, key=lambda c: (tier(c), not self._supported(c), abs(self.gap(t, c)), len(c),
+                                                     sorted(c.items())))
+        ll = {frozenset(c.items()): self.loglik(t, c) for c in candidates}
+        top = max((v for v in ll.values() if v is not None), default=None)
+
+        def tied(c: Changes) -> int:
+            v = ll[frozenset(c.items())]
+            return 0 if top is not None and v is not None and v >= top - LL_EQUIVALENT else 1
+        return sorted(candidates, key=lambda c: (tier(c), not self._supported(c), tied(c), len(c), self._change_size(c),
+                                                 -(ll[frozenset(c.items())] or float("-inf")), sorted(c.items())))
+
     def _sd(self, t: Target, changes: Changes) -> tuple[float, float, int] | None:
         """(mean, run-to-run SD, n) of the target metric at a configuration. The SD is the configuration's
         own with 3+ runs, else the naive one, never below the noise floor."""
@@ -1016,8 +1044,13 @@ class GapSearch:
     async def _label_partial(self, t: Target, res: ClaimResult) -> None:
         """Budget ran out. Verify the best measured configurations using only runs already made;
         anything that can't be verified that way is NOT given a confident label."""
-        measured = [dict(k) for k in self._runs if k and self.value(dict(k), t.metric) is not None]
-        measured.sort(key=lambda c: (abs(self.gap(t, c)), len(c), sorted(c.items())))
+        # only configurations with their confirmation runs (a screen run alone is not a confirmation), in the
+        # full search's order. v1.2 sorted every measured configuration by |gap| of its median, which let a
+        # noisy closest-by-chance one win (test-v12-08: lr=1 over the true max_steps=100); 7 of 15 v1.2
+        # cause runs ended on this path
+        everything = [dict(k) for k in self._runs if k and self.value(dict(k), t.metric) is not None]
+        measured = [c for c in everything if len(self.measure_ok(c)) >= self.confirm_repeats(t)]
+        measured = self._order_candidates(t, measured, res.gap_before)
         best: ClaimResult | None = None
         rejected: list[str] = []
         for c in measured[: self.cfg.verify_candidates]:
@@ -1041,7 +1074,11 @@ class GapSearch:
         res.attribution = self._attribution(t, {}, res.gap_before, ConfidenceLabel.unexplained, [])
         res.gap_after = res.gap_before
         res.notes.extend(rejected)
-        unverified = [c for c in measured[: self.cfg.verify_candidates] if not any(str(c) in r for r in rejected)]
+        # the closest configuration still short of its confirmation runs, if it is closer than every verified one
+        pending = sorted((c for c in everything if len(self.measure_ok(c)) < self.confirm_repeats(t)),
+                         key=lambda c: (abs(self.gap(t, c)), len(c), sorted(c.items())))
+        unverified = pending[:1] or [c for c in measured[: self.cfg.verify_candidates]
+                                     if not any(str(c) in r for r in rejected)]
         if unverified:
             c = unverified[0]
             res.notes.append(f"closest configuration not verified: {c} (gap {self.gap(t, c):+.1%}, "
@@ -1123,7 +1160,9 @@ def _rank(r: ClaimResult) -> int:
 
 
 def _better(a: ClaimResult, b: ClaimResult) -> bool:
-    """a beats b: a better label rank, then a closer fit."""
+    """a beats b: a better label rank, then a closer fit. (Keeping the earlier, smaller-change candidate on a
+    tie was tried and lost on the dev suite: among tied fits it prefers the smaller change from the default,
+    and the truth is often the larger one, test-v12-01; passenger knobs are handled by the Occam steps.)"""
     ga = abs(a.gap_after) if a.gap_after is not None else float("inf")
     gb = abs(b.gap_after) if b.gap_after is not None else float("inf")
     return (_rank(a), ga) < (_rank(b), gb)

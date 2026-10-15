@@ -4,8 +4,8 @@
     python eval/dev_suite.py --base 100 --score-only
     python eval/dev_suite.py --base 100 --code <worktree at tag v1.1>   # the same suite on older code
 
-Every task whose answers are public is dev data. That's the 4 dev tasks, the v1.0 set (test-gen-*) and
-the v1.1 set (test-v11-*). Each search re-uses a recorded ledger (`harness.py --ledger-from`): no
+Every task whose answers are public is dev data. That's the 4 dev tasks, the v1.0 set (test-gen-*), the
+v1.1 set (test-v11-*) and the v1.2 set (test-v12-*). Each search re-uses a recorded ledger (`harness.py --ledger-from`): no
 model call, $0, local backend. So a change to the search can be checked on all 22 tasks before any new
 sealed test, instead of on the one or two tasks that motivated it.
 
@@ -45,7 +45,7 @@ def plan() -> list[tuple[Path, Path, int]]:
             src = [1, 1, 1]
         elif name.startswith("test-gen-"):
             src = [4, 5, 6]
-        elif name.startswith("test-v11-"):
+        elif name.startswith(("test-v11-", "test-v12-")):
             src = [1, 2, 3]
         else:
             continue
@@ -61,6 +61,8 @@ def answers_dir(task: Path) -> Path | None:
         return GB / "sealed"
     if task.name.startswith("test-v11-"):
         return GB / "sealed-v11"
+    if task.name.startswith("test-v12-"):
+        return GB / "sealed-v12"
     return None  # dev tasks keep answer.json in the task folder
 
 
