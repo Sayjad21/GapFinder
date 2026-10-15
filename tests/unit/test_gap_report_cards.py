@@ -17,7 +17,9 @@ ROOT = Path(__file__).resolve().parents[2]
 TOY = ROOT / "eval" / "toy" / "hidden_knob.yaml"
 QUESTIONS = ["Which experiment changed it?", "What did the paper report?", "What did we measure?",
              "Why do we believe it?", "What remains unknown?"]
-OLD_REPORTS = sorted((ROOT / "demo" / "runs").glob("*/gap_report.json"))
+# demo reports recorded before the card fields existed (newer demo runs, e.g. mc-dropout-v12, already have them)
+OLD_REPORTS = sorted(p for p in (ROOT / "demo" / "runs").glob("*/gap_report.json")
+                     if '"belief"' not in p.read_text(encoding="utf-8"))
 
 
 def _orch(tmp_path, name):

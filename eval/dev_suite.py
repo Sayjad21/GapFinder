@@ -45,7 +45,7 @@ def plan() -> list[tuple[Path, Path, int]]:
             src = [1, 1, 1]
         elif name.startswith("test-gen-"):
             src = [4, 5, 6]
-        elif name.startswith(("test-v11-", "test-v12-")):
+        elif name.startswith(("test-v11-", "test-v12-", "test-v13-")):
             src = [1, 2, 3]
         else:
             continue
@@ -63,6 +63,8 @@ def answers_dir(task: Path) -> Path | None:
         return GB / "sealed-v11"
     if task.name.startswith("test-v12-"):
         return GB / "sealed-v12"
+    if task.name.startswith("test-v13-"):
+        return GB / "sealed-v13"
     return None  # dev tasks keep answer.json in the task folder
 
 

@@ -155,6 +155,48 @@ function MissingSentence({ ms }) {
   );
 }
 
+const KIND_TEXT = {
+  reproduced: "reproduced within noise",
+  in_space: "an explanation within the settings is possible",
+  out_of_space_suspected: "out of space suspected",
+  out_of_space_likely: "out of space likely",
+  insufficient: "not enough measurements",
+};
+
+function Diagnosis({ c }) {
+  const d = c.diagnosis;
+  const eq = (c.equivalent || []).filter((e) => e && e.config);
+  if (!d && eq.length < 2) return null;
+  const tid = c.target.claim_id;
+  const worst = (r) => Math.max(...Object.values(r.I || {}));
+  const fits = ((d?.per_claim || {})[tid] || []).filter((r) => Object.keys(r.config || {}).length);
+  const oos = (d?.kind || "").startsWith("out_of_space");
+  const islands = (d?.islands || []).filter((i) => i.length);
+  return (
+    <div className="sub diagnosis">
+      {eq.length > 1 && <>
+        <h5>Equally good configurations</h5>
+        <p className="small">The target claim can't tell these apart (likelihood within 2 log units, held-out claims no worse);
+          the first is the reported answer.</p>
+        <ul>{eq.map((e, i) => <li key={i}><code>{knobs(e.config)}</code>{i === 0 && " (reported)"}</li>)}</ul>
+      </>}
+      {d && <>
+        <h5>History matching: {KIND_TEXT[d.kind] || d.kind}</h5>
+        <p>{d.text}</p>
+        {oos && fits.length > 1 && <p className="small">Fit {tid} alone (worst claim's implausibility; lowest is least
+          inconsistent): {fits.slice().sort((a, b) => worst(a) - worst(b)).slice(0, 6).map((r, i) =>
+            <span key={i}><code>{knobs(r.config)}</code> ({num(worst(r))}) </span>)}</p>}
+        {islands.length > 1 && <p className="small">{islands.length} separate islands (no single-knob move joins them)</p>}
+        {(d.leads || []).length > 0 && <>
+          <p><b>Leads outside the settings</b> (static code checks, nothing run unless a patch round tested them):</p>
+          <ul>{d.leads.slice(0, 8).map((x, i) => (
+            <li key={i}>{x.family.replace(/_/g, " ")}: {x.detail} <code>{x.file}:{x.line}</code></li>))}</ul>
+        </>}
+      </>}
+    </div>
+  );
+}
+
 function Card({ c }) {
   const a = c.attribution;
   const label = a?.confidence_label || "Reproduced";
@@ -180,6 +222,7 @@ function Card({ c }) {
       <Q q="What did we measure?"><Measured m={c.measured} /></Q>
       <Q q="Why do we believe it?"><Belief b={c.belief} /></Q>
       <Q q="What remains unknown?"><Unknown u={c.unknown} /></Q>
+      <Diagnosis c={c} />
       {c.missing_sentence && <MissingSentence ms={c.missing_sentence} />}
       {c.notes?.length > 0 && <div className="sub"><h5>Notes</h5><ul>{c.notes.map((n, i) => <li key={i}>{n}</li>)}</ul></div>}
     </article>

@@ -496,7 +496,7 @@ runs before deciding.
 
 **Adopted, in order. All free to build and check on the dev suite; MC Dropout checks need sandbox runs:**
 
-1. [ ] **Patch knobs: test out-of-space leads without touching the files** (bottleneck 3; the proposal's
+1. [x] **Built** (`3ae3c44`: hook, runner, patch round, toy end-to-end test; MC Dropout validation in the v1.3 run). **Patch knobs: test out-of-space leads without touching the files** (bottleneck 3; the proposal's
    "ephemeral AST patch knobs").
    - **How:** a static lead from `code_checks.py`, e.g. `net/net.py:70 batch_size = 128`, becomes a knob
      `@ast:net/net.py:70:batch_size`.
@@ -525,7 +525,7 @@ runs before deciding.
      - an integration test on a toy artifact with a hard-coded constant;
      - then an MC Dropout sandbox run (unbilled; needs S's OK): does `batch_size=32`, together with
        `epochx=10, hidden=1`, move Yacht toward the paper?
-2. [ ] **Confirmation escrow** (bottleneck 2).
+2. [x] **Done** (`cd8c8af`; dev suite 42, 41 of 54, about 6% fewer runs). **Confirmation escrow** (bottleneck 2).
    - Screening and combine may use at most about 75% of `max_runs`. The rest is held for the
      configurations most likely by the paper's numbers (target-fit set first) to reach their full
      repeats.
@@ -533,7 +533,7 @@ runs before deciding.
      sealed v1.2 cause runs hit the cap.
    - Check: two dev-suite replicates (cost and accuracy) and a free MC Dropout re-label of the recorded
      runs (`--resume`).
-3. [ ] **Coarse-flat early stop on the ladder** (bottleneck 2; the proposal's monotone early stopping,
+3. [x] **Done** (`cd8c8af`; no planted dev value sat behind flat coarse rungs). **Coarse-flat early stop on the ladder** (bottleneck 2; the proposal's monotone early stopping,
    adapted).
    - The ladder is coarse first (×10, ÷10). If both coarse rungs leave the metric within 0.5 noise bands,
      skip that knob's finer rungs.

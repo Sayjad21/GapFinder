@@ -275,3 +275,34 @@ them and the other public tasks with `eval/dev_suite.py`. v1.2 needs its own new
   - exact correct causes above v1.1's 7/15, or equal with `correct_in_set` clearly higher;
   - balanced accuracy above 0.73;
   - out-of-space diagnosed > 0.
+
+## Amendment for the v1.3 sealed test (final, 2026-10-15, written before its seed exists)
+
+The v1.2 tasks (`test-v12-*`) are public, so they are dev data. The engine changes since `v1.2` were checked on
+all 32 public tasks with `eval/dev_suite.py` (post-hoc).
+
+- **Engine changes since v1.2:**
+  - history-matching tie rule;
+  - combo confirmation ordered by likelihood and raced;
+  - one candidate order on every path, including the budget-exhausted one;
+  - the all-knobs Occam step;
+  - confirmation escrow (25%);
+  - coarse-flat early stop;
+  - patch knobs for out-of-space code leads. On GapBench these are inert: the artifacts have no literal
+    leads outside their flags.
+- **Generator and scoring:** unchanged since v1.2 (same quotas, rival tests, slot artifacts, `correct_in_set`).
+- **Run plan:** as v1.2.
+  - Frozen at git tag `v1.3`, pushed before the seed.
+  - `--set v13`: ids `test-v13-01` to `-10`, answers in `eval/gapbench/sealed-v13/` (git-ignored until the
+    reveal), hash in `sealed-v13.sha256`.
+  - Seed `secrets.token_hex(16)` after the tag; no `--debug`.
+  - The same five arms × 3 runs through `run_arms.py`, `--cap 0.5`, baseline `--steps 40`.
+  - Billed spend capped at $30.00 in total for these processes (about $4 expected on top of $25.26).
+- **Success criteria, stated before the seed:**
+  - confidently wrong 0/30;
+  - exact correct causes ≥ 12/15 (v1.2's level);
+  - balanced accuracy ≥ 0.85;
+  - out-of-space diagnosed > 0.
+
+  The aim is to show that the post-v1.2 changes don't lose ground on a fresh set. The dev suite showed
+  them accuracy-neutral and about 10% cheaper, and better on interactions.
