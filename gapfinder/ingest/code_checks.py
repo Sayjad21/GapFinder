@@ -44,6 +44,8 @@ class Lead:
     code: str
     detail: str
     weight: int = 1
+    name: str = ""  # unexposed_setting: the variable or keyword, and its literal (a patch knob can set it)
+    value: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -109,9 +111,10 @@ def _file_leads(path: Path, rel: str, flags: set[str], root: Path) -> list[Lead]
             name, v = n.targets[0].id, _number(n.value)
             w = _weight(name)
             if v is not None and w and name not in flags and v not in (0.0, 1.0, -1.0):
+                lit = ast.unparse(n.value)
                 out.append(Lead("unexposed_setting", rel, n.lineno, src(n),
                                 f"`{name} = {n.value.value if isinstance(n.value, ast.Constant) else v:g}` is fixed in "
-                                "the code; no flag sets it", w))
+                                "the code; no flag sets it", w, name=name, value=lit))
         if isinstance(n, ast.Call):
             cname = _call_name(n)
             # f(..., batch_size=500)
@@ -122,7 +125,7 @@ def _file_leads(path: Path, rel: str, flags: set[str], root: Path) -> list[Lead]
                     where = "evaluation" if cname.lower() in _EVAL_CALLS else "the call"
                     out.append(Lead("unexposed_setting", rel, n.lineno, src(n),
                                     f"`{cname}(..., {kw.arg}={v:g})`: fixed in {where}; no flag sets it",
-                                    1 if where == "evaluation" else w))
+                                    1 if where == "evaluation" else w, name=kw.arg, value=ast.unparse(kw.value)))
             # np.random.seed(1), torch.manual_seed(0), random_state=42
             if cname in ("seed", "manual_seed", "set_seed") and n.args and _number(n.args[0]) is not None:
                 out.append(Lead("fixed_seed", rel, n.lineno, src(n), f"random seed fixed to {_number(n.args[0]):g}"))

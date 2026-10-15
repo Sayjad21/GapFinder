@@ -91,6 +91,11 @@ class SearchConfig:
     # within this many noise bands of the naive run doesn't get its finer rungs screened (0 = off). On the
     # dev tasks no planted value sat behind flat coarse rungs (smallest coarse movement 0.8 bands).
     coarse_stop_bands: float = 0.5
+    # patch knobs (gapfinder/sandbox/ast_patch.py): when history matching says out of space, the top
+    # static code leads that are literals in imported modules are tested in memory, files untouched
+    patch_knobs: bool = True
+    patch_top_k: int = 3
+    patch_values: int = 6
     forward_anchors: int = 2
     forward_max_pairs: int = 30
     # multi-claim history matching after each search (gapfinder/search/history.py): turns a bare
@@ -460,6 +465,11 @@ class GapSearch:
             self._mde_check(t, res)
         if self.cfg.history_matching:
             self._history_match(t, res)
+            if self.cfg.patch_knobs and (res.diagnosis or {}).get("kind", "").startswith("out_of_space"):
+                try:
+                    await self._patch_round(t, res)
+                except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
+                    res.notes.append(f"patch round stopped early: {exc}")
         if res.attribution is not None:
             res.attribution.hypotheses_tested = len(tried)
         self.orch.events.emit("attribution", claim=t.claim_id, status=res.status,
@@ -838,6 +848,70 @@ class GapSearch:
                                       f"screen {h.knob}={h.value} (retry after infra failure)") for h in again))
             tried.update(frozenset(h.changes.items()) for h in retry)
         return retry  # the same-value retries are already in the caller's list
+
+    async def _patch_round(self, t: Target, res: ClaimResult) -> None:
+        """Out of space: test the top static leads (hard-coded literals in imported modules) as patch knobs.
+        A configuration with a patch that fits every claim, where no setting did, is confirmed and verified
+        like any other; it is reported as a code change."""
+        from gapfinder.sandbox import ast_patch
+        from gapfinder.sandbox.spec import Knob
+        from gapfinder.search.history import diagnose
+        from gapfinder.search.hypotheses import patch_values
+
+        root = self.spec.code_root()
+        leads = [x for x in (res.diagnosis or {}).get("leads") or []
+                 if x["family"] == "unexposed_setting" and x.get("name") and x.get("value")]
+        leads = [x for x in leads if root is not None and not ast_patch.entry_script(root / x["file"])]
+        leads = leads[: self.cfg.patch_top_k]
+        if not leads:
+            return
+        fits = [r for r in (res.diagnosis.get("per_claim") or {}).get(t.claim_id, []) if r["config"]]
+        base = min(fits, key=lambda r: max(r["I"].values()))["config"] if fits else {}
+        base = {k: v for k, v in base.items() if not ast_patch.is_patch(k)}
+        configs = []
+        for x in leads:
+            k = ast_patch.knob_name(x["file"], x["line"], x["name"])
+            self.spec.knobs.setdefault(k, Knob(layer="environment", default=str(x["value"]), env=True))
+            for v in patch_values(x["name"], str(x["value"]))[: self.cfg.patch_values]:
+                configs.append({k: v})
+                if base:
+                    configs.append({**base, k: v})
+        self.orch.events.emit("note", msg=f"{t.claim_id}: patch round: {len(leads)} code lead(s), {len(configs)} "
+                                          f"configurations (base {base or 'naive'})")
+        await _all(*(self.measure(c, 1, "patch screen") for c in configs))
+
+        def rediagnose():
+            claims = [(t.claim_id, t.metric, t.paper_value)] + [
+                (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out and h.metric != t.metric]
+            runs = {tuple(sorted(k)): [b.parsed_metrics for b in v if b.status == BranchStatus.succeeded]
+                    for k, v in self._runs.items()}
+            return diagnose({k: v for k, v in runs.items() if v}, claims, t.claim_id,
+                            paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc)
+
+        d = rediagnose()
+        joint = [r for r in d.joint if any(ast_patch.is_patch(k) for k in r["config"])]
+        if not joint:
+            res.notes.append(f"patch round: none of {len(configs)} code-patch configurations fits every claim")
+            return
+        c = joint[0]["config"]
+        await self.measure(c, self.confirm_repeats(t), "patch confirm")
+        d = rediagnose()
+        if not any(r["config"] == c for r in d.joint):
+            res.notes.append(f"patch round: {c} fitted every claim on one run, not after repeats")
+            return
+        trial = await self._verify(t, c, res)
+        if _rank(trial) >= _LABEL_RANK[ConfidenceLabel.unexplained.value]:
+            res.notes.append(f"patch round: {c} fits every claim but did not pass verification")
+            return
+        patches = {k: v for k, v in c.items() if ast_patch.is_patch(k)}
+        for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay"):
+            setattr(res, f, getattr(trial, f))
+        res.status = "searched"
+        res.diagnosis = {**d.to_dict(), "leads": res.diagnosis.get("leads")}
+        res.notes.extend(trial.notes)
+        res.notes.append("explained with a code patch (tested in memory, no file edited): " + "; ".join(
+            f"{ast_patch.parse(k)[0]} line {ast_patch.parse(k)[1]}: {ast_patch.parse(k)[2]} = "
+            f"{self.spec.knobs[k].default} -> {v}" for k, v in patches.items()))
 
     def _mde_check(self, t: Target, res: ClaimResult) -> None:
         """Unexplained -> Inconclusive when the gap is below the minimum detectable effect."""

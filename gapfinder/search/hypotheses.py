@@ -92,6 +92,29 @@ def coverage_values(knob, name: str = "") -> list[str]:
     return vals
 
 
+_SIZE_NAME = re.compile(r"batch|size|hidden|units|width|dim|channels|heads|layers|_n$|^n_", re.I)
+
+
+def patch_values(name: str, literal: str) -> list[str]:
+    """Candidate values for a patch knob (a hard-coded literal): powers of two first for size-like integer
+    names (batch_size 128 -> 64, 256, 32, 512, ...; papers state batch sizes as powers of two), then the
+    coverage ladder."""
+    from gapfinder.sandbox.spec import Knob
+
+    d = literal.strip()
+    out: list[str] = []
+    if re.fullmatch(r"\d+", d) and int(d) >= 2 and _SIZE_NAME.search(name):
+        x = int(d)
+        for f in (2, 4, 8, 16):
+            for v in (x // f, x * f):
+                if v >= 1 and str(v) != d and str(v) not in out:
+                    out.append(str(v))
+    for v in coverage_values(Knob(layer="environment", default=d), name):
+        if v not in out and v != d and not _same_number(v, d):
+            out.append(v)
+    return out
+
+
 def _with_zero(vals: list[str]) -> list[str]:
     """Insert the boundary value 0.0 after the two coarsest candidates."""
     return vals[:2] + ["0.0"] + [v for v in vals[2:] if not _same_number(v, "0")]
