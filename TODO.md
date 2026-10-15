@@ -303,6 +303,22 @@ code differ by about ±2 correct runs.
   - **Equifinal ladder values on noisy RL** (`lr=1` on the v1.2 decoy): the remaining GapBench miss
     pattern.
 
+**After v1.2, engine follow-ups (2026-10-15, commit `1c51bf3`).** Dev suite on 32 public tasks (now
+including the v1.2 set), two replicates each, post-hoc:
+
+| Code | Correct causes (of 54) | Interaction runs correct (of 21) | Abstentions (of 42) | Search runs |
+|---|---|---|---|---|
+| v1.2 tag | 42, 42 | 10, 10 | 42, 42 | ~9,900 |
+| + combo order/race, one candidate order on every path, all-knobs Occam | 42, 41 (+1-2 partial) | 14, 12 | 42, 42 | ~9,500 |
+| tried and reverted: keep the earlier candidate on a label tie | 37, 41 | n/a | 42 | n/a |
+
+(`1c51bf3`'s message says "26 -> 32 of 36" for interactions; the table above has the right numbers.)
+- **Root cause found:** 7 of the 15 v1.2 sealed cause runs had ended on the budget-exhausted path, which
+  sorted configurations by median gap and bypassed phase 3's ordering. That is how `lr=1` won on
+  test-v12-08.
+- **The sealed v1.2 misses on test-v12-08 were largely invocation noise:** the v1.2 tag scores it 6/6 on
+  the dev suite.
+
 **Order:** the free foundation first, then fixes checked on dev data, then one new sealed test. All
 v1.0 and v1.1 tasks are dev data now. Nothing here needs paid model calls except the final sealed test
 (about $4).
