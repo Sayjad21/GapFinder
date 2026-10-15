@@ -61,15 +61,19 @@ function stable(s) {
   return m == null ? "n/a" : (m * 100).toFixed(0) + "%";
 }
 
+// gapbench_test_v13.json -> "v1.3"; the two v1.0 runs were files v1 and v2
+const testName = (run) => (run >= 10 ? `sealed test, v${Math.floor(run / 10)}.${run % 10}`
+  : run === 2 ? "test set, run 2 (frozen v1.0)" : run ? `test set, run ${run}` : "test set");
+
 function Split({ name, data }) {
   const arms = Object.entries(data.summary || {});
   return (
     <div className="panel wide">
-      <h3>{name === "dev" ? "Dev set" : "Test set" + (data.run ? ", run " + data.run : "") + (data.run === 2 ? " (frozen v1.0)" : "")} <small>({data.file})</small></h3>
+      <h3>{name === "dev" ? "Dev set" : testName(data.run).replace(/^./, (x) => x.toUpperCase())} <small>({data.file})</small></h3>
       {name === "dev" && (
         <p className="note">Dev tasks are the ones GapFinder was tuned on, so these numbers show the method works,
-          not how well it generalises. The test set is 8 tasks drawn by a sealed generator and run twice (run 2 on the
-          frozen v1.0 tag); both runs are shown below.</p>
+          not how well it generalises. Each test set is 10 tasks drawn by a sealed generator from a seed made after
+          that version's git tag; the latest two are shown below, and every earlier one is in eval/results.</p>
       )}
       <table>
         <thead><tr><th>Arm</th><th>Tasks</th><th>Solved (median run)</th><th>Solved (best run)</th><th>False attribution</th><th>Median $/task</th><th>Median wall</th></tr></thead>
