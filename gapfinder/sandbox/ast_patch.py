@@ -118,6 +118,49 @@ if _E:
 '''
 
 
+RUNNER_SOURCE = r'''
+# GapFinder patch runner (gapfinder/sandbox/ast_patch.py): `python -m gf_patch_run script.py args...` runs the
+# script as __main__ with the GF_AST_PATCH entries for that file applied in memory (the import hook handles
+# imported modules; the entry script is not imported, so it needs this).
+import ast, os, runpy, sys
+import sitecustomize as _hook  # the import hook, from the same directory
+
+def main():
+    script, args = sys.argv[1], sys.argv[2:]
+    path = os.path.abspath(script)
+    rel = path.replace("\\", "/")
+    mine = [e for e in _hook._entries() if rel == e[0] or rel.endswith("/" + e[0])]
+    sys.argv = [script] + args
+    sys.path[0] = os.path.dirname(path)
+    if not mine:
+        runpy.run_path(path, run_name="__main__")
+        return
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), path)
+    code = compile(_hook.patch_tree(tree, mine), path, "exec")
+    g = {"__name__": "__main__", "__file__": path, "__builtins__": __builtins__}
+    exec(code, g)
+
+main()
+'''
+
+_PY_SCRIPT = re.compile(r'(?P<py>"?\$\{PYTHON:-python3?\}"?|\$PYTHON|\bpython3?(?:\.\d+)?)(?P<sp>\s+)(?P<script>[\w./-]+\.py)\b')
+
+
+def direct_entry(command: str, rel: str) -> bool:
+    """The run command invokes this script directly (python script.py), so the runner can patch it."""
+    return any(m.group("script").lstrip("./") == rel.lstrip("./") for m in _PY_SCRIPT.finditer(command))
+
+
+def wrap_command(command: str, rels: set[str]) -> str:
+    """Rewrite `python script.py ...` to `python -m gf_patch_run script.py ...` for patched entry scripts."""
+    def sub(m):
+        if m.group("script").lstrip("./") in {r.lstrip("./") for r in rels}:
+            return f"{m.group('py')} -m gf_patch_run{m.group('sp')}{m.group('script')}"
+        return m.group(0)
+    return _PY_SCRIPT.sub(sub, command)
+
+
 def is_patch(knob: str) -> bool:
     return knob.startswith(PREFIX)
 
@@ -139,7 +182,12 @@ def run_parts(changes: dict[str, str]) -> tuple[dict[str, str], dict[str, bytes]
     entry = _SEP.join(f"{rel}:{line}:{name}={value}" for k, value in sorted(patches.items())
                       for rel, line, name in [parse(k)])
     prefix = f'export PYTHONPATH="${{WORK:-$PWD}}/{HOOK_DIR}${{PYTHONPATH:+:$PYTHONPATH}}"; '
-    return {ENV: entry}, {f"{HOOK_DIR}/sitecustomize.py": HOOK_SOURCE.encode()}, prefix
+    files = {f"{HOOK_DIR}/sitecustomize.py": HOOK_SOURCE.encode(), f"{HOOK_DIR}/gf_patch_run.py": RUNNER_SOURCE.encode()}
+    return {ENV: entry}, files, prefix
+
+
+def patched_files(changes: dict[str, str]) -> set[str]:
+    return {parse(k)[0] for k in changes if is_patch(k)}
 
 
 def apply_source(src: str, line: int, name: str, value: str) -> str:

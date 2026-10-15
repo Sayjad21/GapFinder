@@ -878,7 +878,7 @@ class GapSearch:
         if not d.kind.startswith("out_of_space"):
             return
         leads = [x for x in code_checks(root, set(self.spec.knobs)) if x.family == "unexposed_setting" and x.value
-                 and not ast_patch.entry_script(root / x.file)]
+                 and (not ast_patch.entry_script(root / x.file) or ast_patch.direct_entry(self.spec.run.command, x.file))]
         if leads:
             self._patch_reserve = int(self.cfg.max_runs * self.cfg.patch_budget_frac)
             self.orch.events.emit("note", msg=f"{t.claim_id}: out of space after the combine round; {self._patch_reserve} "
@@ -896,7 +896,9 @@ class GapSearch:
         root = self.spec.code_root()
         leads = [x for x in (res.diagnosis or {}).get("leads") or []
                  if x["family"] == "unexposed_setting" and x.get("name") and x.get("value")]
-        leads = [x for x in leads if root is not None and not ast_patch.entry_script(root / x["file"])]
+        # imported modules through the import hook; entry scripts only when the command runs them directly
+        leads = [x for x in leads if root is not None and (not ast_patch.entry_script(root / x["file"])
+                                                           or ast_patch.direct_entry(self.spec.run.command, x["file"]))]
         leads = leads[: self.cfg.patch_top_k]
         if not leads:
             return

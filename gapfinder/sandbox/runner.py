@@ -139,6 +139,7 @@ class Orchestrator:
         penv, pfiles, prefix = ast_patch.run_parts(changes)
         if penv:
             env = {k: v for k, v in env.items() if not ast_patch.is_patch(k)} | penv
+            cmd = ast_patch.wrap_command(cmd, ast_patch.patched_files(changes))  # entry scripts via the runner
             cmd, files = prefix + cmd, {**(files or {}), **pfiles}
         branch = Branch(id=bid, parent_checkpoint=parent, knob_changes=changes, command=cmd, run_tag=run_tag,
                         status=BranchStatus.running, note=label)

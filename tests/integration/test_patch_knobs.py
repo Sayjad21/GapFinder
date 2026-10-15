@@ -64,3 +64,19 @@ async def test_the_patch_round_keeps_its_budget_share_when_runs_are_tight(tmp_pa
     notes = [e.get("msg", "") for e in orch.events.read() if e.get("type") == "note"]
     assert any("held for a patch round" in n for n in notes)
     assert r.changes == {ast_patch.knob_name("model.py", 2, "lengthscale"): "0.1"}, (r.changes, r.notes)
+
+
+async def test_a_literal_in_the_entry_script_is_patched_through_the_runner(tmp_path):
+    """The command runs bench.py directly, so its own literal (tau = 1.5) can be patched via gf_patch_run."""
+    art = ROOT / "eval" / "toy" / "patch_main"
+    before = (art / "bench.py").read_bytes()
+    spec = HarnessSpec.load_yaml(ROOT / "eval" / "toy" / "patch_main.yaml")
+    spec.source = str(art)
+    orch = Orchestrator(LocalBackend(tmp_path / "sbx"), spec, EventLog(tmp_path / "ev.jsonl"))
+    targets = [Target("C1", "score", 300.0), Target("C2", "aux", 450.0, held_out=True)]  # tau = 3.0
+    a = Assumption(id="A1", knob="alpha", layer="config", paper_value="unstated", candidate_values=["2.0"],
+                   evidence=[], prior_score=0.5, status="unstated")
+    s = GapSearch(orch, targets, [a], SearchConfig(max_runs=120))
+    [r] = await s.run()
+    assert r.changes == {ast_patch.knob_name("bench.py", 4, "tau"): "3"}, (r.changes, r.notes)
+    assert (art / "bench.py").read_bytes() == before
