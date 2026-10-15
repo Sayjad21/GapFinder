@@ -49,3 +49,18 @@ async def test_an_out_of_space_literal_is_found_as_a_patch_knob(tmp_path):
     assert r.attribution.confidence_label in ("Fits but unsupported", "Partially explained", "Explained")
     assert any("explained with a code patch" in n and "lengthscale = 0.01 -> 0.1" in n for n in r.notes)
     assert (ART / "model.py").read_bytes() == before  # nothing on disk changed
+
+
+async def test_the_patch_round_keeps_its_budget_share_when_runs_are_tight(tmp_path):
+    paper = _paper(tmp_path)
+    spec = HarnessSpec.load_yaml(SPEC)
+    spec.source = str(ART)
+    orch = Orchestrator(LocalBackend(tmp_path / "sbx"), spec, EventLog(tmp_path / "ev.jsonl"))
+    targets = [Target("C1", "score", paper["score"]), Target("C2", "aux", paper["aux"], held_out=True)]
+    a = Assumption(id="A1", knob="alpha", layer="config", paper_value="unstated", candidate_values=["2.0"],
+                   evidence=[], prior_score=0.5, status="unstated")
+    s = GapSearch(orch, targets, [a], SearchConfig(max_runs=40))
+    [r] = await s.run()
+    notes = [e.get("msg", "") for e in orch.events.read() if e.get("type") == "note"]
+    assert any("held for a patch round" in n for n in notes)
+    assert r.changes == {ast_patch.knob_name("model.py", 2, "lengthscale"): "0.1"}, (r.changes, r.notes)

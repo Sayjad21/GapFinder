@@ -96,6 +96,9 @@ class SearchConfig:
     patch_knobs: bool = True
     patch_top_k: int = 3
     patch_values: int = 6
+    # share of max_runs held back for the patch round once the claims already look out of space after the
+    # combine round (MC Dropout v1.3: the patch round ran last and got 5 of its 36 configurations)
+    patch_budget_frac: float = 0.15
     forward_anchors: int = 2
     forward_max_pairs: int = 30
     # multi-claim history matching after each search (gapfinder/search/history.py): turns a bare
@@ -224,6 +227,7 @@ class GapSearch:
             self.assumptions[k] = head.model_copy(update={"evidence": evidence, "candidate_values": cands})
         self._runs: dict[frozenset, list[Branch]] = {}
         self.untestable: list[tuple[str, str]] = []  # (knob, value) above the spec's cost limit
+        self._patch_reserve = 0  # runs held back for the patch round (set after the combine round)
         self._coarse: set[tuple[str, str]] = set()  # coarse ladder rungs (screened first)
         self._fine: set[tuple[str, str]] = set()  # finer rungs (screened only if the coarse ones move the metric)
         self.runs_used = 0
@@ -241,7 +245,10 @@ class GapSearch:
             # every call: one retry for a transient failure, none once it failed twice and never ran
             need = 0 if not ok and fails >= 2 else max(0, min(need, n + 1 - len(have)))
         if need > 0:
-            if self.cfg.max_runs is not None and self.runs_used + need > self.cfg.max_runs:
+            cap = self.cfg.max_runs
+            if cap is not None and self._patch_reserve and not label.startswith("patch"):
+                cap -= self._patch_reserve  # the patch round's share
+            if cap is not None and self.runs_used + need > cap:
                 raise RunBudgetExceeded(f"run budget of {self.cfg.max_runs} reached "
                                         f"(wanted {need} more run(s) of {dict(changes) or 'naive'} for {label!r})")
             self.runs_used += need
@@ -629,6 +636,7 @@ class GapSearch:
                                                and ll_c[frozenset(c.items())] >= best_c - LL_EQUIVALENT)]
         await _all(*(self.measure(c, reps, "confirm-combo") for c in racing_combos))
         self.orch.events.emit("round", name="combine", claim=t.claim_id, tried=len(combos), kept=len(good_combos))
+        self._reserve_for_patches(t)
 
         # candidates: confirmed singles and combos, closest to the paper first
         candidates = [h.changes for h in confirmed] + [c for c in good_combos if self.units(t, c) >= thr
@@ -849,6 +857,33 @@ class GapSearch:
             tried.update(frozenset(h.changes.items()) for h in retry)
         return retry  # the same-value retries are already in the caller's list
 
+    def _reserve_for_patches(self, t: Target) -> None:
+        """If the claims already look out of space and the code has literal leads, hold patch_budget_frac of
+        the budget for the patch round, so verification can't spend it first."""
+        if not (self.cfg.patch_knobs and self.cfg.history_matching and self.cfg.max_runs and self.cfg.patch_budget_frac):
+            return
+        root = self.spec.code_root()
+        if root is None or self._patch_reserve:
+            return
+        from gapfinder.ingest.code_checks import code_checks
+        from gapfinder.sandbox import ast_patch
+        from gapfinder.search.history import diagnose
+
+        claims = [(t.claim_id, t.metric, t.paper_value)] + [
+            (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out and h.metric != t.metric]
+        runs = {tuple(sorted(k)): [b.parsed_metrics for b in v if b.status == BranchStatus.succeeded]
+                for k, v in self._runs.items()}
+        d = diagnose({k: v for k, v in runs.items() if v}, claims, t.claim_id,
+                     paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc)
+        if not d.kind.startswith("out_of_space"):
+            return
+        leads = [x for x in code_checks(root, set(self.spec.knobs)) if x.family == "unexposed_setting" and x.value
+                 and not ast_patch.entry_script(root / x.file)]
+        if leads:
+            self._patch_reserve = int(self.cfg.max_runs * self.cfg.patch_budget_frac)
+            self.orch.events.emit("note", msg=f"{t.claim_id}: out of space after the combine round; {self._patch_reserve} "
+                                              f"runs held for a patch round ({len(leads)} literal code leads)")
+
     async def _patch_round(self, t: Target, res: ClaimResult) -> None:
         """Out of space: test the top static leads (hard-coded literals in imported modules) as patch knobs.
         A configuration with a patch that fits every claim, where no setting did, is confirmed and verified
@@ -868,14 +903,20 @@ class GapSearch:
         fits = [r for r in (res.diagnosis.get("per_claim") or {}).get(t.claim_id, []) if r["config"]]
         base = min(fits, key=lambda r: max(r["I"].values()))["config"] if fits else {}
         base = {k: v for k, v in base.items() if not ast_patch.is_patch(k)}
-        configs = []
+        with_base, alone = [], []
         for x in leads:
             k = ast_patch.knob_name(x["file"], x["line"], x["name"])
             self.spec.knobs.setdefault(k, Knob(layer="environment", default=str(x["value"]), env=True))
-            for v in patch_values(x["name"], str(x["value"]))[: self.cfg.patch_values]:
-                configs.append({k: v})
-                if base:
-                    configs.append({**base, k: v})
+            vals = patch_values(x["name"], str(x["value"]))[: self.cfg.patch_values]
+            with_base.append([{**base, k: v} for v in vals] if base else [])
+            alone.append([{k: v} for v in vals])
+
+        def rr(groups):  # round robin over leads: every lead gets its first values first
+            return [g[i] for i in range(max((len(g) for g in groups), default=0)) for g in groups if i < len(g)]
+        configs = rr(with_base) + rr(alone)
+        if self._patch_reserve:  # leave room for the confirmation repeats
+            room = max(0, self.cfg.max_runs - self.runs_used - self.confirm_repeats(t))
+            configs = configs[:room]
         self.orch.events.emit("note", msg=f"{t.claim_id}: patch round: {len(leads)} code lead(s), {len(configs)} "
                                           f"configurations (base {base or 'naive'})")
         await _all(*(self.measure(c, 1, "patch screen") for c in configs))
