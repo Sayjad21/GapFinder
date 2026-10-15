@@ -84,15 +84,16 @@ leaves room for pauses. The windows below add up to 2:52. Time each segment when
 ### 6. 1:44 to 2:12, verification and the verdict
 - **On screen:** the Gap Report tab, RusKey run. Show the C5 card with the label "Unexplained", then
   the held-out claim line and the "Closest configurations" table. If time allows, a 3-second cut to
-  the MC Dropout post-hoc report (`eval/external/mc-dropout/posthoc/run/gap_report.md`).
+  the featured MC Dropout v1.3 demo run (Gap Report tab): the label with `epochx=10, hidden=1`, the
+  "History matching: out of space suspected" section and its code leads.
 - **Caption:** "Unexplained" in the card's own colour. For MC Dropout: "External paper, documented
   cause, not blind".
 - **Narration:** "Survivors are combined, then verified. Revert the change and the gap
   must come back. Held-out claims must not get worse. On RusKey, the setting that fixes two ratios
-  breaks the third, so the verdict is Unexplained. On a paper with a documented cause, it found
-  nothing and blamed nothing, and when we handed it the documented values, its checks rejected them."
+  breaks the third, so the verdict is Unexplained. On MC Dropout it names the documented settings,
+  says the rest of the gap is outside them, and points at the lines of code where it lives."
 - **Source:** [FINDINGS.md](../papers/ruskey/FINDINGS.md) (final-regime run) and
-  [RESULT.md](../eval/external/mc-dropout/RESULT.md) (post-hoc diagnostic).
+  [RESULT_v13.md](../eval/external/mc-dropout/RESULT_v13.md) (v1.3, not blind).
 
 ### 7. 2:12 to 2:39, the blind test
 - **On screen:** the Scoreboard tab: the test-set table and the trust matrix for `gapfinder` and

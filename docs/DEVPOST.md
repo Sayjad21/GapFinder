@@ -109,7 +109,30 @@ All numbers below link to the file they come from. The test protocol was committ
 run ([PROTOCOL.md](https://github.com/Sayjad21/GapFinder/blob/main/eval/gapbench/PROTOCOL.md)). With
 8 tasks, nothing here is a conclusive win, and we do not claim one.
 
-### GapBench blind test, run twice
+### Update: three more sealed tests (v1.1-v1.3)
+
+After v1.0 we improved:
+- which values get tried (coverage);
+- how equally good fits are chosen and reported (selection);
+- what "Unexplained" says (diagnosis).
+
+Each version was frozen with a git tag, and only then was a new sealed set generated. The seed was made
+after the tag, and the pre-registration is in `eval/gapbench/PROTOCOL.md`. 10 tasks, 3 runs per arm.
+
+| Sealed test | GapFinder confidently wrong | Correct causes (of 15) | Correct abstentions (of 15) | Balanced accuracy | Coding agent confidently wrong |
+|---|---|---|---|---|---|
+| v1.1 | 0/30 | 7 (+1 partial) | 15 | 0.73 | 19/30 |
+| v1.2 | 0/30 | 12 | 15 | 0.90 | 8/30 |
+| v1.3 | 0/30 | 9 (+1 partial) | 15 | 0.80 | 22/30 |
+
+- **Safety:** 0 confidently wrong in 90 blind runs; the coding agent was confidently wrong in 49 of 90.
+- **The misses** are interactions where several settings fit the paper's numbers equally well. GapFinder
+  now reports those configurations as a set instead of pretending to know.
+- **v1.3 missed two of its four pre-registered accuracy criteria**, and we report that as it is.
+- **Small samples:** each test has 15 cause runs, so the accuracy differences between versions are
+  within noise. The safety result is the robust one.
+
+### GapBench blind test, run twice (v1.0)
 
 Eight tasks drawn at random by a sealed generator, from a seed created after GapFinder was frozen
 (git tag `pre-tasks-1`). Three runs of each arm per task, 24 runs per arm. We ran the whole test set
@@ -185,6 +208,23 @@ reproduction (100 Monte Carlo passes, 3 splits). Full write-up:
 - **Caveats:** semi-blind, a 3-split scaled reproduction, and the arms ran across local Docker and
   Sandboxes because a Sandboxes operation is capped at 3,600 s (deviations are in
   [FROZEN.md](https://github.com/Sayjad21/GapFinder/blob/main/eval/external/mc-dropout/FROZEN.md)).
+
+**MC Dropout on v1.3 (still not blind).** v1.3 reads the code as well as the paper. That gave it:
+- the multiplier factor 10 for `--epochx`, and the boundary value 1 for `--hidden`;
+- a confirmation budget held back for the likeliest configurations.
+
+The result:
+- **It names the documented cause, `epochx=10, hidden=1`.** It labels it "explains the target, conflicts
+  with the held-out claim", and its history matching says the rest is out of space.
+- **Its static code leads point at the documented out-of-flag differences:** the per-split grid search,
+  `batch_size = 128` and `T = 10000`.
+- **A patch round then tested three hard-coded constants in memory on the real sandbox,** with no file
+  edited:
+  - only the training batch size moves the held-out Yacht claim (with the pair, batch 64 gives Yacht
+    1.18 against the paper's 1.11);
+  - no patch fits both claims within noise, so none was adopted. The remaining documented cause, a grid
+    search tuned per split, is a loop, not a constant.
+- Details: `eval/external/mc-dropout/RESULT_v13.md`.
 
 ### RusKey, the founder case
 
