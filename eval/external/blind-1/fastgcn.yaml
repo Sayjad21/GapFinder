@@ -1,0 +1,33 @@
+# blind-1 harness spec: FastGCN (Chen, Ma & Xiao, ICLR 2018), paper Table 5 (original Cora/Pubmed split).
+# Written by the runner after the `blind-1` tag and before the reveal; see HARNESS.md for every choice.
+#
+# Knobs: every flag the two entry scripts define (tf.app.flags; both scripts define the same nine), with
+# the code's own defaults, none hand-picked. `dataset` is not a knob: each claim is about one dataset, so
+# every cell runs both datasets and reports one metric per (script, dataset).
+#
+# One cell = the four Table 5 FastGCN runs at once (transductive and inductive script x Cora and Pubmed),
+# each the unmodified script, in parallel on the VM's 4 cores. Seeds: the scripts fix seed 123; the image's
+# gf_seed_hook offsets it by a hash of RUN_TAG so repeats differ (HARNESS.md, "Noise between repeats").
+name: fastgcn
+# Token Factory Sandboxes checkpoint built by HARNESS.md's recipe (python:3.7-slim, TF 1.15.5, repo at
+# b8e6e64 fetched from GitHub, seed hook in site-packages). Export GF_B1_BASE=<checkpoint id>.
+base: ${GF_B1_BASE}
+# A local clone at b8e6e64, read only for the static out-of-space code checks. Export GF_B1_SOURCE.
+source: ${GF_B1_SOURCE}
+run:
+  command: 'export GF_SEED_FROM_RUN_TAG=1 OMP_NUM_THREADS=1 TF_CPP_MIN_LOG_LEVEL=2; mkdir -p out; A="--model {model} --learning_rate {learning_rate} --epochs {epochs} --hidden1 {hidden1} --dropout {dropout} --weight_decay {weight_decay} --early_stopping {early_stopping} --max_degree {max_degree}"; python pubmed-original_transductive_FastGCN.py --dataset cora $A > out/trans_cora.log 2>&1 & python pubmed-original_transductive_FastGCN.py --dataset pubmed $A > out/trans_pubmed.log 2>&1 & python pubmed-original_inductive_FastGCN.py --dataset cora $A > out/ind_cora.log 2>&1 & python pubmed-original_inductive_FastGCN.py --dataset pubmed $A > out/ind_pubmed.log 2>&1 & wait; bash gf_harness/emit.sh'
+  output: stdout
+  format: kv
+  timeout: 3600
+knobs:
+  model:          {layer: config, default: "gcn_mix"}
+  learning_rate:  {layer: config, default: "0.01"}
+  # cost cap only (fixed before any run): 20x the default; a Pubmed epoch is the slow part of a cell
+  epochs:         {layer: config, default: "100", max: 2000}
+  hidden1:        {layer: config, default: "16"}
+  dropout:        {layer: config, default: "0.0"}
+  weight_decay:   {layer: config, default: "5e-4"}
+  early_stopping: {layer: config, default: "10"}
+  max_degree:     {layer: config, default: "3"}
+allowed_paths: ["out/"]
+metrics: [trans_cora_acc, trans_pubmed_acc, ind_cora_acc, ind_pubmed_acc]
