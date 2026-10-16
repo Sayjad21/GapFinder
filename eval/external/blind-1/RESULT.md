@@ -93,7 +93,34 @@ chosen *after* the reveal, so it is not evidence; it shows what the held-out cho
   the key from. The runner also knew a few neutral facts from the sealer's hand-back (HARNESS.md).
 - **One paper.** The harness (which rows share a knob) was the runner's choice, made before the reveal.
 
-## What to change (post-reveal; a later version, not blind-1)
+## Fixes made after the reveal, and what they do on FastGCN (post-hoc, not counted)
+
+| Fix | Commit |
+|---|---|
+| 1. The repo map reads absl / `tf.app.flags` (multi-line calls, keyword arguments, `DEFINE_enum` choices; a line regex for files that don't parse) | `5fdae23` |
+| 2. Ledger names map to spec knobs by their core words (`num_epochs` → `epochs`, `FLAGS.hidden1` → `hidden1`), and spec knobs no assumption names get a **fallback round**. It runs only when the ledger's knobs give no confident answer, so they don't take budget from the ledger's leads. | `e232bc9`, this commit |
+| 3. Code defaults and paper-vs-code status are re-read from the code when it is available. A "code differs" the code can't confirm never yields "Paper-artifact inconsistency". | `e232bc9` |
+| 4. `"tuned_separately": true` on a held-out claim: it is measured and shown as a NOTE, it isn't a veto, and it is left out of the joint history-matching fit | `4f763df` |
+| 5. A fallback knob gets the paper's sentences that name it, matched by its whole name ("learning rate"), as evidence | this commit |
+
+Post-hoc runs, all with the inductive rows marked `tuned_separately` and the target and transductive Pubmed
+held-out unchanged:
+- **`posthoc-fixed/` (fixes 1-4, a fresh ledger):**
+  - The fresh ledger, which now saw the flags, came out different: 9 descriptive assumptions, and none
+    named `learning_rate`. **Only the fallback round tested it.**
+  - The label was "Fits but unsupported: `learning_rate=0.002`", with 0.001 in the set of equally good
+    values.
+- **`posthoc-fixed2/` (fixes 1-5, resumed from those runs):**
+  - **Explained, `learning_rate=0.001`**, gap -2.4% → -0.2%.
+  - Evidence: "We swept learning rate in the set {0.01, 0.001, 0.0001}".
+  - The two inductive rows are shown as notes (worse under 0.001, as the sealer also measured).
+  - It also lists 11 configurations the target alone can't tell apart (e.g. `epochs=10`): the
+    documented answer is the simplest of them, not the only fit.
+
+These runs were made with the answer known, so they show that the fixes work as designed. They are not
+blind evidence. That needs blind-2.
+
+## What to change (written at the reveal; done above, except where noted)
 
 1. **Read `tf.app.flags` / absl flags in the repo map:** quoted names and `DEFINE_float` / `DEFINE_integer`.
 2. **Screen every spec knob, even if no assumption names it,** with code-derived values. Also map

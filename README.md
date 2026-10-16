@@ -186,8 +186,14 @@ already handle.
 - One blind real paper so far (FastGCN: missed, not confidently wrong), and its answer was sealed by a
   separate AI model, not a person. MC Dropout was not blind: its answer key was revealed before v1.1.
   Protocol: [BLIND_CASE.md](eval/external/BLIND_CASE.md).
-- The repo map reads argparse and C++ gflags, but not Python `tf.app.flags` / absl flags. Spec knobs that
-  no ledger assumption names are not screened (found on FastGCN).
+- **Fixed after blind-1, not yet tested blind:**
+  - the repo map didn't read `tf.app.flags` / absl;
+  - spec knobs no assumption named were never screened;
+  - guessed code defaults weren't checked;
+  - rows tuned separately acted as vetoes.
+
+  With the fixes, a post-hoc FastGCN run names the documented `learning_rate=0.001` as Explained
+  ([RESULT.md](eval/external/blind-1/RESULT.md)). That run had the answer in view; blind-2 is the test.
 - Patch knobs test literals in Python modules only. A loop, a grid search or a data pipeline can't be
   patched this way.
 - CPU only: Sandboxes VMs have 4 vCPUs and 3.9 GB, so GPU papers and the paper's full data scale

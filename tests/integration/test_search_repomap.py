@@ -132,6 +132,10 @@ def test_ledger_names_map_to_spec_knobs_by_their_core_words():
     assert map_knob_name("hidden_dim", knobs) == "hidden1"
     assert map_knob_name("early_stopping_patience", knobs) == "early_stopping"
     assert map_knob_name("lr", knobs) == "learning_rate"
+    assert map_knob_name("FLAGS.hidden1", knobs) == "hidden1"  # a fresh blind-1 ledger wrote these
+    assert map_knob_name("args.learning_rate (Adam step size)", knobs) == "learning_rate"
+    assert map_knob_name("rank1 (sample size top layer)", knobs) is None
+    assert map_knob_name("Number of GCN layers (1 vs 2)", knobs) is None
     for other in ("graphsage_hidden_dim", "cpu_model", "sample_size_layer1", "num_layers", "random_seed"):
         assert map_knob_name(other, knobs) is None, other
     assert map_knob_name("hidden_size", ["hidden1", "hidden2"]) is None  # ambiguous: no guess
@@ -211,3 +215,24 @@ async def test_a_separately_tuned_held_out_row_is_reported_not_a_constraint(tmp_
     assert "NOTE · Held-out claim, tuned separately: C2" in md
     back = GapReport.from_dict(GapReport.from_search(s2, [r2], paper="toy").to_dict())
     assert back.results[0].held_out["C2"]["tuned_separately"]
+
+
+def test_paper_sentences_naming_a_knob_are_evidence_for_fallback_knobs():
+    """blind-1, post-hoc: a fresh ledger didn't name learning_rate, so the paper's sweep sentence never
+    counted as evidence for 0.001. The sentence is found by the knob's whole name, not a word of it."""
+    from gapfinder.search.engine import paper_mentions
+    from gapfinder.search.verify import plausible
+    from gapfinder.ledger.schemas import Assumption, Evidence
+
+    text = ("FASTGCN: FAST LEARNING WITH GRAPH CONVOLUTIONAL NETWORKS (2018). We performed hyperparameter "
+            "selection for the learning rate and model dimension. We swept learning rate in the set "
+            "{0.01, 0.001, 0.0001}. The hidden dimension is 16. Dropout rate is set as 0. We train for 200 epochs.")
+    assert paper_mentions(text, "learning_rate") == ["We swept learning rate in the set {0.01, 0.001, 0.0001}."]
+    assert paper_mentions(text, "hidden1") == ["The hidden dimension is 16."]
+    assert paper_mentions(text, "epochs") == ["We train for 200 epochs."]
+    assert paper_mentions(text, "weight_decay") == []
+    a = Assumption(id="R1", knob="learning_rate", layer="config", paper_value="unstated", code_default="0.01",
+                   candidate_values=["0.001"], prior_score=0.1, status="unstated", affects_claims=[],
+                   evidence=[Evidence(kind="paper", ref="paper text", quote=q) for q in paper_mentions(text, "learning_rate")])
+    assert plausible(a, "0.001").supported and not plausible(a, "0.002").supported
+    assert not plausible(a, "0.0001".replace("1", "2")).supported

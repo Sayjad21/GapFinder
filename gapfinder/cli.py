@@ -213,19 +213,24 @@ async def cmd_search(args) -> int:
         from gapfinder.search.evidence import EvidenceSearch
 
         evidence = EvidenceSearch(args.paper or spec.name, anchors=[args.evidence_anchor])
-    ledger_claims = None
+    ledger_claims, paper_text = None, None
     if args.claims:  # the ledger's claims: ties stated paper values to their experiment
         from gapfinder.ledger.schemas import Claim
 
         raw_c = json.loads(Path(args.claims).read_text())
         ledger_claims = [Claim(**c) for c in (raw_c["claims"] if isinstance(raw_c, dict) else raw_c)]
+        pdf = raw_c.get("paper") if isinstance(raw_c, dict) else None
+        if pdf and Path(pdf).is_file():  # the paper the ledger read: evidence for knobs the ledger didn't name
+            from gapfinder.ingest.pdf import load_paper
+
+            paper_text = load_paper(pdf).full_text
     search = GapSearch(orch, targets, assumptions, SearchConfig(max_runs=args.max_runs, screen_repeats=args.screen_repeats,
                                                               candidates_per_knob=args.candidates_per_knob,
                                                               noise_setups=args.noise_setups,
                                                               reproduce_tol=args.reproduce_tol,
                                                               evidence_gate=not args.no_evidence_gate,
                                                               rank=args.rank, seed=args.seed),
-                       evidence=evidence, claims=ledger_claims, router=_router_if_configured())
+                       evidence=evidence, claims=ledger_claims, router=_router_if_configured(), paper_text=paper_text)
     for path in args.resume or []:  # reuse earlier runs' branch results (no re-running, no re-paying)
         lines = Path(path).read_text(encoding="utf-8").splitlines()
         print(f"resumed {search.seed([json.loads(x) for x in lines if x.strip()])} branch results from {path}")

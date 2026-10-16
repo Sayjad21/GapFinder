@@ -20,7 +20,7 @@ import re
 import statistics
 from dataclasses import dataclass, field
 
-from gapfinder.ledger.schemas import Assumption, AssumptionStatus, Attribution, Branch, BranchStatus, ConfidenceLabel
+from gapfinder.ledger.schemas import Assumption, AssumptionStatus, Evidence, Attribution, Branch, BranchStatus, ConfidenceLabel
 from gapfinder.models import budget
 from gapfinder.sandbox.noise import NoiseBand, bootstrap_diff_ci, mde, noise_band
 from gapfinder.sandbox.runner import Orchestrator
@@ -219,10 +219,35 @@ def _core(name: str) -> frozenset[str]:
     return frozenset(out)
 
 
+def paper_mentions(text: str, knob: str, limit: int = 5) -> list[str]:
+    """Sentences of the paper that name the knob's quantity (every core word of its name) and give a
+    number, e.g. "We swept learning rate in the set {0.01, 0.001, 0.0001}" for `learning_rate` (blind-1).
+    Evidence for a fallback knob: a value it states can count as supported, as a ledger quote would."""
+    # the knob's whole name as a phrase ("learning rate", not just "learning", which titles use too)
+    words = [_ABBREV.get(t, t) for t in (re.sub(r"\d+$", "", t) for t in _norm_knob(knob).split("_")) if t]
+    if not words:
+        return []
+    phrase = re.compile(r"\b" + r"[\s_-]+".join(re.escape(w) for w in " ".join(words).replace("_", " ").split())
+                        + r"s?\b")
+    flat = re.sub(r"\s+", " ", text)
+    out = []
+    for sent in re.split(r"(?<=[.!?;])\s+(?=[A-Z(])", flat):
+        if phrase.search(sent.lower()) and re.search(r"\d", sent):
+            out.append(sent.strip()[:300])
+            if len(out) >= limit:
+                break
+    return out
+
+
 def map_knob_name(name: str, knobs) -> str | None:
     """The spec knob an assumption's name refers to: an exact match, else the one knob with the same
     core words. None when nothing or several knobs match (a guess there could test the wrong knob)."""
     by_norm = {_norm_knob(k): k for k in knobs}
+    if (k := by_norm.get(_norm_knob(name))) is not None:
+        return k
+    # "FLAGS.hidden1", "args.lr", "rank1 (sample size top layer)": the name without its namespace or gloss
+    name = re.sub(r"\s*\(.*$", "", name.strip())
+    name = re.sub(r"^(?:[A-Za-z_]\w*\.)+", "", name).strip().replace(" ", "_")
     if (k := by_norm.get(_norm_knob(name))) is not None:
         return k
     core = _core(name)
@@ -234,7 +259,8 @@ def map_knob_name(name: str, knobs) -> str | None:
 
 class GapSearch:
     def __init__(self, orch: Orchestrator, targets: list[Target], assumptions: list[Assumption],
-                 cfg: SearchConfig | None = None, evidence=None, claims: list | None = None, router=None):
+                 cfg: SearchConfig | None = None, evidence=None, claims: list | None = None, router=None,
+                 paper_text: str | None = None):
         """`evidence`: optional EvidenceSearch (web) consulted when paper and code don't back a value.
         `claims`: the ledger's claims, so a paper value can be tied to the experiment it belongs to."""
         self.orch, self.targets, self.cfg = orch, targets, cfg or SearchConfig()
@@ -285,6 +311,12 @@ class GapSearch:
             cands = list(dict.fromkeys(str(v) for a in entries for v in a.candidate_values))
             self.assumptions[k] = head.model_copy(update={"evidence": evidence, "candidate_values": cands})
         self._fallback: dict[str, Assumption] = {k: self.assumptions.pop(k) for k in self.spec_only}
+        if paper_text:  # a fallback knob has no ledger evidence: give it the paper's sentences that name it
+            for k, a in self._fallback.items():
+                quotes = paper_mentions(paper_text, k)
+                if quotes:
+                    self._fallback[k] = a.model_copy(update={"evidence": [
+                        Evidence(kind="paper", ref="paper text", quote=q) for q in quotes]})
         self._runs: dict[frozenset, list[Branch]] = {}
         self.untestable: list[tuple[str, str]] = []  # (knob, value) above the spec's cost limit
         self._patch_reserve = 0  # runs held back for the patch round (set after the combine round)

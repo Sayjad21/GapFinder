@@ -55,6 +55,12 @@ picks the paper and writes the answer key.
      exposed. A human confirms the build/run commands only. Knobs are never hand-picked toward a guess.
    - **Targets:** the claims named in `case.md`, one target and every other reported number of the
      same experiment as held-out claims (more claims mean more identifiability).
+   - **For each held-out claim, decide before the run whether one shared setting should fit it.** A row
+     the paper tuned on its own gets `"tuned_separately": true`: another method, or a dataset with its
+     own hyperparameter sweep.
+     - Write down why, from the paper's text only.
+     - Such a row is measured and reported, but it doesn't veto an answer.
+     - blind-1 (FastGCN) missed because its inductive rows were treated as shared-setting constraints.
 3. Run once, on Sandboxes or local Docker, with a pre-stated budget (e.g. `--max-runs 200`):
 
    ```
