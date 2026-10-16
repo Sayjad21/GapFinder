@@ -21,6 +21,8 @@ CODE_EXT = {".cc", ".cpp", ".c", ".h", ".hpp", ".py", ".rs", ".go", ".java"}
 
 # gflags: DEFINE_int32(name, default, "help")
 _GFLAGS_RE = re.compile(r"\bDEFINE_(bool|int32|int64|uint32|uint64|double|string)\s*\(\s*(\w+)\s*,\s*([^,]+?)\s*,")
+# absl / tf.app.flags (Python): flags.DEFINE_float('name', default, 'help'), DEFINE_enum('n', 'a', ['a', 'b'], ..)
+_ABSL_RE = re.compile(r"\bDEFINE_(\w+)\s*\(\s*['\"](\w+)['\"]\s*,\s*([^,]+?)\s*,")
 # argparse: add_argument("--name", ..., default=X)
 _ARGPARSE_RE = re.compile(r"add_argument\(\s*['\"](--?[\w-]+)['\"](.*)$")
 _DEFAULT_RE = re.compile(r"default\s*=\s*([^,)]+)")
@@ -44,7 +46,7 @@ _ENV_RE = re.compile(r"""(?:getenv|environ\.get|environ\[)\s*\(?\s*['"]([A-Z][A-
 class Flag:
     name: str
     default: str | None
-    kind: str  # gflags | argparse | cmake | make | option_field | usage | env
+    kind: str  # gflags | absl | argparse | cmake | make | option_field | usage | env
     file: str  # repo-relative, posix
     line: int
     text: str  # the declaring line, verbatim
@@ -55,7 +57,7 @@ class Flag:
         return f"{self.file}:{self.line}"
 
 
-_KIND_RANK = {"gflags": 0, "usage": 0, "option_field": 1, "cmake": 1, "make": 2, "argparse": 3, "env": 4}
+_KIND_RANK = {"gflags": 0, "absl": 0, "usage": 0, "option_field": 1, "cmake": 1, "make": 2, "argparse": 3, "env": 4}
 
 
 @dataclass
@@ -153,6 +155,45 @@ def _read(path: Path) -> str:
         return ""
 
 
+def _absl_flags(text: str, rel: str, lines: list[str]) -> list[Flag] | None:
+    """absl / tf.app.flags definitions in a Python file, from its syntax tree (multi-line calls, keyword
+    arguments, DEFINE_enum choices). None when the file doesn't parse (e.g. Python 2), so the caller
+    falls back to the line regex."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+        if not fn.startswith("DEFINE_"):
+            continue
+        kw = {k.arg: k.value for k in node.keywords if k.arg}
+        name = node.args[0] if node.args else kw.get("name")
+        if not (isinstance(name, ast.Constant) and isinstance(name.value, str)):
+            continue  # e.g. a C-style gflags call, or a computed name
+        default = node.args[1] if len(node.args) > 1 else kw.get("default")
+        dtext = None
+        if default is not None:
+            # strings without their quotes; anything else as written (5e-4 stays 5e-4)
+            if isinstance(default, ast.Constant) and isinstance(default.value, str):
+                dtext = default.value
+            else:
+                dtext = ast.get_source_segment(text, default)
+        choices = None
+        if fn.startswith("DEFINE_enum"):
+            enum = node.args[2] if len(node.args) > 2 else kw.get("enum_values")
+            try:
+                choices = [str(v) for v in ast.literal_eval(enum)] or None
+            except (ValueError, TypeError):
+                choices = None
+        line = node.lineno
+        out.append(Flag(name.value, dtext, "absl", rel, line, lines[line - 1].strip(), choices=choices))
+    return sorted(out, key=lambda f: f.line)
+
+
 def _scan_flags(path: Path, rel: str) -> list[Flag]:
     text = _read(path)
     if not text:
@@ -161,8 +202,13 @@ def _scan_flags(path: Path, rel: str) -> list[Flag]:
     is_py = path.suffix == ".py"
     is_header = path.suffix in {".h", ".hpp"}
     lines = text.splitlines()
+    absl = _absl_flags(text, rel, lines) if is_py and "DEFINE_" in text else None
+    if absl:
+        out.extend(absl)
     for i, line in enumerate(lines, start=1):
-        if m := _GFLAGS_RE.search(line):
+        if is_py and absl is None and (m := _ABSL_RE.search(line)):
+            out.append(Flag(m.group(2), m.group(3).strip().strip("'\""), "absl", rel, i, line.strip()))
+        elif m := _GFLAGS_RE.search(line):
             out.append(Flag(m.group(2), m.group(3).strip(), "gflags", rel, i, line.strip()))
         elif is_py and "add_argument" in line and (m := _ARGPARSE_RE.search(line.strip())):
             # the call may continue over the next lines: look for default= up to the closing paren

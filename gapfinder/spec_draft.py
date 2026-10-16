@@ -23,7 +23,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
 
-from gapfinder.ingest.repo_map import RepoMap
+from gapfinder.ingest.repo_map import _KIND_RANK, RepoMap
 
 MAX_FILE_CHARS = 3000  # per build file in the prompt
 MAX_README_CHARS = 3500
@@ -36,8 +36,7 @@ _USAGE_HEADING = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 # flag kinds that name a user-facing setting; env vars and make variables are noisier
-_STRONG_KINDS = {"argparse", "gflags", "usage", "option_field", "cmake"}
-_KIND_RANK = {"gflags": 0, "usage": 0, "option_field": 1, "cmake": 1, "make": 2, "argparse": 3, "env": 4}
+_STRONG_KINDS = {"argparse", "gflags", "absl", "usage", "option_field", "cmake"}
 
 
 def norm_name(name: str) -> str:

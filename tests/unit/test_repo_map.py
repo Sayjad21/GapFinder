@@ -37,3 +37,29 @@ def test_relevant_files_prompt_is_identical_across_processes(tmp_path):
                            env={**__import__('os').environ, "PYTHONHASHSEED": str(seed)}).stdout
             for seed in (1, 2, 3)}
     assert len(outs) == 1
+
+
+def test_absl_and_tf_app_flags(tmp_path):
+    """FastGCN (blind-1) defines its settings with tf.app.flags; the repo map used to find none of them."""
+    (tmp_path / "train.py").write_text(
+        "import tensorflow as tf\n"
+        "flags = tf.app.flags\n"
+        "flags.DEFINE_string('dataset', 'pubmed', 'Dataset string.')\n"
+        "flags.DEFINE_float('weight_decay', 5e-4, 'L2 weight.')\n"
+        "tf.app.flags.DEFINE_integer(\n"
+        "    'epochs', 100,\n"
+        "    'Number of epochs.')\n"
+        "from absl import flags as af\n"
+        "af.DEFINE_enum('mode', 'fast', ['fast', 'slow'], 'Mode.')\n"
+        "af.DEFINE_boolean(name='verbose', default=False, help='Talk.')\n"
+    )
+    (tmp_path / "py2.py").write_text("print 'old'\nflags.DEFINE_integer('hidden1', 16, 'Units.')\n")
+    rm = build_repo_map(tmp_path)
+    get = lambda n: (rm.find_flag(n)[0].default, rm.find_flag(n)[0].ref, rm.find_flag(n)[0].kind)  # noqa: E731
+    assert get("dataset") == ("pubmed", "train.py:3", "absl")
+    assert get("weight_decay") == ("5e-4", "train.py:4", "absl")  # written as in the code
+    assert get("epochs") == ("100", "train.py:5", "absl")  # a call over several lines
+    assert get("verbose") == ("False", "train.py:10", "absl")  # keyword arguments
+    assert rm.find_flag("mode")[0].choices == ["fast", "slow"]
+    assert get("hidden1") == ("16", "py2.py:2", "absl")  # a file that doesn't parse: line regex fallback
+    assert len(rm.find_flag("epochs")) == 1
