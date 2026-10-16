@@ -1,0 +1,54 @@
+# blind-2 harness spec: GraphMAE (Hou et al., KDD 2022), Table 2 unsupervised graph classification.
+# Written by the runner after the `blind-2` (= v1.4) tag and before the reveal; every choice is in HARNESS.md.
+#
+# Naive run = the README's command (scripts/run_graph.sh <dataset>: its flags, then --use_cfg), one seed per
+# run (the seed comes from RUN_TAG; the script's own five seeds are five runs here).
+# Knobs: every argparse flag of graphmae/utils.py:build_args except how-to-run ones (seeds, dataset, device,
+# use_cfg, logging, load_model, save_model). Defaults are COLLAB's effective values under the README command
+# (argparse defaults, then run_graph.sh, then configs.yml["COLLAB"]), printed by
+# `gf_harness/apply_knobs.py --print-defaults`, not chosen. A changed knob is written into the branch's
+# configs.yml for every dataset of the cell (a flag would be overwritten by --use_cfg).
+# max: cost caps only, fixed before any search run (COLLAB pre-training time grows with these).
+name: graphmae
+base: docker:gf-graphmae
+# a local clone at 1be5941, read only for the static out-of-space code checks
+source: ${GF_B2_SOURCE}
+run:
+  command: 'set -o pipefail; F="$(cat gf_harness/run_graph_flags)"; S=$(( $(printf %s "$RUN_TAG" | cksum | cut -d" " -f1) % 100000 )); mkdir -p out; python gf_harness/apply_knobs.py --datasets COLLAB,IMDB-BINARY,IMDB-MULTI,MUTAG -- activation={activation} alpha_l={alpha_l} attn_drop={attn_drop} batch_size={batch_size} concat_hidden={concat_hidden} decoder={decoder} deg4feat={deg4feat} drop_edge_rate={drop_edge_rate} encoder={encoder} in_drop={in_drop} linear_prob={linear_prob} loss_fn={loss_fn} lr={lr} lr_f={lr_f} mask_rate={mask_rate} max_epoch={max_epoch} max_epoch_f={max_epoch_f} negative_slope={negative_slope} norm={norm} num_heads={num_heads} num_hidden={num_hidden} num_layers={num_layers} num_out_heads={num_out_heads} optimizer={optimizer} pooling={pooling} replace_rate={replace_rate} residual={residual} scheduler={scheduler} warmup_steps={warmup_steps} weight_decay={weight_decay} weight_decay_f={weight_decay_f} || exit 3; for ds in COLLAB IMDB-BINARY IMDB-MULTI MUTAG; do t=1; [ $ds = COLLAB ] && t=6; ( s=$(date +%s); OMP_NUM_THREADS=$t MKL_NUM_THREADS=$t python main_graph.py --device -1 --dataset $ds $F --seeds $S > out/$ds.log 2>&1; echo gf_wall_s=$(( $(date +%s) - s )) >> out/$ds.log ) & done; wait; bash gf_harness/emit.sh'
+  output: stdout
+  format: kv
+  timeout: 5400
+knobs:
+  activation: {layer: config, default: "relu"}
+  alpha_l: {layer: config, default: "2"}
+  attn_drop: {layer: config, default: "0.1"}
+  batch_size: {layer: config, default: "32"}
+  concat_hidden: {layer: config, default: "false"}
+  decoder: {layer: config, default: "gin"}
+  deg4feat: {layer: config, default: "false"}
+  drop_edge_rate: {layer: config, default: "0.0"}
+  encoder: {layer: config, default: "gin"}
+  in_drop: {layer: config, default: "0.2"}
+  linear_prob: {layer: config, default: "true"}
+  loss_fn: {layer: config, default: "sce"}
+  lr: {layer: config, default: "0.00015"}
+  lr_f: {layer: config, default: "0.001"}
+  mask_rate: {layer: config, default: "0.75"}
+  max_epoch: {layer: config, default: "20", max: 60}
+  max_epoch_f: {layer: config, default: "0"}
+  negative_slope: {layer: config, default: "0.2"}
+  norm: {layer: config, default: "batchnorm"}
+  num_heads: {layer: config, default: "2"}
+  num_hidden: {layer: config, default: "256", max: 1024}
+  num_layers: {layer: config, default: "2", max: 5}
+  num_out_heads: {layer: config, default: "1"}
+  optimizer: {layer: config, default: "adam"}
+  pooling: {layer: config, default: "mean"}
+  replace_rate: {layer: config, default: "0.0"}
+  residual: {layer: config, default: "false"}
+  scheduler: {layer: config, default: "true"}
+  warmup_steps: {layer: config, default: "-1"}
+  weight_decay: {layer: config, default: "0.0"}
+  weight_decay_f: {layer: config, default: "0.0"}
+allowed_paths: ["out/", "configs.yml"]
+metrics: [collab_acc, imdb_b_acc, imdb_m_acc, mutag_acc]
