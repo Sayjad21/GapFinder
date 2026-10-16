@@ -255,6 +255,20 @@ resume `run-v13-patch`):
      - sandbox runs are unbilled.
    - **Criteria:** pre-registered like GapBench. Name the documented cause (exact or in a set of ≤ 3),
      or diagnose out of space with the right code lead; 0 confident mistakes.
+   - **Done (2026-10-16): blind-1, FastGCN (ICLR 2018), sealed by a separate model.** Result: **missed,
+     not confidently wrong** ([RESULT.md](../eval/external/blind-1/RESULT.md)).
+     - GapFinder said "Fits but unsupported: `learning_rate=0.005`"; the documented cause is 0.001.
+     - 0.001 was tested and matched the target (0.817 vs 0.818). The held-out inductive rows share the
+       knob in the harness and dropped at 0.001 (Cora 0.641 vs 0.723), so it was rejected.
+     - Found blind: the repo map doesn't read `tf.app.flags`, so assumptions had invented names, and only
+       `learning_rate` matched a spec knob. Spec knobs no assumption names are never screened.
+     - Post-hoc (not counted), with the transductive row only as held-out: Explained, `learning_rate=0.001`.
+     - **Fixes, for a later version** (not blind-1):
+       1. read absl / `tf.app.flags` in the repo map;
+       2. screen every spec knob even if no assumption names it, and map assumption names to knobs;
+       3. check LLM-guessed code defaults against the spec;
+       4. decide how held-out rows that were tuned separately are treated: a per-row knob, or a
+          "separately tuned" flag whose conflicts are reported as notes rather than rejections.
 4. **Make the benchmark's interaction tasks identifiable the way GapFinder searches.**
    - In `gen_tasks.py`, build rival pairs the way the engine's combine round does (top knobs by screen
      score and ledger prior, values by score, plus the forward step), not just the 8 closest singles.

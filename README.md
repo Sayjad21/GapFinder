@@ -26,6 +26,10 @@ what it is, how to use it, the architecture, each component, the design choices 
 >   misses are interactions where several settings fit the paper's numbers equally well.
 > - **On a real paper (MC Dropout, not blind):** v1.3 names the documented cause (`epochx=10,
 >   hidden=1`), says the rest is outside the settings, and points to the right lines of code.
+> - **First blind real paper (FastGCN, sealed by a separate model):** **missed, not confidently wrong.**
+>   It named the right setting (`learning_rate`), but chose 0.005 as "fits but unsupported". It tested the
+>   documented 0.001, which matched the target (0.817 vs 0.818), and rejected it because the held-out
+>   inductive rows got worse under the shared setting. See [RESULT.md](eval/external/blind-1/RESULT.md).
 > - **New:** it tests hard-coded constants in memory ("patch knobs") without editing a file.
 >
 > Plan: [docs/PLAN.md](docs/PLAN.md) · full context: [docs/CONTEXT_v11.md](docs/CONTEXT_v11.md) ·
@@ -52,6 +56,10 @@ How to read the table:
 - On the public dev tasks, a paired per-task comparison of v1.1 against the phase-3 code (22 tasks, two
   replicates each, `eval/compare_suites.py`) found 5 tasks better and 3 worse (sign test p = 0.73): no
   significant change per task. What holds up is safety.
+
+| Real paper, blind | Result | Data |
+|---|---|---|
+| FastGCN (Chen et al., ICLR 2018), Table 5 transductive Cora (0.818), 3 held-out rows. GapFinder was frozen at tag `blind-1`. A separate model (Claude Sonnet) chose the paper and sealed the answer key, and its hash was committed before any run. 45 Sandboxes runs. | **Missed under the pre-registered rule, not confidently wrong.** "Fits but unsupported: `learning_rate=0.005`" (gap -2.3% → -1.1%). The documented cause is learning rate 0.001 (the repo owner, issue #10). GapFinder tested 0.001 and it matched the target (0.817), but the harness shares one learning rate across all four rows, and the inductive Cora row dropped to 0.641 against 0.723, so the held-out check rejected it. A blind-found gap: the repo map doesn't read `tf.app.flags`, so only `learning_rate` was screened. Post-hoc (not counted), with only the transductive row held out, the same runs give **Explained, `learning_rate=0.001`**. | [RESULT.md](eval/external/blind-1/RESULT.md), [PRE_REVEAL.md](eval/external/blind-1/PRE_REVEAL.md) |
 
 | Real paper (not blind) | Result | Data |
 |---|---|---|
@@ -175,9 +183,11 @@ already handle.
   - The dev suite has 23 cause tasks, and its replicates of identical code differ by about ±5 runs.
   - Accuracy changes between versions are within that noise; the safety result (0 confidently wrong in
     90 blind runs) is the robust one.
-- No blind real paper yet. MC Dropout was not blind: its answer key was revealed before v1.1. The protocol
-  for one is in [BLIND_CASE.md](eval/external/BLIND_CASE.md); it needs a second person to seal the
-  answer.
+- One blind real paper so far (FastGCN: missed, not confidently wrong), and its answer was sealed by a
+  separate AI model, not a person. MC Dropout was not blind: its answer key was revealed before v1.1.
+  Protocol: [BLIND_CASE.md](eval/external/BLIND_CASE.md).
+- The repo map reads argparse and C++ gflags, but not Python `tf.app.flags` / absl flags. Spec knobs that
+  no ledger assumption names are not screened (found on FastGCN).
 - Patch knobs test literals in Python modules only. A loop, a grid search or a data pipeline can't be
   patched this way.
 - CPU only: Sandboxes VMs have 4 vCPUs and 3.9 GB, so GPU papers and the paper's full data scale
