@@ -120,6 +120,17 @@ held-out unchanged:
 These runs were made with the answer known, so they show that the fixes work as designed. They are not
 blind evidence. That needs blind-2.
 
+**No regression on the dev suite.** Before = tag `blind-1`, runs 2600 and 2800. After = `4f763df`, fixes
+1-4, runs 2700 and 2900. All 23 public tasks, 3 runs each, two replicates per side.
+- **Correct causes:** 99/138 → 102/138, with 3 tasks better, 3 worse and 17 the same (sign test
+  p = 1.0). This is within noise.
+- **Confidently wrong:** 0 → 0.
+- **Correct abstentions:** 114 → 114.
+
+Fix 5 (paper-sentence evidence) is not exercised there, because the GapBench harness passes no paper
+text. The practice tasks name their knobs plainly, so the fallback rarely runs. The fixes matter on
+real repos like FastGCN, and the dev suite shows they cost nothing elsewhere.
+
 ## What to change (written at the reveal; done above, except where noted)
 
 1. **Read `tf.app.flags` / absl flags in the repo map:** quoted names and `DEFINE_float` / `DEFINE_integer`.
