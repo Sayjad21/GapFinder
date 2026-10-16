@@ -188,3 +188,26 @@ async def test_code_defaults_are_read_from_the_code_not_the_ledger(tmp_path):
     assert r.changes == {"alpha": "2.0"}
     md = GapReport.from_search(s, [r], paper="toy").to_markdown()
     assert "`beta` 0.5 at bench.py:6 (ledger said 0.9)" in md and "`LOG_LEVEL`" in md.split("## Knob names")[1]
+
+
+async def test_a_separately_tuned_held_out_row_is_reported_not_a_constraint(tmp_path):
+    """blind-1: the documented lr=0.001 fixed FastGCN's transductive Cora row but hurt the inductive rows,
+    which the paper tuned on their own; the shared-setting held-out check rejected the true answer."""
+    m = await toy_metrics(tmp_path, {"alpha": "2.0"})
+    asm, _ = assumptions_from_spec(HarnessSpec.load_yaml(TOY))
+    # a held-out claim alpha=2.0 breaks: the paper's write_amp as if measured under another setting
+    wrong = m["write_amp"] * 3
+    strict = [Target("C1", "score", m["score"]), Target("C2", "write_amp", wrong, held_out=True)]
+    s = GapSearch(orch(tmp_path, "strict"), strict, asm, SearchConfig())
+    [r] = await s.run()
+    assert r.attribution.confidence_label != "Explained"  # the shared-setting check blocks it, as before
+
+    loose = [Target("C1", "score", m["score"]), Target("C2", "write_amp", wrong, held_out=True, tuned_separately=True)]
+    s2 = GapSearch(orch(tmp_path, "loose"), loose, asm, SearchConfig())
+    [r2] = await s2.run()
+    assert r2.changes == {"alpha": "2.0"}
+    assert r2.held_out["C2"]["tuned_separately"] and r2.held_out["C2"]["ok"]
+    md = GapReport.from_search(s2, [r2], paper="toy").to_markdown()
+    assert "NOTE · Held-out claim, tuned separately: C2" in md
+    back = GapReport.from_dict(GapReport.from_search(s2, [r2], paper="toy").to_dict())
+    assert back.results[0].held_out["C2"]["tuned_separately"]

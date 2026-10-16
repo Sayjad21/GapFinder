@@ -53,6 +53,10 @@ class Target:
     metric: str
     paper_value: float
     held_out: bool = False  # only used to check explanations, never to choose them
+    # a held-out row the paper tuned on its own (another method or dataset with its own sweep; blind-1:
+    # FastGCN's inductive rows): measured and reported, but one shared setting isn't expected to fit it, so
+    # a conflict with it is a note, not a rejection, and it is left out of the joint history-matching fit
+    tuned_separately: bool = False
     figure: str | None = None  # e.g. "Figure 6": which experiment's stated settings apply
 
 
@@ -820,8 +824,15 @@ class GapSearch:
             if other.claim_id == t.claim_id:
                 continue
             before, after = self.gap(other, {}), self.gap(other, changes)
-            r.held_out[other.claim_id] = {"gap_before": before, "gap_after": after,
-                                          "ok": after is not None and held_out_ok(before, after, self.band(other))}
+            ok = after is not None and held_out_ok(before, after, self.band(other))
+            if other.tuned_separately:
+                r.held_out[other.claim_id] = {"gap_before": before, "gap_after": after, "ok": True,
+                                              "tuned_separately": True, "worse": not ok}
+                if not ok:
+                    r.notes.append(f"{other.claim_id} (tuned separately) moves from {_pct(before)} to {_pct(after)} "
+                                   f"under {dict(changes)}: reported, not a rejection")
+                continue
+            r.held_out[other.claim_id] = {"gap_before": before, "gap_after": after, "ok": ok}
         # 5c. plausibility: the value needs evidence, not just a good fit
         for knob, value in changes.items() if self.cfg.verify else ():
             if not self.cfg.evidence_gate:
@@ -962,7 +973,8 @@ class GapSearch:
         from gapfinder.search.history import diagnose
 
         claims = [(t.claim_id, t.metric, t.paper_value)] + [
-            (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out and h.metric != t.metric]
+            (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out
+            and not h.tuned_separately and h.metric != t.metric]
         runs = {tuple(sorted(k)): [b.parsed_metrics for b in v if b.status == BranchStatus.succeeded]
                 for k, v in self._runs.items()}
         d = diagnose({k: v for k, v in runs.items() if v}, claims, t.claim_id,
@@ -1017,7 +1029,8 @@ class GapSearch:
 
         def rediagnose():
             claims = [(t.claim_id, t.metric, t.paper_value)] + [
-                (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out and h.metric != t.metric]
+                (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out
+            and not h.tuned_separately and h.metric != t.metric]
             runs = {tuple(sorted(k)): [b.parsed_metrics for b in v if b.status == BranchStatus.succeeded]
                     for k, v in self._runs.items()}
             return diagnose({k: v for k, v in runs.items() if v}, claims, t.claim_id,
@@ -1070,7 +1083,8 @@ class GapSearch:
         from gapfinder.search.history import diagnose
 
         claims = [(t.claim_id, t.metric, t.paper_value)] + [
-            (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out and h.metric != t.metric]
+            (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out
+            and not h.tuned_separately and h.metric != t.metric]
         runs = {tuple(sorted(k)): [b.parsed_metrics for b in v if b.status == BranchStatus.succeeded]
                 for k, v in self._runs.items()}
         runs = {k: v for k, v in runs.items() if v}
@@ -1197,7 +1211,7 @@ class GapSearch:
         base = self.loglik(t, answer)
         if base is None:
             return []
-        held = [h for h in self.targets if h.held_out and h.metric in self.bands]
+        held = [h for h in self.targets if h.held_out and not h.tuned_separately and h.metric in self.bands]
         out = [{"config": dict(answer), "loglik": round(base, 3)}]
         for c in candidates:
             if c == answer or len(self.measure_ok(c)) < 2:
@@ -1219,7 +1233,7 @@ class GapSearch:
         if best is None:
             return {}
         band = self.band(t)
-        held = [h for h in self.targets if h.held_out and h.metric in self.bands]
+        held = [h for h in self.targets if h.held_out and not h.tuned_separately and h.metric in self.bands]
         out: dict[str, list[str]] = {}
         for k, v in changes.items():
             vals = {v}
@@ -1446,6 +1460,10 @@ def _stated_value(paper_value: str) -> str | None:
     if v.lower().startswith("unstated") or " " in v or not v:
         return None
     return v
+
+
+def _pct(x: float | None) -> str:
+    return "n/a" if x is None else f"{x:+.1%}"
 
 
 def _rank(r: ClaimResult) -> int:

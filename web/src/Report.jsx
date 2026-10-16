@@ -92,7 +92,7 @@ function Measured({ m }) {
   );
 }
 
-const KIND = { reversal: "Counterfactual (reversal test)", held_out: "Held-out claim", evidence: "Evidence", effect: "Effect vs noise" };
+const KIND = { reversal: "Counterfactual (reversal test)", held_out: "Held-out claim", evidence: "Evidence", effect: "Effect vs noise", held_out_separate: "Held-out claim, tuned separately" };
 
 function Belief({ b }) {
   if (!b) return <p className="small">{NR}</p>;
@@ -101,7 +101,7 @@ function Belief({ b }) {
     <ul className="checks">
       {b.checks.map((x, i) => (
         <li key={i}>
-          <span className={`chk ${x.ok === true ? "pass" : x.ok === false ? "fail" : "na"}`}>{x.ok === true ? "PASS" : x.ok === false ? "FAIL" : "NOT CHECKED"}</span>
+          <span className={`chk ${x.ok === true ? "pass" : x.ok === false ? "fail" : "na"}`}>{x.kind === "held_out_separate" ? "NOTE" : x.ok === true ? "PASS" : x.ok === false ? "FAIL" : "NOT CHECKED"}</span>
           {" "}{KIND[x.kind] || x.kind}: {x.text.replace(/`/g, "")}
         </li>
       ))}

@@ -72,7 +72,7 @@ class GapReport:
             return ClaimResult(
                 target=Target(claim_id=t.get("claim_id", "?"), metric=t.get("metric", "?"),
                               paper_value=t.get("paper_value", float("nan")), held_out=t.get("held_out", False),
-                              figure=t.get("figure")),
+                              figure=t.get("figure"), tuned_separately=t.get("tuned_separately", False)),
                 status=c.get("status", "searched"), gap_before=c.get("gap_before", float("nan")),
                 band=c.get("band", 0.0), attribution=Attribution(**a) if a else None,
                 changes=c.get("changes") or {}, gap_after=c.get("gap_after"), held_out=c.get("held_out") or {},
@@ -196,6 +196,12 @@ class GapReport:
         if not r.counterfactual:
             checks.append({"kind": "reversal", "ok": None, "text": "no reversal test recorded"})
         for cid, v in r.held_out.items():
+            if v.get("tuned_separately"):
+                checks.append({"kind": "held_out_separate", "ok": None,
+                               "text": f"{cid}: {_pct(v['gap_before'])} to {_pct(v['gap_after'])}"
+                                       + (" (worse beyond noise; reported, not a constraint)" if v.get("worse")
+                                          else " (not worse beyond noise)")})
+                continue
             checks.append({"kind": "held_out", "ok": bool(v["ok"]),
                            "text": f"{cid}: {_pct(v['gap_before'])} to {_pct(v['gap_after'])}"
                                    + (" (not worse beyond noise)" if v["ok"] else " (WORSE beyond noise)")})
@@ -545,9 +551,10 @@ def _belief_lines(b: dict) -> list[str]:
     if not b["checks"]:
         return [f"- {b['note']}"]
     names = {"reversal": "Counterfactual (reversal test)", "held_out": "Held-out claim", "evidence": "Evidence",
-             "effect": "Effect vs noise"}
+             "effect": "Effect vs noise", "held_out_separate": "Held-out claim, tuned separately"}
     mark = {True: "PASS", False: "FAIL", None: "NOT CHECKED"}
-    return [f"- {mark[x['ok']]} · {names[x['kind']]}: {x['text']}" for x in b["checks"]]
+    return [f"- {'NOTE' if x['kind'] == 'held_out_separate' else mark[x['ok']]} · {names[x['kind']]}: {x['text']}"
+            for x in b["checks"]]
 
 
 def _unknown_lines(u: dict) -> list[str]:
