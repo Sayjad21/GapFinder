@@ -119,3 +119,72 @@ def _args(argv):
 def test_default_hypotheses_source_is_the_ledger():
     args = _args(["search", "--spec", "s.yaml", "--targets", "t.json", "--assumptions", "a.json"])
     assert args.hypotheses == "ledger" and args.candidates_per_knob == 2 and args.assumptions == "a.json"
+
+
+def test_ledger_names_map_to_spec_knobs_by_their_core_words():
+    """blind-1 (FastGCN): the ledger said num_epochs / dropout_rate / hidden_dim for epochs / dropout / hidden1."""
+    from gapfinder.search.engine import map_knob_name
+
+    knobs = ["model", "learning_rate", "epochs", "hidden1", "dropout", "weight_decay", "early_stopping", "max_degree"]
+    assert map_knob_name("--Learning-Rate", knobs) == "learning_rate"  # exact, as before
+    assert map_knob_name("num_epochs", knobs) == "epochs"
+    assert map_knob_name("dropout_rate", knobs) == "dropout"
+    assert map_knob_name("hidden_dim", knobs) == "hidden1"
+    assert map_knob_name("early_stopping_patience", knobs) == "early_stopping"
+    assert map_knob_name("lr", knobs) == "learning_rate"
+    for other in ("graphsage_hidden_dim", "cpu_model", "sample_size_layer1", "num_layers", "random_seed"):
+        assert map_knob_name(other, knobs) is None, other
+    assert map_knob_name("hidden_size", ["hidden1", "hidden2"]) is None  # ambiguous: no guess
+
+
+async def test_spec_knobs_the_ledger_never_names_are_still_screened(tmp_path):
+    """blind-1: knobs no assumption named were never tested. Now they are, after the ledger's own."""
+    from gapfinder.ledger.schemas import Assumption
+
+    m = await toy_metrics(tmp_path, {"alpha": "2.0"})
+    targets = [Target("C1", "score", m["score"]), Target("C2", "write_amp", m["write_amp"], held_out=True)]
+    # the ledger names only knobs that aren't the cause, one of them by another name
+    asm = [Assumption(id="A1", knob="num_threads", layer="config", paper_value="unstated", code_default="1",
+                      candidate_values=["4"], evidence=[], prior_score=0.8, status="unstated", affects_claims=[]),
+           Assumption(id="A2", knob="cpu_model", layer="config", paper_value="i7", code_default="?",
+                      candidate_values=[], evidence=[], prior_score=0.6, status="unstated", affects_claims=[])]
+    s = GapSearch(orch(tmp_path), targets, asm, SearchConfig())
+    assert s.renamed == {"num_threads": "threads"} and s.unmapped == ["cpu_model"]
+    assert "alpha" in s.spec_only and "threads" not in s.spec_only
+    assert "alpha" not in s.assumptions and s._fallback["alpha"].prior_score < 0.6  # a fallback, after the ledger
+    [r] = await s.run()
+    assert r.changes == {"alpha": "2.0"}
+    md = GapReport.from_search(s, [r], paper="toy").to_markdown()
+    assert "`num_threads` → `threads`" in md and "`alpha`" in md.split("## Knob names")[1]
+
+    off = GapSearch(orch(tmp_path, "off"), targets, asm, SearchConfig(screen_spec_knobs=False))
+    assert off.spec_only == [] and "alpha" not in off.all_for
+
+
+async def test_code_defaults_are_read_from_the_code_not_the_ledger(tmp_path):
+    """blind-1: the ledger guessed FastGCN's dropout default as 0.5 (it is 0.0), which made a paper value
+    of 0 look like a paper-artifact inconsistency. With the code here, defaults come from the code; a
+    "code differs" the code can't confirm never yields that label."""
+    from gapfinder.ledger.schemas import Assumption
+
+    m = await toy_metrics(tmp_path, {"alpha": "2.0"})
+    targets = [Target("C1", "score", m["score"]), Target("C2", "write_amp", m["write_amp"], held_out=True)]
+
+    def asm(knob, paper, guessed, status):
+        return Assumption(id=knob, knob=knob, layer="config", paper_value=paper, code_default=guessed,
+                          candidate_values=["2.0"], evidence=[], prior_score=0.8, status=status, affects_claims=[])
+
+    s = GapSearch(orch(tmp_path), targets, [
+        asm("beta", "0.5", "0.9", "stated_code_differs"),     # wrong guess: the code says 0.5, as the paper
+        asm("gamma", "1.0", "1.0", "stated_matches"),        # right
+        asm("LOG_LEVEL", "debug", "info", "stated_code_differs"),  # no flag in the code: unverified
+    ], SearchConfig())
+    assert s.all_for["beta"][0].code_default == "0.5" and s.all_for["beta"][0].status == "stated_matches"
+    assert [c["knob"] for c in s.corrected_defaults] == ["beta"]
+    assert s.corrected_defaults[0]["at"] == "bench.py:6"
+    assert s.all_for["gamma"][0].status == "stated_matches"
+    assert s.unverified_defaults == {"LOG_LEVEL"}
+    [r] = await s.run()
+    assert r.changes == {"alpha": "2.0"}
+    md = GapReport.from_search(s, [r], paper="toy").to_markdown()
+    assert "`beta` 0.5 at bench.py:6 (ledger said 0.9)" in md and "`LOG_LEVEL`" in md.split("## Knob names")[1]

@@ -28,6 +28,10 @@ class GapReport:
     setup_runs: int
     cost: dict
     unmapped_assumptions: list[str] = field(default_factory=list)
+    renamed_assumptions: dict[str, str] = field(default_factory=dict)  # ledger name -> spec knob
+    spec_only_knobs: list[str] = field(default_factory=list)  # screened though no assumption named them
+    corrected_defaults: list[dict] = field(default_factory=list)  # ledger code defaults the code contradicts
+    unverified_defaults: list[str] = field(default_factory=list)  # "code differs" the code can't confirm
     untestable: list[tuple[str, str]] = field(default_factory=list)
     closest: list[dict] = field(default_factory=list)
     triaged: list[dict] = field(default_factory=list)
@@ -47,7 +51,10 @@ class GapReport:
         return cls(paper=paper, artifact=search.spec.name, results=results,
                    noise={m: b.to_dict() for m, b in search.bands.items()}, naive=dict(search.naive),
                    runs=search.runs_used, setup_runs=search.orch.cost.setup_runs, cost=search.orch.cost.summary(),
-                   unmapped_assumptions=search.unmapped, untestable=list(search.untestable),
+                   unmapped_assumptions=search.unmapped, renamed_assumptions=dict(search.renamed),
+                   spec_only_knobs=list(search.spec_only),
+                   corrected_defaults=list(search.corrected_defaults),
+                   unverified_defaults=sorted(search.unverified_defaults), untestable=list(search.untestable),
                    closest=search.closest_overall(), triaged=list(search.triaged),
                    setup_check=search.setup_check,
                    paper_claims={r.target.claim_id: c for r in results if (c := _paper_claim(search, r.target))},
@@ -79,6 +86,10 @@ class GapReport:
                    noise=d.get("noise") or {}, naive=d.get("naive") or {}, runs=d.get("runs", 0),
                    setup_runs=d.get("setup_runs", 0), cost=d.get("cost") or {},
                    unmapped_assumptions=d.get("unmapped_assumptions") or [],
+                   renamed_assumptions=d.get("renamed_assumptions") or {},
+                   spec_only_knobs=d.get("spec_only_knobs") or [],
+                   corrected_defaults=d.get("corrected_defaults") or [],
+                   unverified_defaults=d.get("unverified_defaults") or [],
                    untestable=[(x["knob"], x["value"]) for x in d.get("untestable") or []],
                    closest=d.get("closest_overall") or [], triaged=d.get("triaged_failures") or [],
                    setup_check=d.get("setup_check"),
@@ -104,6 +115,8 @@ class GapReport:
         return {"paper": self.paper, "artifact": self.artifact, "generated": self.generated,
                 "partial": self.partial, "runs": self.runs, "setup_runs": self.setup_runs, "cost": self.cost,
                 "naive": self.naive, "noise": self.noise, "unmapped_assumptions": self.unmapped_assumptions,
+                "renamed_assumptions": self.renamed_assumptions, "spec_only_knobs": self.spec_only_knobs,
+                "corrected_defaults": self.corrected_defaults, "unverified_defaults": self.unverified_defaults,
                 "untestable": [{"knob": k, "value": v} for k, v in self.untestable],
                 "closest_overall": self.closest,
                 "triaged_failures": self.triaged,
@@ -274,6 +287,20 @@ class GapReport:
                     "Candidate values above the harness spec's cost limits (e.g. the paper's full scale). "
                     "A gap that only these could close stays Unexplained here: " +
                     ", ".join(f"`{k}={v}`" for k, v in self.untestable)]
+        if self.renamed_assumptions or self.spec_only_knobs or self.corrected_defaults or self.unverified_defaults:
+            out += ["", "## Knob names"]
+            if self.renamed_assumptions:
+                out.append("- Ledger names mapped to spec knobs: " +
+                           ", ".join(f"`{a}` → `{k}`" for a, k in self.renamed_assumptions.items()))
+            if self.spec_only_knobs:
+                out.append("- Screened though no assumption named them (low prior, code-derived values): " +
+                           ", ".join(f"`{k}`" for k in self.spec_only_knobs))
+            if self.corrected_defaults:
+                out.append("- Code defaults read from the code instead of the ledger: " + ", ".join(
+                    f"`{c['knob']}` {c['code']} at {c['at']} (ledger said {c['ledger']})" for c in self.corrected_defaults))
+            if self.unverified_defaults:
+                out.append("- Code defaults the code doesn't confirm, so no paper-artifact inconsistency is claimed "
+                           "on them: " + ", ".join(f"`{k}`" for k in self.unverified_defaults))
         if self.unmapped_assumptions:
             out += ["", "## Not testable with this harness",
                     "Assumptions about knobs the harness spec can't set: " +

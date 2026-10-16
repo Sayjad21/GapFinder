@@ -307,7 +307,8 @@ async def test_a_value_that_always_fails_is_not_rerun_on_every_call(tmp_path):
     s2 = GapSearch(orch(tmp_path, "lead"), targets(m), lead, SearchConfig(coverage=False))
     [r] = await s2.run()
     assert r.screen and all(x["knob"] != "alpha" or x["units"] == float("-inf") for x in r.screen)
-    assert not any(e["type"] == "survivor" for e in s2.orch.events.read())
+    # (the other spec knobs are screened in the fallback round, since the only lead never ran)
+    assert not any(e["type"] == "survivor" and e.get("knob") == "alpha" for e in s2.orch.events.read())
 
 
 async def test_budget_stop_leaves_no_branch_unrecorded(tmp_path):

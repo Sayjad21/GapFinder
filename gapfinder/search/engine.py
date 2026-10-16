@@ -16,6 +16,7 @@ import asyncio
 import itertools
 import math
 import random
+import re
 import statistics
 from dataclasses import dataclass, field
 
@@ -63,6 +64,8 @@ class SearchConfig:
     # ladder around a numeric default, up to this many values per knob (paper and ledger values first).
     # In 14 of v1.0's 18 blind-test misses a true value was never tested at all.
     coverage: bool = True
+    # spec knobs that no ledger assumption names are screened too, at a low prior (blind-1)
+    screen_spec_knobs: bool = True
     coverage_candidates: int = 6  # values per knob at least (the ledger's first, then coverage values)
     # ...and up to this many when the run budget allows: per knob, coverage_budget_frac x max_runs spread
     # over the open knobs (test-v11-05: a fixed 6 cut epochs=75 on a task with few open knobs)
@@ -191,6 +194,40 @@ def _norm_knob(k: str) -> str:
     return k.strip().lstrip("-").replace("-", "_").lower()
 
 
+# words that name the kind of quantity, not the quantity: `num_epochs` is `epochs`, `dropout_rate` is
+# `dropout`, `early_stopping_patience` is `early_stopping` (blind-1: the ledger named FastGCN's flags so)
+_FILLER = {"num", "n", "number", "of", "the", "rate", "size", "dim", "dims", "value", "count", "patience",
+           "max", "total", "param"}
+_ABBREV = {"lr": "learning", "bs": "batch", "wd": "weight_decay"}
+
+
+def _core(name: str) -> frozenset[str]:
+    """The words of a knob name that say which quantity it is (digits, plurals and filler dropped)."""
+    out = set()
+    for tok in _norm_knob(name).split("_"):
+        tok = re.sub(r"\d+$", "", tok)
+        tok = _ABBREV.get(tok, tok)
+        for t in tok.split("_"):
+            if len(t) > 3 and t.endswith("s"):
+                t = t[:-1]
+            if t and t not in _FILLER:
+                out.add(t)
+    return frozenset(out)
+
+
+def map_knob_name(name: str, knobs) -> str | None:
+    """The spec knob an assumption's name refers to: an exact match, else the one knob with the same
+    core words. None when nothing or several knobs match (a guess there could test the wrong knob)."""
+    by_norm = {_norm_knob(k): k for k in knobs}
+    if (k := by_norm.get(_norm_knob(name))) is not None:
+        return k
+    core = _core(name)
+    if not core:
+        return None
+    hits = [k for k in knobs if _core(k) == core]
+    return hits[0] if len(hits) == 1 else None
+
+
 class GapSearch:
     def __init__(self, orch: Orchestrator, targets: list[Target], assumptions: list[Assumption],
                  cfg: SearchConfig | None = None, evidence=None, claims: list | None = None, router=None):
@@ -206,25 +243,44 @@ class GapSearch:
         self.target_figures = {t.figure for t in targets if t.figure}
         self.spec = orch.spec
         self._family = 1  # hypotheses tested together in the current confirm round (multiple comparisons)
+        self._artifact_flags = None  # the artifact's repo map, when its code is on this machine
         if self.cfg.coverage and self.spec.code_root() is not None:  # a local base, or the spec's `source`
             self._fill_choices_from_artifact()
-        spec_knobs = {_norm_knob(k): k for k in self.spec.knobs}
         # assumption -> spec knob; assumptions about knobs the harness can't set are skipped (and reported)
         self.assumptions: dict[str, Assumption] = {}
         self.all_for: dict[str, list[Assumption]] = {}  # every ledger entry per knob (papers state some twice)
         self.unmapped: list[str] = []
+        self.renamed: dict[str, str] = {}  # ledger name -> spec knob, when they differ (`num_epochs` -> `epochs`)
         for a in sorted(assumptions, key=lambda a: -a.prior_score):
-            k = spec_knobs.get(_norm_knob(a.knob))
+            k = map_knob_name(a.knob, self.spec.knobs)
             if k is None:
                 self.unmapped.append(a.knob)
                 continue
+            if _norm_knob(k) != _norm_knob(a.knob):
+                self.renamed[a.knob] = k
+                a = a.model_copy(update={"knob": k})
             self.all_for.setdefault(k, []).append(a)
+        # spec knobs no assumption names are a fallback: screened only when the ledger's knobs leave the target
+        # without a confident answer (blind-1: FastGCN's epochs, dropout and hidden size were never tested,
+        # because the ledger named none of them as the spec does). Screening them up front cost the toy
+        # interaction task its combine budget, so they don't compete with the ledger's leads.
+        self.spec_only: list[str] = []
+        if self.cfg.screen_spec_knobs:
+            from gapfinder.search.hypotheses import assumptions_from_spec
+
+            floor = min((a.prior_score for a in assumptions), default=0.5)
+            for a in assumptions_from_spec(self.spec)[0]:
+                if a.knob not in self.all_for:
+                    self.all_for[a.knob] = [a.model_copy(update={"prior_score": round(min(0.1, floor / 2), 4)})]
+                    self.spec_only.append(a.knob)
+        self._check_code_defaults()
         for k, entries in self.all_for.items():
             # one representative (highest prior) carrying the union of evidence and candidates
             head = entries[0]
             evidence = [e for a in entries for e in a.evidence]
             cands = list(dict.fromkeys(str(v) for a in entries for v in a.candidate_values))
             self.assumptions[k] = head.model_copy(update={"evidence": evidence, "candidate_values": cands})
+        self._fallback: dict[str, Assumption] = {k: self.assumptions.pop(k) for k in self.spec_only}
         self._runs: dict[frozenset, list[Branch]] = {}
         self.untestable: list[tuple[str, str]] = []  # (knob, value) above the spec's cost limit
         self._patch_reserve = 0  # runs held back for the patch round (set after the combine round)
@@ -366,6 +422,16 @@ class GapSearch:
                                           f"rank {rank}",
                               evidence_gate=self.cfg.evidence_gate, verify=self.cfg.verify,
                               rank=self.cfg.rank, seed=self.cfg.seed)
+        for c in self.corrected_defaults:
+            self.orch.events.emit("note", msg=f"code default of {c['knob']}: ledger said {c['ledger']!r}, the code "
+                                              f"says {c['code']!r} at {c['at']} (status {c['status']})")
+        if self.unverified_defaults:
+            self.orch.events.emit("note", msg="code defaults the code doesn't confirm (no paper-artifact "
+                                              f"inconsistency on them): {', '.join(sorted(self.unverified_defaults))}")
+        if self.renamed or self.spec_only:
+            self.orch.events.emit("note", msg="knob names: " + ", ".join(f"{a} -> {k}" for a, k in self.renamed.items())
+                                  + (f"; spec knobs no assumption names (a fallback round): {', '.join(self.spec_only)}"
+                                     if self.spec_only else ""))
         await self.calibrate()
         results = []
         for t in self.targets:
@@ -467,6 +533,9 @@ class GapSearch:
             res.status = "partial"
             res.notes.append(f"stopped early: {exc}")
             await self._label_partial(t, res)
+        confident = {ConfidenceLabel.explained.value, ConfidenceLabel.inconsistency.value}
+        if self._fallback and not (res.attribution and res.attribution.confidence_label in confident):
+            await self._spec_knob_round(t, res, tried)
         res.hypotheses_tested = len(tried)
         if self.cfg.mde_inconclusive:
             self._mde_check(t, res)
@@ -483,6 +552,29 @@ class GapSearch:
                               label=res.attribution.confidence_label if res.attribution else None,
                               changes=res.changes, gap_before=g0, gap_after=res.gap_after)
         return res
+
+    async def _spec_knob_round(self, t: Target, res: ClaimResult, tried: set[frozenset]) -> None:
+        """The ledger's knobs gave no confident answer: search again with the spec knobs no assumption names
+        added (low prior, code-derived values). Runs already measured are reused. The better result is kept."""
+        added = list(self._fallback)
+        self.orch.events.emit("note", msg=f"{t.claim_id}: no confident answer from the ledger's knobs; adding spec "
+                                          f"knobs no assumption names: {', '.join(added)}")
+        self.assumptions.update(self._fallback)
+        self._fallback = {}
+        alt = ClaimResult(target=t, status="searched", gap_before=res.gap_before, band=res.band)
+        try:
+            await self._search(t, alt, tried)
+        except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
+            alt.status = "partial"
+            alt.notes.append(f"stopped early: {exc}")
+            await self._label_partial(t, alt)
+        if _better(alt, res):
+            notes = alt.notes + [f"found after adding spec knobs no ledger assumption names ({', '.join(added)})"]
+            res.__dict__.update(alt.__dict__)
+            res.notes = notes
+        else:
+            res.notes.append(f"spec knobs no ledger assumption names ({', '.join(added)}) were screened too; "
+                             "no better answer")
 
     async def _search(self, t: Target, res: ClaimResult, tried: set[frozenset]) -> None:
         thr = self.cfg.effect_threshold
@@ -761,7 +853,7 @@ class GapSearch:
                 label = ConfidenceLabel.partially_explained  # only the direction toward the paper was tested
                 r.notes.append("closes the gap moving toward the paper's stated value; that value itself is untested")
             elif any(self.assumptions[k].status == AssumptionStatus.stated_code_differs.value
-                     for k in changes if k in self.assumptions):
+                     and k not in self.unverified_defaults for k in changes if k in self.assumptions):
                 label = ConfidenceLabel.inconsistency
             else:
                 label = ConfidenceLabel.explained
@@ -1168,12 +1260,44 @@ class GapSearch:
         if root is not None:
             from gapfinder.ingest.config_flow import flag_scales
 
-            n = fill_choices(self.spec, build_repo_map(root).flags)
+            self._artifact_flags = build_repo_map(root)
+            n = fill_choices(self.spec, self._artifact_flags.flags)
             n += mark_multipliers_from_flow(self.spec, flag_scales(root))
             if n:
                 mult = [k for k, v in self.spec.knobs.items() if v.multiplier]
                 self.orch.events.emit("note", msg=f"value coverage: read choices and multipliers for {n} knob(s) "
                                                   f"from the code (multipliers: {mult or 'none'})")
+
+    def _check_code_defaults(self) -> None:
+        """A ledger's code default is the model's reading unless the repo map found the flag (blind-1: the
+        repo map read no tf.app.flags, and the guesses were wrong: dropout "0.5" for 0.0). With the code on
+        this machine, re-derive each default and its paper-vs-code status from the code. A default the code
+        can't confirm is unverified, and can't make a label a paper-artifact inconsistency."""
+        self.corrected_defaults: list[dict] = []
+        self.unverified_defaults: set[str] = set()
+        if self._artifact_flags is None and self.spec.code_root() is not None:
+            from gapfinder.ingest.repo_map import build_repo_map
+
+            self._artifact_flags = build_repo_map(self.spec.code_root())
+        if self._artifact_flags is None:
+            return  # no code here: keep the ledger's reading, as before
+        for k, entries in self.all_for.items():
+            if k in self.spec_only:
+                continue
+            flags = [f for f in self._artifact_flags.find_flag(k) if f.default not in (None, "None")]
+            fixed = []
+            for a in entries:
+                if flags:
+                    d = flags[0].default
+                    status = derive_status(a.paper_value, d, a.status)
+                    if (a.code_default, a.status) != (d, status):
+                        self.corrected_defaults.append({"knob": k, "ledger": a.code_default, "code": d,
+                                                        "at": flags[0].ref, "status": status})
+                    a = a.model_copy(update={"code_default": d, "status": status})
+                elif a.status == AssumptionStatus.stated_code_differs.value:
+                    self.unverified_defaults.add(k)
+                fixed.append(a)
+            self.all_for[k] = fixed
 
     def _stated_values(self, knob: str) -> list[str]:
         """Paper values for `knob` that apply to the targets' figures. An entry tied only to claims of
@@ -1332,7 +1456,7 @@ def _rank(r: ClaimResult) -> int:
         # it only narrowed the gap and has no evidence: no better than an evidence-backed partial
         # (test-v11-10: a worse-fitting pair with a passenger knob outranked the right single knob)
         return _LABEL_RANK[ConfidenceLabel.partially_explained.value]
-    return _LABEL_RANK[label]
+    return _LABEL_RANK.get(label, _LABEL_RANK[ConfidenceLabel.unexplained.value])
 
 
 def _better(a: ClaimResult, b: ClaimResult) -> bool:
