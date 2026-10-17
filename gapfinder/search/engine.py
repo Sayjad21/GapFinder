@@ -77,6 +77,8 @@ class SearchConfig:
     # the crossing (log scale for rates, sizes and counts; logit for fractions), snap it to a round value and
     # screen it. Finds a x4 or x25 the fixed ladder never tries. At most this many per knob:
     secant_per_knob: int = 2
+    # a confident label needs a complete search: not partial, every knob screened, support beyond code (blind-2)
+    complete_for_confidence: bool = True
     trace_steps: int = 30  # the dry run stops itself after this many optimizer steps...
     trace_seconds: float = 900  # ...or this many seconds
     coverage_candidates: int = 6  # values per knob at least (the ledger's first, then coverage values)
@@ -572,6 +574,7 @@ class GapSearch:
         code already uses can't cause the gap (the naive run already matches the paper there)."""
         out = []
         open_knobs = []
+        last = []  # stated by the paper and matching the naive run: screened last, never dropped (blind-2)
         for k, a in self.assumptions.items():
             if self.spec.knobs[k].role == "seed":
                 continue  # traced to a random seed: noise, never a cause
@@ -582,8 +585,12 @@ class GapSearch:
             # confirmed only if every such value matches the naive run.
             if stated and all(derive_status(v, default, "stated_code_differs") == AssumptionStatus.stated_matches.value
                               for v in stated):
+                # the ledger's stated value may be wrong (blind-2: it wrote alpha_l's code default, 2, as the
+                # paper's value, and the true cause was dropped before a single run): demote, don't drop
+                last.append((k, a, stated))
                 continue
             open_knobs.append((k, a, stated))
+        open_knobs += last
         rng = random.Random(self.cfg.seed)
         if self.cfg.rank == "random":
             rng.shuffle(open_knobs)  # the top-k cut must not keep the ledger's favourites
@@ -591,7 +598,8 @@ class GapSearch:
             spec_knob = self.spec.knobs[knob]
             default = spec_knob.default
             # the default itself is the naive run, in any spelling ("0" for 0.0: test-v11-01 proposed init_q=0)
-            is_default = lambda v: str(v) == default or _same_number(str(v), default)  # noqa: E731
+            # ...and in any case: "False" is the default false (blind-2 spent screen runs on deg4feat=False)
+            is_default = lambda v: _same_value(str(v), default)  # noqa: E731
             values = []
             for v in [str(v) for v in a.candidate_values if not is_default(v)] or [
                     v for v in spec_knob.candidates if not is_default(v)]:
@@ -666,6 +674,7 @@ class GapSearch:
         confident = {ConfidenceLabel.explained.value, ConfidenceLabel.inconsistency.value}
         if self._fallback and not (res.attribution and res.attribution.confidence_label in confident):
             await self._spec_knob_round(t, res, tried)
+        self._cap_confidence(t, res)
         res.hypotheses_tested = len(tried)
         if self.cfg.mde_inconclusive:
             self._mde_check(t, res)
@@ -682,6 +691,37 @@ class GapSearch:
                               label=res.attribution.confidence_label if res.attribution else None,
                               changes=res.changes, gap_before=g0, gap_after=res.gap_after)
         return res
+
+    def _cap_confidence(self, t: Target, res: ClaimResult) -> None:
+        """A confident label must be earned by a complete search (blind-2: "Explained" came from a partial run,
+        with a knob never tested and only a code default as evidence). Caps Explained, Paper-artifact
+        inconsistency and Partially explained at "Fits but unsupported" when:
+        - the run budget ran out before the search finished;
+        - a knob with candidate values never got a single screen run;
+        - a changed knob's support is only code evidence (a default or a script line: what the code does, not
+          what the authors ran for this experiment)."""
+        if not self.cfg.complete_for_confidence or res.attribution is None:
+            return
+        confident = {ConfidenceLabel.explained.value, ConfidenceLabel.inconsistency.value,
+                     ConfidenceLabel.partially_explained.value}
+        if res.attribution.confidence_label not in confident:
+            return
+        why = []
+        if res.status == "partial":
+            why.append("the run budget ran out before the search finished")
+        knobs_with_values = {h.knob for h in self.hypotheses()}
+        screened = {next(iter(k))[0] for k in self._runs if len(k) == 1 and self.measure_ok(dict(k))}
+        if unscreened := sorted(knobs_with_values - screened):
+            why.append(f"{len(unscreened)} knob(s) never screened ({', '.join(unscreened[:6])}"
+                       f"{', ...' if len(unscreened) > 6 else ''})")
+        code_only = [k for k, p in res.plausibility.items() if p.supported and p.source == "code"]
+        if code_only:
+            why.append(f"the only support for {', '.join(f'{k}={res.changes.get(k)}' for k in code_only)} is code "
+                       "evidence, which shows what the code does, not what the authors ran")
+        if not why:
+            return
+        res.notes.append(f"capped at Fits but unsupported (was {res.attribution.confidence_label}): " + "; ".join(why))
+        res.attribution = res.attribution.model_copy(update={"confidence_label": ConfidenceLabel.fits_but_unsupported.value})
 
     async def _secant_step(self, t: Target, hyps: list[Hypothesis], tried: set[frozenset]) -> list[Hypothesis]:
         """Secant iteration on each numeric knob the paper's number is bracketed on: interpolate the crossing,
@@ -1636,6 +1676,18 @@ def _stated_value(paper_value: str) -> str | None:
 
 def _pct(x: float | None) -> str:
     return "n/a" if x is None else f"{x:+.1%}"
+
+
+_BOOL = {"true": "true", "yes": "true", "on": "true", "1": "true", "false": "false", "no": "false", "off": "false",
+         "0": "false", "none": "none", "null": "none"}
+
+
+def _same_value(a: str, b: str) -> bool:
+    """One value in two spellings: '2' and '2.0', 'False' and 'false', 'none' and 'None'."""
+    if a == b or _same_number(a, b):
+        return True
+    x, y = a.strip().strip("\"'").lower(), b.strip().strip("\"'").lower()
+    return x == y or (x in _BOOL and y in _BOOL and _BOOL[x] == _BOOL[y] and not (_NUM.fullmatch(x) and _NUM.fullmatch(y)))
 
 
 def _rank(r: ClaimResult) -> int:

@@ -95,6 +95,11 @@ def relevant_files(rm: RepoMap, claims: list[Claim], limit: int = 20, max_bytes:
 
 async def build_assumption_space(router: Router, paper: PaperText, rm: RepoMap, claims: list[Claim]) -> list[Assumption]:
     setup = paper.section(SETUP_HEADINGS, max_chars=25_000) or paper.full_text[:25_000]
+    # per-experiment hyperparameter tables are often in an appendix, past the excerpt (blind-2: GraphMAE's
+    # Table 8 stated alpha_l = 1 for COLLAB, and the ledger never saw it)
+    tables = [t for t in hyperparameter_tables(paper.full_text) if t[:120] not in setup]
+    if tables:
+        setup += "\n\n## Hyperparameter tables found elsewhere in the paper\n" + "\n\n".join(tables)
     prompt = ASSUMPTION_PROMPT.format(
         claims="\n".join(f"{c.id}: {c.metric} = {c.reported_value} {c.unit or ''} ({c.figure_or_table}) {c.conditions}" for c in claims),
         setup=setup,
@@ -103,6 +108,27 @@ async def build_assumption_space(router: Router, paper: PaperText, rm: RepoMap, 
     )
     out = await router.structured("ultra", [{"role": "user", "content": prompt}], _Assumptions)
     return _fill_defaults(out.assumptions, rm)
+
+
+_TABLE_CAPTION = re.compile(r"(?m)^\s*(Table\s+[A-Z]?\d+[.:])")
+_HYPER = re.compile(r"hyper-?\s?parameter|setting|configuration|implementation detail|training detail", re.I)
+
+
+def hyperparameter_tables(text: str, max_chars: int = 4000, max_tables: int = 4) -> list[str]:
+    """Every table whose caption mentions hyper-parameters, settings or configuration, wherever it is in the
+    paper: the caption and what follows it (PDF tables come out as one cell per line), up to the next
+    caption."""
+    caps = list(_TABLE_CAPTION.finditer(text))
+    out = []
+    for i, m in enumerate(caps):
+        caption = text[m.start(): m.start() + 300]
+        if not _HYPER.search(" ".join(caption.split("\n")[:2])):  # the caption only, not the table body
+            continue
+        end = caps[i + 1].start() if i + 1 < len(caps) else len(text)
+        out.append(text[m.start(): min(end, m.start() + max_chars)].strip())
+        if len(out) >= max_tables:
+            break
+    return out
 
 
 def _fill_defaults(assumptions: list[Assumption], rm: RepoMap) -> list[Assumption]:

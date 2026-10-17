@@ -196,13 +196,16 @@ async def test_costly_values_reported_not_run_and_stated_values_judged_against_n
     o = orch(tmp_path)
     o.spec.knobs["alpha"].max = 10.0
     many = [A("A1", "alpha", ["50.0", "2.0"], supported=["2.0"], prior=0.9),
-            # paper states beta=0.5 and the naive run uses 0.5 -> not a hypothesis
+            # paper states beta=0.5 and the naive run uses 0.5 -> screened last, not dropped (blind-2: a
+            # wrong "stated" value from the ledger dropped the true cause before a single run)
             Assumption(id="A2", knob="beta", layer="config", paper_value="0.5", candidate_values=["2.0"],
                        prior_score=0.6, status="stated_code_differs")]
     s = GapSearch(o, targets(m), many, SearchConfig())
+    knob_order = list(dict.fromkeys(h.knob for h in s.hypotheses()))
+    assert knob_order.index("beta") == len(knob_order) - 1  # after every other knob, despite its prior
     [r] = await s.run()
     assert ("alpha", "50.0") in s.untestable and r.changes == {"alpha": "2.0"}
-    assert all(x["knob"] != "beta" for x in r.screen)
+    assert any(x["knob"] == "beta" for x in r.screen)
     md = GapReport.from_search(s, [r], paper="toy").to_markdown()
     assert "Not testable within the budget" in md and "alpha=50.0" in md
 
@@ -217,12 +220,18 @@ async def test_budget_exhausted_result_is_not_a_confident_unverified_label(tmp_p
 
 
 async def test_resume_reuses_runs(tmp_path):
-    s1, [r1] = await search(tmp_path, {"alpha": "2.0"})
+    # the same budget on both sides: the per-knob value cap depends on it, so a different budget plans a
+    # different search (a resumed run capped at the first run's count wanted alpha=0.0, which the first never
+    # tried, and was rightly no longer confident once it couldn't finish)
+    s1, [r1] = await search(tmp_path, {"alpha": "2.0"}, max_runs=150)
     events = list(s1.orch.events.read())
     m = await paper(tmp_path, {"alpha": "2.0"})
-    s2 = GapSearch(orch(tmp_path, "resumed"), targets(m), ALL, SearchConfig(max_runs=s1.runs_used))
+    s2 = GapSearch(orch(tmp_path, "resumed"), targets(m), ALL, SearchConfig(max_runs=150))
     assert s2.seed(events) == s1.runs_used
-    [r2] = await s2.run()  # every measurement is cached: no new run is allowed or needed
+    [r2] = await s2.run()  # every successful measurement is cached
+    new = [e["branch"]["knob_changes"] for e in s2.orch.events.read() if e["type"] == "branch_created"]
+    failed_once = [dict(k) for k, v in s1._runs.items() if v and all(b.status != BranchStatus.succeeded for b in v)]
+    assert all(c in failed_once for c in new)  # only a value that failed once gets its one retry (alpha=0.0 here)
     assert r2.changes == r1.changes and r2.attribution.confidence_label == r1.attribution.confidence_label
 
 
@@ -458,3 +467,23 @@ def test_scorer_credits_a_set_that_contains_the_truth():
     sc = score_claim(key, pred)
     assert sc["outcome"] == "missed" and sc["correct_set"]  # exact score unchanged; set credit separate
     assert not score_claim(key, {**pred, "value_sets": {"max_steps": ["400", "1000"]}})["correct_set"]
+
+
+async def test_a_confident_label_needs_a_complete_search(tmp_path):
+    """blind-2: "Explained" came from a partial run, with a knob never tested and only a code default as
+    evidence. Each of those now caps the label at Fits but unsupported, with the reason."""
+    m = await paper(tmp_path, {"alpha": "2.0"})
+    code_only = [Assumption(id="A1", knob="alpha", layer="config", paper_value="unstated", candidate_values=["2.0"],
+                            prior_score=0.9, status="unstated",
+                            evidence=[Evidence(kind="code", ref="bench.py:5", quote="alpha default 2.0 in an older script")])]
+    s = GapSearch(orch(tmp_path), targets(m), code_only, SearchConfig())
+    [r] = await s.run()
+    assert r.changes == {"alpha": "2.0"} and r.attribution.confidence_label == "Fits but unsupported"
+    assert any("capped" in n and "code evidence" in n for n in r.notes)
+    # documentation (README) is the authors' own account: it supports a confident label
+    s2, [r2] = await search(tmp_path, {"alpha": "2.0"})
+    assert r2.attribution.confidence_label == "Explained"
+    # and with the cap off, the code default would have been enough, as before
+    s3 = GapSearch(orch(tmp_path, "off"), targets(m), code_only, SearchConfig(complete_for_confidence=False))
+    [r3] = await s3.run()
+    assert r3.attribution.confidence_label == "Explained"

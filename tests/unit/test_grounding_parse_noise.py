@@ -182,3 +182,34 @@ def test_tree_handles_content_addressed_noop_stage():
     assert t.lineage_changes("img-2") == {}  # terminates
     t.nodes["img-3"] = Node("img-3", "img-3", "branch")  # even a self-parent can't loop forever
     assert t.lineage_changes("img-3") == {}
+
+
+def test_a_stated_number_must_appear_in_a_paper_quote(repo):
+    """blind-2: the ledger wrote alpha_l's code default (2) as the paper's value, backed by a paper quote that
+    held no number; the search then dropped the true cause as "stated and matching". Now it's unstated."""
+    paper = "with a scaled cosine error as the reconstruction criterion. We set the size ratio T to 10."
+    g = Grounder(paper, repo)
+
+    def asm(value, quote):
+        return Assumption(id="A1", knob="alpha_l", layer="config", paper_value=value, code_default="2",
+                          candidate_values=[], prior_score=0.5, status="stated_matches",
+                          evidence=[Evidence(kind="paper", ref="p.4", quote=quote)])
+
+    rep = g.check_assumptions([asm("2.0 (pow coefficient for sce loss)", "with a scaled cosine error")])
+    assert rep.kept[0].paper_value == "unstated" and rep.kept[0].status == "unstated"
+    assert "no paper quote contains that number" in rep.dropped[0][1]
+    ok = g.check_assumptions([asm("10", "We set the size ratio T to 10")])
+    assert ok.kept[0].paper_value == "10" and not ok.dropped
+    words = g.check_assumptions([asm("scaled cosine error", "with a scaled cosine error")])
+    assert words.kept[0].paper_value == "scaled cosine error"  # no number: the quote rule as before
+
+
+def test_hyperparameter_tables_are_found_anywhere_in_the_paper():
+    from gapfinder.ledger.assumptions import hyperparameter_tables
+
+    text = ("1 Introduction\nWe study masking.\nTable 1: Dataset statistics\nDataset\nCora\n2708\n"
+            "A Appendix\nTable 8: Statistics and hyper-parameters for graph classification datasets.\n"
+            "Dataset\nCOLLAB\nScaling factor\n1\nmasking rate\n0.75\nTable 9: Molecular datasets\nZINC\n")
+    tabs = hyperparameter_tables(text)
+    assert len(tabs) == 1 and tabs[0].startswith("Table 8:") and "Scaling factor\n1" in tabs[0]
+    assert "Table 9" not in tabs[0]  # stops at the next caption

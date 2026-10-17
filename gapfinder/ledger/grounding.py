@@ -123,13 +123,38 @@ class Grounder:
                 rep.dropped.append((a.id, "no grounded evidence"))
                 continue
             update = {"evidence": good}
-            # A value "stated in the paper" needs a grounded paper quote; otherwise it's unstated.
+            # A value "stated in the paper" needs a grounded paper quote; otherwise it's unstated. A stated
+            # number must also appear in one of those quotes (blind-2: the ledger wrote alpha_l's code default,
+            # 2, as the paper's value, with a paper quote that held no number at all)
             stated = not a.paper_value.strip().lower().startswith("unstated")
-            if stated and not any(e.kind == "paper" for e in good):
+            quotes = [e.quote for e in good if e.kind == "paper"]
+            if stated and not quotes:
                 update.update(paper_value="unstated", status="unstated")
                 rep.dropped.append((a.id, f"paper_value {a.paper_value!r} had no paper quote; set to unstated"))
+            elif stated and (nums := _numbers(a.paper_value.split("(")[0])) and not any(
+                    any(_same_num(n, q) for q in _numbers(" ".join(quotes))) for n in nums):
+                update.update(paper_value="unstated", status="unstated")
+                rep.dropped.append((a.id, f"paper_value {a.paper_value!r}: no paper quote contains that number; "
+                                          "set to unstated"))
             rep.kept.append(a.model_copy(update=update))
         return rep
+
+
+_NUMBER = re.compile(r"(?<![\w.])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+
+
+def _numbers(text: str) -> list[float]:
+    out = []
+    for m in _NUMBER.finditer(text.replace(",", "")):
+        try:
+            out.append(float(m.group(0)))
+        except ValueError:
+            pass
+    return out
+
+
+def _same_num(a: float, b: float) -> bool:
+    return a == b or (a != 0 and abs(a - b) <= 1e-9 * max(abs(a), abs(b)))
 
 
 def _page_of(ref: str) -> int | None:
