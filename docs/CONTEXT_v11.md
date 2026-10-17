@@ -140,7 +140,132 @@ The real cause, found in the run logs, often differed from what the proposals as
 
 ---
 
-### 0.7 After v1.3 (2026-10-16): latest state and recommended next steps. Read this first
+### 0.8 After two blind real papers (2026-10-17): the problem and the plan. Read this first
+
+#### Where things stand
+
+| Case | Version | Blind result (counts) | Post-hoc, answer known (doesn't count) |
+|---|---|---|---|
+| blind-1 FastGCN ([RESULT](../eval/external/blind-1/RESULT.md)) | v1.3 | **missed**: "Fits but unsupported: `learning_rate=0.005`" (documented 0.001) | after fixes 1-5: "Explained: `learning_rate=0.001`" |
+| blind-2 GraphMAE ([RESULT](../eval/external/blind-2/RESULT.md)) | v1.4 | **confidently wrong**: "Explained: `mask_rate=0.5`" (documented `alpha_l=1`) | not run |
+
+- 0 of 2 blind real papers correct, and 1 confident mistake: the first on any blind test. The synthetic
+  record (0 confidently wrong in 90 sealed GapBench runs) does not yet carry over to real papers.
+- Both answer keys were sealed by a separate AI model (a Sonnet subagent), not a person.
+
+#### The problem: fixing one paper at a time doesn't converge
+
+Each blind paper exposed a new failure, and patching it after the reveal only makes that paper pass
+post-hoc. The next paper fails another way, so "fix, then try another paper" never ends. The way out is to
+fix the patterns behind the failures, not each failure.
+
+**Pattern 1: an LLM guess decided what was never tested.**
+- **FastGCN:** the ledger's invented names decided which knobs were screened; `epochs`, `dropout` and
+  `hidden1` were never tried.
+- **GraphMAE:** the ledger recorded the code's `alpha_l` default (2) as the paper's value, and the rule
+  "a knob whose stated value equals the naive run can't cause the gap" dropped `alpha_l` before a single
+  run.
+- In both, the least reliable step (LLM reading) could exclude a hypothesis. An exclusion is invisible
+  and irreversible.
+
+**Pattern 2: the label was more confident than the search had earned.** GraphMAE's "Explained" came with:
+- a partial run (the budget ran out in the confirmation race, 3 runs);
+- knobs never tested (`alpha_l`, and the fallback round never ran);
+- evidence that was only the argparse default `--mask_rate 0.5`. For COLLAB that default is overridden by
+  `configs.yml` (0.75), and the paper's Table 8 says 0.75.
+
+A good fit plus weak evidence plus an incomplete search produced a confident label.
+
+**Contributing:**
+- **The ledger never saw the answer:** the assumption prompt carries the paper's setup section capped at
+  25,000 characters, and GraphMAE's appendix Table 8 (γ = 1 for COLLAB) came after the cut.
+- **Equifinality:** `mask_rate=0.5` really does move COLLAB to the paper's number.
+
+#### The plan (structural fixes, then measure rates)
+
+**A. LLM reading may reorder, never exclude.**
+- Every knob the harness exposes gets at least its coarse values screened.
+- The ledger's priors and stated values decide order and evidence, not existence.
+- Concretely:
+  - the "stated and matches the naive run" rule demotes a knob to last instead of dropping it;
+  - the fallback round (fix 2) gets a guaranteed share of the budget, instead of running only when the
+    first pass gives no confident answer;
+  - the screen covers every knob's coarse rungs before any finer ones.
+- Would have caught both blind cases.
+
+**B. Confidence must match completeness.**
+- **"Explained" or "Paper-artifact inconsistency" requires all of:**
+  1. every exposed knob screened (no knob dropped or cut by the budget);
+  2. the full confirmation repeats (not a partial run);
+  3. evidence from the paper itself: a quote that contains the value.
+- **Code evidence counts only if it describes the configuration that actually runs.** An argparse default
+  that the dataset's config overrides, or that the paper contradicts for this dataset, is not evidence.
+- **Anything less is capped at "Fits but unsupported"** (or "Partially explained"), and the report says
+  which condition failed.
+- Would have turned blind-2 into a miss instead of a confident mistake. The product promise is "when it
+  says Explained, believe it", not "it always finds the cause".
+
+**C. Check every LLM-stated paper value against the PDF, with plain code.**
+- A "paper value" counts as stated only if the number appears in a paper quote, or within a sentence or
+  table row of the knob's name in the full text.
+- Otherwise it is demoted to "unstated".
+- Also: the assumption step should get every table whose caption mentions hyper-parameters, settings or
+  configuration, wherever it is in the paper (GraphMAE's Table 8), not only the first 25,000 characters.
+- Catches LLM misreadings in any paper, not one case.
+
+**Smaller items found on the way:**
+- Normalise values before treating them as changes. `False` and `false` are the default: blind-2 spent
+  screen runs on them.
+- The sandbox spend guard applies to local runs too; the launcher should set it.
+
+**D. Measure rates, not anecdotes.** One sealed paper at a time gives 0/1 results, which is noise. Instead:
+1. **A real-paper development set:**
+   - 10-15 documented reproduction cases (GitHub issues where authors confirm a cause, MLRC / ReScience
+     reports), with answers visible.
+   - Used openly for tuning, like the GapBench dev suite.
+   - Include FastGCN and GraphMAE, now post-hoc.
+   - Prefer small, cheap artifacts (minutes per run, under 4 GB so they fit Sandboxes).
+2. **A sealed test batch:**
+   - 3-5 papers sealed together by a sealer (ideally a person, else a separate model), run once after a
+     freeze;
+   - reported as a rate: found / confidently wrong / missed / out of space.
+   - This is the method that made GapBench trustworthy, applied to real papers.
+
+#### What to expect, honestly
+
+Even with A-D, GapFinder will not find the cause on most real papers:
+- sometimes the reported numbers can't tell two causes apart (`mask_rate` against `alpha_l`);
+- sometimes the cause is in code it can't change, such as MC Dropout's per-split grid search.
+
+The achievable, defensible claim is:
+1. rarely confidently wrong;
+2. right on some papers;
+3. on the rest, a short honest list of suspects with evidence, plus code leads.
+
+That is still useful to a researcher.
+
+#### Suggested order (13 days to the deadline)
+
+1. Build A, B and C plus the value normalisation. Check on the dev suite: no regression, and 0
+   confidently wrong.
+2. Re-run FastGCN and GraphMAE post-hoc, labelled post-hoc. GraphMAE should become at most "Fits but
+   unsupported" under B, and with C plus the appendix tables `alpha_l` should be tested.
+3. Assemble the real-paper development set (answers visible) and tune on it.
+4. Freeze, seal a batch of 3-5 cheap papers, run once, and report the rate.
+
+#### Constraints carried over
+
+- Never open a sealed key before the run is committed.
+- No engine change between a freeze tag and its reveal.
+- Post-hoc runs are always labelled post-hoc and never counted.
+- Plan-only requests ("write it down") mean document only.
+- Spending:
+  - billed so far $29.33 of about $50;
+  - a ledger costs about $0.20;
+  - Sandboxes are unbilled in the Beta;
+  - local Docker costs machine time (GraphMAE took about 14 h).
+
+### 0.7 After v1.3 (2026-10-16): latest state and recommended next steps (superseded by 0.8)
 
 #### What changed since §0.6 (phase 4, TODO.md section B4)
 
