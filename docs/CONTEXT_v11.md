@@ -140,7 +140,54 @@ The real cause, found in the run logs, often differed from what the proposals as
 
 ---
 
-### 0.8 After two blind real papers (2026-10-17): the problem and the plan. Read this first
+### 0.9 Built after 0.8 (2026-10-17, in progress): the white-box parts and the A-C fixes. Read this first
+
+**What was built.** Each part has tests, and the whole suite passes.
+
+| Part | What | Commit |
+|---|---|---|
+| **1. Runtime sink tracing** | One dry run before the search (`.gf_trace/sitecustomize.py`, no artifact edit) records config values (argparse, absl, yaml/json) and the arguments that reach known sinks, with the repo call site: optimizer lr/weight_decay/momentum, dropout p, DataLoader batch_size, Linear width, schedulers, seeds, `range()` bounds in repo code. `gapfinder/search/trace.py` matches values to knobs and gives each a role: rate, rate0, fraction, size, count, multiplier or seed. A value two knobs share is reported as ambiguous, never guessed. A literal reaching a sink with no knob behind it is a patch-knob lead. Roles drive candidate values (`role_values`), and seeds are never hypotheses. | `67041c5` |
+| **2. Secant step** | Where the paper's number lies between two measured values of a numeric knob, interpolate the crossing (log scale; logit for fractions), snap it to a round value, screen it, and repeat once. **Only when no screened value fits every claim** (see the regression below). | `e49780d`, `6365f53` |
+| **3. Relations** | A target can be a relation over a setting (`{"knob", "from", "to", "direction"}`). It is checked under candidates (2 runs per end); a reversal beyond noise fails the candidate like a broken held-out claim and removes it from the equally-good set. Candidate spread is reported, never judged. | `3e1a4b3` |
+| **4. Contrastive diffing** | Out of space only: one Super call compares the paper's training details and hyperparameter tables with the traced run. Answers are grounded (the file and line exist, and a literal is on that line). Literal differences lead the patch round, with the paper's value first; structural ones are reported, not tested. | committing |
+| **A** | A knob whose stated value matches the naive run is screened last, not dropped. | `b0ada29` |
+| **B** | Explained, Paper-artifact inconsistency and Partially explained are capped at "Fits but unsupported" when the run is partial, a knob with values was never screened, or the only support is code evidence. README and docs count as support; source and config files don't. | `b0ada29` |
+| **C** | A stated paper number must appear in a paper quote. Hyperparameter tables anywhere in the paper are appended to the assumption prompt. | `b0ada29` |
+| Small | Value spellings normalised (`False` = `false`). The multiplier help regex had held backspace bytes since `4556338`, so "factor", "scale" and "times" never matched; fixed. | `b0ada29`, `67041c5` |
+
+**Real traces:**
+- **FastGCN** (TF 1.15, Sandboxes): `learning_rate` → rate (AdamOptimizer, `models.py:58`), `epochs` → count
+  (`range()` at line 139).
+- **GraphMAE** (torch + DGL, Docker): lr, weight_decay, in_drop, batch_size, max_epoch, num_layers and
+  num_hidden; MUTAG's 32 = batch 32 is flagged as ambiguous.
+
+**The dev-suite regression, and its fix.** Parts 1+2 as first built (runs 3000/3100, against 2700/2900)
+went from 102 to **92 of 138**, and from 0 to 1 confidently wrong.
+- Cause: the secant step interpolated exact-fit values for other knobs (`lr=0.04`, `eps_start=0.3`,
+  `eps_decay=0.495`, `n=25`), which beat the true ladder values (`max_steps=100`). With one target number,
+  interpolation can make almost any knob fit.
+- Fix: the secant step runs only when no screened value fits every claim (`6365f53`). The re-measurement,
+  runs 3200/3300 on `6365f53`, is in progress.
+- The confident mistake (test-gen-07, noise only, "Explained: class_weight=balanced" on a code line) is what
+  B now caps.
+
+**Post-hoc FastGCN on the current code** (`eval/external/blind-1/posthoc-v15/`, answer known, not counted):
+- `learning_rate=0.001` (the documented value), with the paper's sweep sentence as evidence;
+- every check PASS; the inductive rows shown as notes;
+- label **Fits but unsupported**, only because B capped it: the 200-run budget ran out while confirming
+  pairs, after every single knob had been screened and the answer fully confirmed.
+
+**Open decision, for the user:** should B's "partial run" condition apply only when screening, or the
+answer's own confirmation, is incomplete? That would have given Explained on this run and still capped
+blind-2, which stopped mid-confirmation.
+
+**Next:**
+1. The dev-suite result for `6365f53`.
+2. A real-paper development set, being compiled (`eval/external/devset/CANDIDATES.md`). **Every case must
+   fit Sandboxes:** 3.9 GB, no swap, at most 3600 s per run.
+3. A sealed batch.
+
+### 0.8 After two blind real papers (2026-10-17): the problem and the plan
 
 #### Where things stand
 
