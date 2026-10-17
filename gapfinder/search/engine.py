@@ -786,6 +786,17 @@ class GapSearch:
         y0 = self.value({}, t.metric)
         if y0 is None:
             return []
+        # only to fill a gap in coverage: with one target number, interpolation can make almost any knob hit it
+        # exactly, so when a screened value already fits every claim within noise the secant step would only
+        # manufacture decoys (dev suite, runs 3000/3100: lr=0.04, eps_start=0.3 and eps_decay=0.495 beat the
+        # true max_steps=100, a ladder value that fit; 102 -> 92 of 138 correct). "Every claim": a value that
+        # fits only the target (toy build_mode=release for a planted alpha=3) leaves the gap open
+        held = [h for h in self.targets if h.held_out and not h.tuned_separately and h.metric in self.bands]
+
+        def fits_all(c):
+            return all((g := self.gap(x, c)) is not None and abs(g) <= self.band(x) for x in [t] + held)
+        if any(fits_all(h.changes) for h in hyps):
+            return []
         added: list[Hypothesis] = []
         for _ in range(self.cfg.secant_per_knob):
             new: list[Hypothesis] = []

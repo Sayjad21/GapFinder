@@ -262,3 +262,15 @@ async def test_secant_step_finds_a_value_between_ladder_rungs(tmp_path):
     off = GapSearch(orch(tmp_path, "off"), targets, asm, SearchConfig(trace=False, secant_per_knob=0))
     [r0] = await off.run()
     assert r0.changes != {"alpha": "3"}
+
+
+async def test_secant_step_stays_out_when_a_screened_value_already_fits(tmp_path):
+    """Dev suite: interpolated values of other knobs (lr=0.04, eps_start=0.3) fit as exactly as the true
+    ladder value and sometimes won. With a ladder value that fits, the secant step adds nothing."""
+    m = await toy_metrics(tmp_path, {"alpha": "2.0"})  # 2.0 is on the ladder
+    asm, _ = assumptions_from_spec(HarnessSpec.load_yaml(TOY))
+    targets = [Target("C1", "score", m["score"]), Target("C2", "write_amp", m["write_amp"], held_out=True)]
+    s = GapSearch(orch(tmp_path), targets, asm, SearchConfig(trace=False))
+    [r] = await s.run()
+    assert r.changes == {"alpha": "2.0"}
+    assert not [e for e in s.orch.events.read() if e["type"] == "note" and "secant" in e.get("msg", "")]
