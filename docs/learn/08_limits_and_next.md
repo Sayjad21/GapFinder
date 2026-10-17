@@ -4,35 +4,33 @@ No tool is perfect. Knowing the limits helps you use GapFinder well.
 
 ## What GapFinder can't do (yet)
 
-- **It can only change what the harness exposes.** If a cause is a setting nobody listed, it stays
-  hidden. Patch knobs help, but only for hard-coded *numbers* in Python files.
-- **Loops, pipelines and algorithm changes can't be tested.** MC Dropout's per-split hyperparameter
-  tuning is an example: GapFinder can point to it as a lead, but can't change it.
-- **CPU only.** The cloud machines have 4 CPUs and about 4 GB of memory. Big GPU papers must be scaled
-  down, and some causes only show at full scale.
-- **A person must approve the harness spec.** `spec-draft` writes a draft, but a human decides how the
-  code is run.
+- **It can change settings, hard-coded numbers and function defaults, but not code structure.** A loop, a
+  pipeline order or an algorithm change (MC Dropout's per-split tuning, pygcn's normalisation) can be
+  *pointed at* as a lead, never tested. That is on purpose: rewriting code until the number fits would
+  explain nothing.
+- **Sandboxes only: CPU, 4 cores, about 4 GB of memory, up to an hour per run.** Papers that don't fit
+  (GraphMAE's COLLAB needed more memory just to load) are out of scope, and some causes only show at full
+  scale.
+- **A person writes and approves the harness spec.** `spec-draft` writes a draft, but a human decides how the
+  code is run, and that takes some work per paper.
 - **When the paper's numbers can't tell answers apart, GapFinder can't either.** It then reports a set of
-  equally good answers. More information from the paper, such as more numbers, figures or datasets, is
-  the only real fix.
-- **The evidence is still thin:**
-  - each blind test has 15 runs with a cause, so accuracy differences between versions are within noise;
-  - there is **no blind real paper yet**, because MC Dropout's answer was known while we improved the
-    system.
+  equally good answers. More numbers, statements of relations, and the paper's own tables are what break
+  ties.
+- **The evidence on real papers is thin:**
+  - blind real papers so far: 0 of 2 correct (one miss, one confident mistake), both before the latest
+    rebuild;
+  - development papers, with answers known: VGAE found end to end; pygcn honestly "Unexplained";
+  - practice tasks: accuracy flat across versions (within noise), safety held.
 
 ## What's next (in priority order)
 
-1. **A blind real paper.** Someone who hasn't worked on GapFinder picks a paper with a documented
-   reproduction gap and seals the answer; GapFinder is frozen first. Protocol:
-   `eval/external/BLIND_CASE.md`.
-2. **Use more of each paper's numbers.** Every extra independent claim makes wrong answers easier to rule
-   out.
-3. **Fairer interaction tasks in the benchmark.** The generator should reject a task whenever another pair
-   of settings fits as well, checked the way GapFinder itself searches.
-4. **Bigger test sets.** Then accuracy differences between versions become measurable, not just the
-   safety result.
-5. **More kinds of patch knobs.** Settings read from data files; maybe small loop changes, with careful
-   rules.
+1. **A frozen batch of real papers, all in Sandboxes**, run without changes in between and reported as a
+   rate: found, missed, confidently wrong. The first one (GIN, Informer, PatchTST, GAT, G-Mixup) is running.
+2. **A sealed blind batch** of 3-5 new papers after that, frozen first. Only this can show the method works
+   on papers it hasn't seen. Protocol: `eval/external/BLIND_CASE.md`.
+3. **Use more of each paper's information:** more numbers, relation claims, how many runs a paper's number
+   averages.
+4. **Bigger test sets,** so accuracy differences between versions become measurable.
 
 ## How to contribute
 

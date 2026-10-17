@@ -64,9 +64,12 @@ That is very close to the authors' own explanation. Version 1.0 had simply said 
    replay.
 2. **It's careful about being wrong.** A wrong answer stated confidently is worse than "I don't know". So
    GapFinder checks every answer three ways (see [design decisions](05_design_decisions.md)), and says
-   "Unexplained" or "Inconclusive" when it should. In the last three sealed tests it was confidently
-   wrong **0 times in 90 runs** (and 0 times in the earlier v1.0 tests too). A general coding agent
-   given the same tasks was confidently wrong in 49 of those 90 runs.
+   "Unexplained" or "Inconclusive" when it should.
+   - **On practice papers** (three sealed tests) it was confidently wrong **0 times in 90 runs**. A
+     general coding agent given the same tasks was confidently wrong in 49 of those 90 runs.
+   - **On real papers it is not that safe yet.** In the second blind real-paper test (GraphMAE) it was
+     confidently wrong once. That led to new rules: a confident answer now needs a complete search and
+     real evidence ([the journey](07_the_journey.md)).
 3. **It saves time and money with "forks".** It sets up the experiment once, saves that moment like a
    save point in a video game, and starts every test from that save point instead of from scratch.
 

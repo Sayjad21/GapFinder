@@ -167,4 +167,78 @@ cloud hiccup for a rejected value and lost the right answer.
 - The **web app** (React) shows replay, reports and the scoreboard. A static copy is built for GitHub
   Pages.
 
+---
+
+## Added after the blind real-paper tests (v1.4 and later)
+
+These parts came from studying why real papers failed. Each one makes GapFinder look *inside* the
+program instead of guessing from names and text.
+
+### 4.14 Watching what values do: the runtime trace (`gapfinder/sandbox/trace_hook.py`, `gapfinder/search/trace.py`)
+
+Before the search, GapFinder runs the program once, briefly, with a small hook that watches where each
+setting's value ends up:
+
+| The value lands in… | So the setting is a… | Values worth trying |
+|---|---|---|
+| the optimizer's step size | **rate** | ×10, ÷10, … never 0, never "fraction" steps |
+| a dropout layer | **fraction** | between 0 and 1 |
+| a data loader's batch size, a layer width | **size** | powers of two |
+| the length of a training loop | **count** | ×10, ÷10, 1 |
+| a loop length that is this setting × another | **multiplier** | 1, 2, 5, 10, 100 |
+| a random-seed call | **seed** | not tried at all: seeds are noise, not causes |
+
+This works whatever the setting is called (`--lr`, `--eta`, a YAML key). If two settings share a value, so
+nobody can tell which one reached the call, GapFinder says "ambiguous" rather than guessing. A number written
+straight into the code that reaches one of these calls becomes a **lead** for a patch knob. Real result: on
+FastGCN it found `learning_rate` (the optimizer) and `epochs` (the loop) by watching them.
+
+### 4.15 Filling the gaps between ladder values: the secant step
+
+If the paper's number falls *between* two values GapFinder tried (say ×2 gives too little and ×5 too much),
+it estimates where the crossing is, rounds it to a value a person would write (3, 25, 0.002), and tries
+that. **It only does this when no tested value already fits every claim.** The first version did it always,
+and made up exact-fit values for the *wrong* settings that sometimes beat the true cause. The practice
+suite caught that.
+
+### 4.16 The paper's own statements as checks: relation claims
+
+Papers say things like "the leave-unchanged strategy harms accuracy". GapFinder can take such a statement as
+a claim: under a candidate answer, changing that setting must still move the result in the stated
+direction. A candidate that reverses it is rejected, like one that breaks a held-out number. It is a way to
+tell apart answers that the plain numbers can't.
+
+### 4.17 Comparing the paper with what the code actually did (`gapfinder/search/contrast.py`)
+
+When no setting explains the gap, or only settings nothing supports, one AI call compares two things: the
+paper's training details and hyperparameter tables, and what the trace saw the code actually do. It returns
+differences, each tied to a file and line, and each is checked:
+- the line must exist;
+- a "literal" difference must name a number really on that line;
+- the paper sentence it quotes must really be in the paper and contain the stated number.
+
+Checked literal differences are tested as patch knobs, with the paper's value first. Differences in how the
+code is structured are listed for a person, never tested: rewriting code until the number fits would
+explain nothing.
+
+### 4.18 Earning a confident label
+
+"Explained" or "Paper-artifact inconsistency" now requires all of:
+1. the search finished (the run budget didn't cut it short);
+2. every setting with candidate values got at least one run;
+3. the evidence comes from the paper, its documentation or the web. A line of source code only shows what the
+   code does, not what the authors ran for this experiment.
+
+Anything less is reported as "Fits but unsupported", with the reason. This rule came straight from blind-2.
+
+**A worked example (VGAE, from the development set):**
+1. The static check noticed that `mask_test_edges(adj, test_percent=30., val_percent=20.)` is always called
+   without those two arguments.
+2. The contrast step matched them to the paper's sentence: "The validation and test sets contain 5% and 10%
+   of citation links, respectively."
+3. The patch round set both to the paper's values, in memory, and the gap went from -5.8% to +0.4%.
+4. All 8 numbers from the paper's table still held.
+
+Label: Paper-artifact inconsistency, with the paper's sentence as evidence.
+
 Next: [Why it's built this way →](05_design_decisions.md)

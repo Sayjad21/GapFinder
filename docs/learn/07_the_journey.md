@@ -120,6 +120,55 @@ because the budget ran out before the documented pair got a second run.
 - out-of-space diagnosis 6 of 9, the best yet;
 - two of the four pre-registered goals missed, and reported as missed.
 
+## The first blind real papers (v1.3 → v1.4)
+
+Every real-paper result so far had been on MC Dropout, whose answer we already knew. So the next step was
+**blind real papers**: a separate AI model picked a paper with a documented reproduction gap and sealed the
+answer before GapFinder saw anything.
+
+**blind-1, FastGCN: missed, not confidently wrong.**
+- GapFinder named the right setting (learning rate) but the wrong value.
+- Reason 1: it couldn't read TensorFlow-style flags, so most settings were never tried.
+- Reason 2: the true value fixed the main number but made another row worse. That row had been tuned
+  separately in the paper.
+- Fixed: absl flags, testing every setting, checking guessed defaults, and "tuned separately" rows.
+
+**blind-2, GraphMAE: confidently wrong**, the first confident mistake on any blind test. It said
+"Explained: `mask_rate=0.5`"; the real cause was `alpha_l=1`. It was one chain of failures:
+1. the AI never saw the appendix table with the answer, because its excerpt was cut at 25,000 characters;
+2. so it wrote the code's value as "the paper's value";
+3. a rule then skipped the true setting as "already matching the paper";
+4. an equally good wrong answer passed on weak evidence.
+
+The lesson that changed the plan: **fixing one paper at a time never ends.** Each new paper fails in a new
+way. So instead of more patches, the next stage changed two patterns behind both failures:
+- AI reading may only *reorder* what is tested, never *exclude* it;
+- a confident label must be *earned*.
+
+## The white-box rebuild (after v1.4)
+
+GapFinder stopped treating the program as a black box:
+- **runtime tracing** (watch where values go);
+- the **secant step**;
+- **relation claims**;
+- **paper-versus-trace comparison**;
+- patch knobs for **function defaults**;
+- the **confidence rules**.
+
+Two lessons from testing these:
+1. **The practice suite caught two regressions.** Both times we found the cause and fixed it:
+   - the secant step manufacturing decoys: 102 → 92 of 138 correct;
+   - screening "already matching" settings first, which wasted budget: 102 → 76.
+   After the fixes it is back to 99 of 138 (the same within noise), with 0 confident mistakes.
+2. **One hidden setting had been blocking every real paper.** History matching allowed a 5% "model
+   discrepancy", meant for scaled-down reproductions. With the 3-sigma rule, gaps up to about 15% looked like
+   noise, so no real paper ever reached "look in the code". With 1% at full scale, the VGAE development case
+   was found end to end: a changed function default, matched to the paper's own sentence, tested in memory
+   and verified on all 8 numbers.
+
+What is still unproven: all the successes since blind-2 are on papers whose answers we knew. The next step
+is a frozen batch of papers, run in Sandboxes without changes in between, to measure a rate.
+
 ## Before and after, in one table
 
 | | v1.0 | v1.3 |

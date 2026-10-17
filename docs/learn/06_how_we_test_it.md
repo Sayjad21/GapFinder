@@ -82,15 +82,18 @@ The coding-agent baseline was confidently wrong in 19, 8 and 22 of 30 runs.
   statistical test. It showed that most engine changes after v1.1 were within noise. Only the safety
   result and the real-paper results are clear.
 
-## The real paper: MC Dropout
+## Real papers
 
-The synthetic tasks prove the method works in a controlled world. A real paper is harder. We used MC
-Dropout because its cause is documented:
-- an answer key was written and sealed (hashed) before the first run;
-- GapFinder ran on the real code in cloud Sandboxes (scaled down so it fits the machines).
+The synthetic tasks prove the method works in a controlled world. Real papers are harder. There are three
+kinds of real-paper test, from weakest to strongest evidence:
 
-**Important:** this case is **not blind any more**. Its answer was revealed after v1.0, and later versions
-were improved with it in view. A truly blind real paper is the main missing evidence; the protocol for one
-is in `eval/external/BLIND_CASE.md`.
+| Kind | What it means | Results so far |
+|---|---|---|
+| **Known answer** (MC Dropout, the development set) | the cause is documented and we know it; useful for building, but every success can be the result of tuning to it | MC Dropout names the documented settings (v1.3); VGAE found end to end; pygcn honestly "Unexplained" |
+| **Frozen batch** | papers with known causes, but the code is frozen first and not changed between them, and the harness writers don't see the causes | first batch running (5 papers, all in Sandboxes) |
+| **Sealed blind** | another model picks the paper and seals the answer; GapFinder is frozen; the key is opened only after the run is committed | blind-1 FastGCN: missed. blind-2 GraphMAE: confidently wrong |
+
+The sealed blind cases are the only ones that count as proof. Both were on older versions, and both led to
+the rebuild described in [the journey](07_the_journey.md).
 
 Next: [The journey →](07_the_journey.md)
