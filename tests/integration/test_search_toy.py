@@ -487,3 +487,32 @@ async def test_a_confident_label_needs_a_complete_search(tmp_path):
     s3 = GapSearch(orch(tmp_path, "off"), targets(m), code_only, SearchConfig(complete_for_confidence=False))
     [r3] = await s3.run()
     assert r3.attribution.confidence_label == "Explained"
+
+
+async def test_relation_claims_check_candidates(tmp_path):
+    """Part 3: a relation the paper states over a setting is checked under the candidate. One that holds
+    changes nothing; one that reverses beyond noise fails the candidate like a broken held-out claim."""
+    m = await paper(tmp_path, {"alpha": "2.0"})
+
+    def rel(cid, knob, a, b, direction):
+        return Target(cid, "score", relation={"knob": knob, "from": a, "to": b, "direction": direction})
+
+    holds = targets(m) + [rel("R1", "beta", "0.5", "2.0", "down")]  # more beta, lower score: true
+    s = GapSearch(orch(tmp_path, "holds"), holds, ALL, SearchConfig())
+    [r] = await s.run()
+    assert r.changes == {"alpha": "2.0"} and r.attribution.confidence_label == "Explained"
+    assert r.relations["R1"]["checked"] and r.relations["R1"]["holds"]
+    md = GapReport.from_search(s, [r], paper="toy").to_markdown()
+    assert "Paper's stated relation: R1" in md and "(holds)" in md
+
+    reversed_ = targets(m) + [rel("R2", "alpha", "1.0", "2.0", "down")]  # false under any alpha: the score rises
+    s2 = GapSearch(orch(tmp_path, "rev"), reversed_, ALL, SearchConfig())
+    [r2] = await s2.run()
+    assert r2.attribution.confidence_label not in ("Explained", "Paper-artifact inconsistency", "Partially explained")
+    assert all(v["broken"] for v in r2.relations.values() if v.get("checked")) or not r2.relations
+
+    unknown = targets(m) + [rel("R3", "no_such_knob", "1", "2", "up")]
+    s3 = GapSearch(orch(tmp_path, "unk"), unknown, ALL, SearchConfig())
+    [r3] = await s3.run()
+    assert r3.attribution.confidence_label == "Explained" and not r3.relations["R3"]["checked"]
+    assert len(s3.targets) == 2 and len(s3.relations) == 1  # a relation is never a target to explain

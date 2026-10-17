@@ -92,7 +92,7 @@ function Measured({ m }) {
   );
 }
 
-const KIND = { reversal: "Counterfactual (reversal test)", held_out: "Held-out claim", evidence: "Evidence", effect: "Effect vs noise", held_out_separate: "Held-out claim, tuned separately" };
+const KIND = { reversal: "Counterfactual (reversal test)", held_out: "Held-out claim", evidence: "Evidence", effect: "Effect vs noise", held_out_separate: "Held-out claim, tuned separately", relation: "Paper's stated relation" };
 
 function Belief({ b }) {
   if (!b) return <p className="small">{NR}</p>;

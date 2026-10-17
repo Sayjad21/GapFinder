@@ -51,13 +51,18 @@ class Target:
 
     claim_id: str
     metric: str
-    paper_value: float
+    paper_value: float = float("nan")  # a relation claim (below) states a direction, not a number
     held_out: bool = False  # only used to check explanations, never to choose them
     # a held-out row the paper tuned on its own (another method or dataset with its own sweep; blind-1:
     # FastGCN's inductive rows): measured and reported, but one shared setting isn't expected to fit it, so
     # a conflict with it is a note, not a rejection, and it is left out of the joint history-matching fit
     tuned_separately: bool = False
-    figure: str | None = None  # e.g. "Figure 6": which experiment's stated settings apply
+    figure: str | None = None
+    # a relation the paper states over a setting: {"knob", "from", "to", "direction": "up"|"down"}, e.g. "the
+    # leave-unchanged strategy harms GraphMAE" -> replace_rate 0.0 -> 0.1, down. A candidate under which the
+    # relation reverses beyond noise fails like a broken held-out claim; it breaks ties the numbers can't
+    relation: dict | None = field(default=None, hash=False, compare=False)
+    quote: str | None = None  # e.g. "Figure 6": which experiment's stated settings apply
 
 
 @dataclass
@@ -79,6 +84,7 @@ class SearchConfig:
     secant_per_knob: int = 2
     # a confident label needs a complete search: not partial, every knob screened, support beyond code (blind-2)
     complete_for_confidence: bool = True
+    relation_repeats: int = 2  # runs at each end of a relation claim, per candidate checked
     trace_steps: int = 30  # the dry run stops itself after this many optimizer steps...
     trace_seconds: float = 900  # ...or this many seconds
     coverage_candidates: int = 6  # values per knob at least (the ledger's first, then coverage values)
@@ -203,6 +209,7 @@ class ClaimResult:
     # every configuration the target claim can't tell apart from the answer (likelihood within
     # LL_EQUIVALENT of the answer's, held-out claims no worse), the answer first
     equivalent: list[dict] = field(default_factory=list)
+    relations: dict[str, dict] = field(default_factory=dict)  # relation claim id -> check under the answer
 
 
 def _norm_knob(k: str) -> str:
@@ -333,6 +340,8 @@ class GapSearch:
                  paper_text: str | None = None):
         """`evidence`: optional EvidenceSearch (web) consulted when paper and code don't back a value.
         `claims`: the ledger's claims, so a paper value can be tied to the experiment it belongs to."""
+        self.relations = [t for t in targets if t.relation]  # checked under candidates, never explained
+        targets = [t for t in targets if not t.relation]
         self.orch, self.targets, self.cfg = orch, targets, cfg or SearchConfig()
         self.evidence = evidence
         self.router = router  # optional: Nemotron 3 Super triages failed hypotheses
@@ -692,6 +701,50 @@ class GapSearch:
                               changes=res.changes, gap_before=g0, gap_after=res.gap_after)
         return res
 
+    def _relation_configs(self, rel: Target, changes: Changes) -> tuple[Changes, Changes]:
+        knob = rel.relation["knob"]
+        default = self.spec.knobs[knob].default
+
+        def at(v):
+            c = dict(changes)
+            if _same_value(str(v), default):
+                c.pop(knob, None)
+            else:
+                c[knob] = str(v)
+            return c
+        return at(rel.relation["from"]), at(rel.relation["to"])
+
+    def _relation_result(self, rel: Target, ca: Changes, cb: Changes) -> dict:
+        ya, yb = self.value(ca, rel.metric), self.value(cb, rel.metric)
+        if ya is None or yb is None:
+            return {"checked": False, "why": "not measured under this configuration"}
+        band = self.bands[rel.metric].band if rel.metric in self.bands else 0.0
+        diff, up = yb - ya, rel.relation.get("direction", "up") == "up"
+        broken = diff < -band if up else diff > band
+        holds = diff > band if up else diff < -band
+        return {"checked": True, "from_value": ya, "to_value": yb, "diff": diff, "band": band,
+                "broken": broken, "holds": holds}
+
+    async def _check_relation(self, rel: Target, changes: Changes) -> dict:
+        """Measure the relation's two ends under `changes` (relation_repeats runs each, cached runs reused).
+        Out of budget, it uses what exists and may report "not checked": never a reason to reject."""
+        if rel.relation.get("knob") not in self.spec.knobs:
+            return {"checked": False, "why": f"knob {rel.relation.get('knob')!r} is not in the harness"}
+        ca, cb = self._relation_configs(rel, changes)
+        try:
+            await _all(self.measure(ca, self.cfg.relation_repeats, f"relation {rel.claim_id}"),
+                       self.measure(cb, self.cfg.relation_repeats, f"relation {rel.claim_id}"))
+        except (RunBudgetExceeded, budget.BudgetExceeded):
+            pass
+        return self._relation_result(rel, ca, cb)
+
+    def _relation_broken_cached(self, c: Changes) -> bool:
+        """Some relation reverses under `c`, judged from runs already made (no new runs)."""
+        for rel in self.relations:
+            if rel.relation.get("knob") in self.spec.knobs and self._relation_result(rel, *self._relation_configs(rel, c)).get("broken"):
+                return True
+        return False
+
     def _cap_confidence(self, t: Target, res: ClaimResult) -> None:
         """A confident label must be earned by a complete search (blind-2: "Explained" came from a partial run,
         with a knob never tested and only a code default as evidence). Caps Explained, Paper-artifact
@@ -955,7 +1008,7 @@ class GapSearch:
             res.attribution = self._attribution(t, {}, res.gap_before, ConfidenceLabel.unexplained, [])
             res.notes.append(f"no hypothesis moved the gap by more than {thr:g} noise units")
             return
-        for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay"):
+        for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay", "relations"):
             setattr(res, f, getattr(best, f))
         res.notes.extend(best.notes)
         if res.attribution.confidence_label == ConfidenceLabel.unexplained.value and res.changes:
@@ -963,7 +1016,7 @@ class GapSearch:
             res.notes.append(f"closest configuration tried: {res.changes} (gap {res.gap_after:+.1%}); "
                              "it did not pass verification")
             res.changes, res.gap_after = {}, res.gap_before
-            res.plausibility, res.counterfactual, res.held_out, res.replay = {}, {}, {}, []
+            res.plausibility, res.counterfactual, res.held_out, res.replay, res.relations = {}, {}, {}, [], {}
             res.attribution.assumption_set, res.attribution.gap_after = [], res.gap_before
             res.attribution.checkpoint_ids, res.attribution.counterfactual_ok = [], None
         if res.changes:
@@ -1038,6 +1091,15 @@ class GapSearch:
                                    f"under {dict(changes)}: reported, not a rejection")
                 continue
             r.held_out[other.claim_id] = {"gap_before": before, "gap_after": after, "ok": ok}
+        # spread under the candidate against the naive run's: reported, never used to judge (the true cause
+        # often widens the spread too: section 0.6's measured "don't")
+        if len(self.measure_ok(changes)) >= 3 and self.band(t) > 0:
+            ratio = self.band_at(t, changes) / self.band(t)
+            if ratio >= 3 or ratio <= 1 / 3:
+                r.notes.append(f"its runs spread {ratio:.1f}x the naive run's noise band (reported, not used to judge)")
+        # 5b'. relations the paper states over a setting must not reverse under the candidate
+        for rel in self.relations if self.cfg.verify else ():
+            r.relations[rel.claim_id] = await self._check_relation(rel, changes)
         # 5c. plausibility: the value needs evidence, not just a good fit
         for knob, value in changes.items() if self.cfg.verify else ():
             if not self.cfg.evidence_gate:
@@ -1054,7 +1116,7 @@ class GapSearch:
                     self.orch.events.emit("note", msg=f"web evidence for {knob}={value}: {ev.ref}")
 
         cf_ok = all(v["ok"] for v in r.counterfactual.values())
-        ho_ok = all(v["ok"] for v in r.held_out.values())
+        ho_ok = all(v["ok"] for v in r.held_out.values()) and not any(v.get("broken") for v in r.relations.values())
         # with the gate off nothing is ever supported, even when verify=False leaves no plausibility rows
         plaus_ok = self.cfg.evidence_gate and all(p.supported for p in r.plausibility.values())
         if not self.cfg.evidence_gate:
@@ -1264,7 +1326,7 @@ class GapSearch:
             res.notes.append(f"patch round: {c} fits every claim but did not pass verification")
             return
         patches = {k: v for k, v in c.items() if ast_patch.is_patch(k)}
-        for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay"):
+        for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay", "relations"):
             setattr(res, f, getattr(trial, f))
         res.status = "searched"
         res.diagnosis = {**d.to_dict(), "leads": res.diagnosis.get("leads")}
@@ -1434,6 +1496,8 @@ class GapSearch:
             if any((gh := self.gap(h, c)) is not None and abs(gh) > abs(self.gap(h, {})) + self.band(h)
                    for h in held):
                 continue
+            if self._relation_broken_cached(c):  # the paper's stated relation reverses under it
+                continue
             out.append({"config": dict(c), "loglik": round(v, 3)})
         return out[:1] + sorted(out[1:], key=lambda e: (len(e["config"]), -e["loglik"]))
 
@@ -1592,7 +1656,7 @@ class GapSearch:
             if best is None or _better(trial, best):
                 best = trial
         if best is not None and _rank(best) < _LABEL_RANK[ConfidenceLabel.unexplained.value]:
-            for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay"):
+            for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay", "relations"):
                 setattr(res, f, getattr(best, f))
             res.notes.extend(best.notes)
             res.notes.append("verified from runs already made, after the budget ran out")

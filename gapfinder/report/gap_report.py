@@ -82,7 +82,7 @@ class GapReport:
                 plausibility={k: Plausibility(**p) for k, p in (c.get("plausibility") or {}).items()},
                 screen=c.get("screen") or [], hypotheses_tested=c.get("hypotheses_tested", 0),
                 replay=c.get("replay") or [], notes=c.get("notes") or [], value_sets=c.get("value_sets") or {},
-                diagnosis=c.get("diagnosis"), equivalent=c.get("equivalent") or [])
+                diagnosis=c.get("diagnosis"), equivalent=c.get("equivalent") or [], relations=c.get("relations") or {})
         claims = d.get("claims") or []
         return cls(paper=d.get("paper", "?"), artifact=d.get("artifact", "?"), results=[claim(c) for c in claims],
                    noise=d.get("noise") or {}, naive=d.get("naive") or {}, runs=d.get("runs", 0),
@@ -211,6 +211,13 @@ class GapReport:
                                    + (" (not worse beyond noise)" if v["ok"] else " (WORSE beyond noise)")})
         if not r.held_out:
             checks.append({"kind": "held_out", "ok": None, "text": "no held-out claims were checked"})
+        for cid, v in (r.relations or {}).items():
+            if not v.get("checked"):
+                checks.append({"kind": "relation", "ok": None, "text": f"{cid}: {v.get('why', 'not checked')}"})
+                continue
+            verdict = "holds" if v["holds"] else "REVERSED beyond noise" if v["broken"] else "within noise (not decisive)"
+            checks.append({"kind": "relation", "ok": not v["broken"],
+                           "text": f"{cid}: {v['from_value']:.4g} -> {v['to_value']:.4g} ({verdict})"})
         for k, p in r.plausibility.items():
             checks.append({"kind": "evidence", "ok": bool(p.supported),
                            "text": f"`{k}={r.changes.get(k)}`: {p.reason}"
@@ -567,7 +574,8 @@ def _belief_lines(b: dict) -> list[str]:
     if not b["checks"]:
         return [f"- {b['note']}"]
     names = {"reversal": "Counterfactual (reversal test)", "held_out": "Held-out claim", "evidence": "Evidence",
-             "effect": "Effect vs noise", "held_out_separate": "Held-out claim, tuned separately"}
+             "effect": "Effect vs noise", "held_out_separate": "Held-out claim, tuned separately",
+             "relation": "Paper's stated relation"}
     mark = {True: "PASS", False: "FAIL", None: "NOT CHECKED"}
     return [f"- {'NOTE' if x['kind'] == 'held_out_separate' else mark[x['ok']]} · {names[x['kind']]}: {x['text']}"
             for x in b["checks"]]
