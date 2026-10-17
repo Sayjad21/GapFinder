@@ -19,17 +19,22 @@ what it is, how to use it, the architecture, each component, the design choices 
 
 ![Replay of a RusKey run: the checkpoint tree, claim bars against the paper, and the budget](docs/img/replay.png)
 
-> Status (2026-10-16): **v1.3**.
+> Status (2026-10-17): **v1.4**.
 > - **Blind sealed tests** (GapBench, a fresh generated set for each version, seed made after the
 >   version tag): GapFinder was **confidently wrong in 0 of 90 runs** across v1.1-v1.3, against 8-22 of
 >   30 per test for a standard coding agent. It named the planted cause in 7, 12 and 9 of 15 runs. The
 >   misses are interactions where several settings fit the paper's numbers equally well.
 > - **On a real paper (MC Dropout, not blind):** v1.3 names the documented cause (`epochx=10,
 >   hidden=1`), says the rest is outside the settings, and points to the right lines of code.
-> - **First blind real paper (FastGCN, sealed by a separate model):** **missed, not confidently wrong.**
->   It named the right setting (`learning_rate`), but chose 0.005 as "fits but unsupported". It tested the
->   documented 0.001, which matched the target (0.817 vs 0.818), and rejected it because the held-out
->   inductive rows got worse under the shared setting. See [RESULT.md](eval/external/blind-1/RESULT.md).
+> - **Blind real papers (sealed by a separate model), 0 of 2 correct:**
+>   - **FastGCN (v1.3): missed, not confidently wrong.** It named the right setting (`learning_rate`)
+>     but the wrong value, labelled only "fits but unsupported"
+>     ([RESULT.md](eval/external/blind-1/RESULT.md)).
+>   - **GraphMAE (v1.4): confidently wrong.** It said "Explained: `mask_rate=0.5`"; the documented cause
+>     is `alpha_l=1`. The ledger never saw the appendix table that states it, so GapFinder skipped the
+>     true setting, and an equally good fit passed on weak code evidence
+>     ([RESULT.md](eval/external/blind-2/RESULT.md)).
+>   - This is GapFinder's first confident mistake on a blind test.
 > - **New:** it tests hard-coded constants in memory ("patch knobs") without editing a file.
 >
 > Plan: [docs/PLAN.md](docs/PLAN.md) · full context: [docs/CONTEXT_v11.md](docs/CONTEXT_v11.md) ·
@@ -59,6 +64,7 @@ How to read the table:
 
 | Real paper, blind | Result | Data |
 |---|---|---|
+| GraphMAE (Hou et al., KDD 2022), Table 2 COLLAB (80.32), with IMDB-B, IMDB-M and MUTAG held out (tuned separately). Frozen at `v1.4` = `blind-2`, sealed by a separate model. 59 local Docker runs: COLLAB is OOM-killed on a 4 GB Sandboxes VM. | **Confidently wrong:** "Explained: `mask_rate=0.5`" (gap -2.2% → -0.1%). The documented cause is `alpha_l=1` (the authors, issue #16). The ledger's prompt stopped before appendix Table 8, which states γ = 1 for COLLAB. It then recorded the code's `alpha_l` default as the paper's value, and the search dropped `alpha_l` as "stated and already matching" before a single run. `mask_rate=0.5` fits as well, but its evidence was the code's default, which COLLAB's config overrides. | [RESULT.md](eval/external/blind-2/RESULT.md), [PRE_REVEAL.md](eval/external/blind-2/PRE_REVEAL.md) |
 | FastGCN (Chen et al., ICLR 2018), Table 5 transductive Cora (0.818), 3 held-out rows. GapFinder was frozen at tag `blind-1`. A separate model (Claude Sonnet) chose the paper and sealed the answer key, and its hash was committed before any run. 45 Sandboxes runs. | **Missed under the pre-registered rule, not confidently wrong.** "Fits but unsupported: `learning_rate=0.005`" (gap -2.3% → -1.1%). The documented cause is learning rate 0.001 (the repo owner, issue #10). GapFinder tested 0.001 and it matched the target (0.817), but the harness shares one learning rate across all four rows, and the inductive Cora row dropped to 0.641 against 0.723, so the held-out check rejected it. A blind-found gap: the repo map doesn't read `tf.app.flags`, so only `learning_rate` was screened. Post-hoc (not counted), with only the transductive row held out, the same runs give **Explained, `learning_rate=0.001`**. | [RESULT.md](eval/external/blind-1/RESULT.md), [PRE_REVEAL.md](eval/external/blind-1/PRE_REVEAL.md) |
 
 | Real paper (not blind) | Result | Data |
@@ -181,19 +187,26 @@ already handle.
 - Small samples.
   - Each sealed test has 15 cause runs over 5 tasks.
   - The dev suite has 23 cause tasks, and its replicates of identical code differ by about ±5 runs.
-  - Accuracy changes between versions are within that noise; the safety result (0 confidently wrong in
-    90 blind runs) is the robust one.
-- One blind real paper so far (FastGCN: missed, not confidently wrong), and its answer was sealed by a
-  separate AI model, not a person. MC Dropout was not blind: its answer key was revealed before v1.1.
-  Protocol: [BLIND_CASE.md](eval/external/BLIND_CASE.md).
-- **Fixed after blind-1, not yet tested blind:**
+  - Accuracy changes between versions are within that noise. The synthetic safety result (0 confidently
+    wrong in 90 blind runs) is the robust one.
+- **Two blind real papers, both sealed by a separate AI model, not a person. Neither was correct.**
+  - FastGCN: missed.
+  - GraphMAE: **confidently wrong**.
+  - So the synthetic safety result does not carry over to real papers yet. MC Dropout was not blind: its
+    answer key was revealed before v1.1. Protocol: [BLIND_CASE.md](eval/external/BLIND_CASE.md).
+- **Fixed after blind-1, tested on blind-2:**
   - the repo map didn't read `tf.app.flags` / absl;
   - spec knobs no assumption named were never screened;
   - guessed code defaults weren't checked;
   - rows tuned separately acted as vetoes.
 
-  With the fixes, a post-hoc FastGCN run names the documented `learning_rate=0.001` as Explained
-  ([RESULT.md](eval/external/blind-1/RESULT.md)). That run had the answer in view; blind-2 is the test.
+  These worked as designed on GraphMAE, but the miss came from elsewhere.
+- **Open after blind-2** ([RESULT.md](eval/external/blind-2/RESULT.md)):
+  - the assumption step sees only the first 25,000 characters of the paper, so appendix hyperparameter
+    tables are missed;
+  - a "stated" paper value isn't required to appear in a paper quote;
+  - a knob whose stated value matches the naive run is dropped, not ranked last;
+  - a code default that the dataset's config overrides counts as evidence.
 - Patch knobs test literals in Python modules only. A loop, a grid search or a data pipeline can't be
   patched this way.
 - CPU only: Sandboxes VMs have 4 vCPUs and 3.9 GB, so GPU papers and the paper's full data scale
