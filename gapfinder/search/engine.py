@@ -85,6 +85,9 @@ class SearchConfig:
     # a confident label needs a complete search: not partial, every knob screened, support beyond code (blind-2)
     complete_for_confidence: bool = True
     relation_repeats: int = 2  # runs at each end of a relation claim, per candidate checked
+    # out of space: one Super call compares the paper with the traced run (gapfinder/search/contrast.py);
+    # grounded literal differences are tried first in the patch round, structural ones are reported only
+    contrast: bool = True
     trace_steps: int = 30  # the dry run stops itself after this many optimizer steps...
     trace_seconds: float = 900  # ...or this many seconds
     coverage_candidates: int = 6  # values per knob at least (the ledger's first, then coverage values)
@@ -354,6 +357,8 @@ class GapSearch:
         self._family = 1  # hypotheses tested together in the current confirm round (multiple comparisons)
         self._artifact_flags = None  # the artifact's repo map, when its code is on this machine
         self.trace_report = None  # set by _trace() when the dry run recorded anything
+        self.trace_records: list[dict] = []  # the raw dry-run records (for the paper-to-trace contrast)
+        self.paper_text = paper_text
         if self.cfg.coverage and self.spec.code_root() is not None:  # a local base, or the spec's `source`
             self._fill_choices_from_artifact()
         # assumption -> spec knob; assumptions about knobs the harness can't set are skipped (and reported)
@@ -573,7 +578,7 @@ class GapSearch:
             self.orch.events.emit("note", msg="trace: no records (not a Python artifact, or the hook didn't load)")
             return
         rep = analyze(recs, self.spec.knobs, self.spec.code_root())
-        self.trace_report = rep
+        self.trace_report, self.trace_records = rep, recs
         changed = apply_roles(self.spec, rep)
         self.orch.events.emit("trace", **rep.to_dict(), applied=changed)
         self.orch.events.emit("note", msg="trace: " + rep.summary())
@@ -690,6 +695,7 @@ class GapSearch:
         if self.cfg.history_matching:
             self._history_match(t, res)
             if self.cfg.patch_knobs and (res.diagnosis or {}).get("kind", "").startswith("out_of_space"):
+                await self._contrast(res)
                 try:
                     await self._patch_round(t, res)
                 except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
@@ -775,6 +781,28 @@ class GapSearch:
             return
         res.notes.append(f"capped at Fits but unsupported (was {res.attribution.confidence_label}): " + "; ".join(why))
         res.attribution = res.attribution.model_copy(update={"confidence_label": ConfidenceLabel.fits_but_unsupported.value})
+
+    async def _contrast(self, res: ClaimResult) -> None:
+        """Out of space: ask Super where the code, as traced, differs from the paper; ground the answers."""
+        if not self.cfg.contrast or self.router is None or not self.paper_text or not self.trace_records:
+            return
+        root = self.spec.code_root()
+        if root is None:
+            return
+        from gapfinder.search.contrast import contrast, ground
+
+        try:
+            diffs = await contrast(self.router, self.paper_text, self.trace_records, (res.diagnosis or {}).get("leads") or [])
+        except budget.BudgetExceeded:
+            raise
+        except Exception as exc:  # an aid: a failure leaves the patch round as it was
+            self.orch.events.emit("note", msg=f"contrast: skipped ({type(exc).__name__}: {str(exc)[:160]})")
+            return
+        patch, structural, rejected = ground(diffs, root)
+        res.diagnosis["contrast_leads"] = patch
+        res.diagnosis["structural_leads"] = structural
+        self.orch.events.emit("note", msg=f"contrast: {len(patch)} literal and {len(structural)} structural difference(s) "
+                                          f"from the paper" + (f"; rejected: {'; '.join(rejected)}" if rejected else ""))
 
     async def _secant_step(self, t: Target, hyps: list[Hypothesis], tried: set[frozenset]) -> list[Hypothesis]:
         """Secant iteration on each numeric knob the paper's number is bracketed on: interpolate the crossing,
@@ -1278,11 +1306,15 @@ class GapSearch:
         root = self.spec.code_root()
         leads = [x for x in (res.diagnosis or {}).get("leads") or []
                  if x["family"] == "unexposed_setting" and x.get("name") and x.get("value")]
+        contrasted = [x for x in (res.diagnosis or {}).get("contrast_leads") or []]
         if self.trace_report is not None:  # literals seen reaching a sink at runtime come first
             traced = [{"file": x.file, "line": x.line, "name": x.name, "value": x.literal, "family": "unexposed_setting",
                        "source": "trace", "sink": x.sink} for x in self.trace_report.leads]
             have = {(t["file"], t["line"]) for t in traced}
             leads = traced + [x for x in leads if (x["file"], x["line"]) not in have]
+        if contrasted:  # differences from the paper, grounded to a literal, come before everything
+            have = {(c["file"], c["line"]) for c in contrasted}
+            leads = contrasted + [x for x in leads if (x["file"], x["line"]) not in have]
         # imported modules through the import hook; entry scripts only when the command runs them directly
         leads = [x for x in leads if root is not None and (not ast_patch.entry_script(root / x["file"])
                                                            or ast_patch.direct_entry(self.spec.run.command, x["file"]))]
@@ -1298,6 +1330,9 @@ class GapSearch:
             self.spec.knobs.setdefault(k, Knob(layer="environment", default=str(x["value"]), env=True))
             role = "size" if str(x.get("sink", "")).startswith(("batch.", "width.")) else None
             vals = ((role_values(role, str(x["value"])) if role else None) or patch_values(x["name"], str(x["value"])))
+            pv = x.get("paper_value")  # a contrast lead: the paper's own number first
+            if pv and not _same_value(str(pv), str(x["value"])):
+                vals = [str(pv)] + [v for v in vals if not _same_value(v, str(pv))]
             vals = vals[: self.cfg.patch_values]
             with_base.append([{**base, k: v} for v in vals] if base else [])
             alone.append([{k: v} for v in vals])
@@ -1340,7 +1375,8 @@ class GapSearch:
         for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay", "relations"):
             setattr(res, f, getattr(trial, f))
         res.status = "searched"
-        res.diagnosis = {**d.to_dict(), "leads": res.diagnosis.get("leads")}
+        res.diagnosis = {**d.to_dict(), **{k: res.diagnosis.get(k) for k in ("leads", "contrast_leads", "structural_leads")
+                                           if res.diagnosis.get(k) is not None}}
         res.notes.extend(trial.notes)
         res.notes.append("explained with a code patch (tested in memory, no file edited): " + "; ".join(
             f"{ast_patch.parse(k)[0]} line {ast_patch.parse(k)[1]}: {ast_patch.parse(k)[2]} = "

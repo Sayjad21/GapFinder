@@ -396,6 +396,12 @@ class GapReport:
                 out.append("- Leads outside the settings (static code checks, nothing run; check these first):")
                 out += [f"  - {x['family'].replace('_', ' ')}: {x['detail']} (`{x['file']}:{x['line']}`)"
                         for x in leads[:8]]
+            diffs = (r.diagnosis.get("contrast_leads") or []) + (r.diagnosis.get("structural_leads") or [])
+            if diffs:  # proposed by Nemotron from the paper and the traced run, grounded to a repo line
+                out.append("- Where the code differs from the paper (model-proposed, checked against the repo; "
+                           "literal ones were tried as patch knobs, structural ones are not tested):")
+                out += [f"  - `{x['file']}:{x['line']}`: paper says {x['paper_says']}; code does {x['code_does']}"
+                        for x in diffs[:6]]
             sets = r.value_sets and {k: v for k, v in r.value_sets.items() if len(v) > 1}
             if sets:
                 out.append("- Equally good values: " + "; ".join(f"`{k}` in {{{', '.join(v)}}}" for k, v in sets.items()))
