@@ -229,7 +229,8 @@ async def cmd_search(args) -> int:
                                                               noise_setups=args.noise_setups,
                                                               reproduce_tol=args.reproduce_tol,
                                                               evidence_gate=not args.no_evidence_gate,
-                                                              rank=args.rank, seed=args.seed),
+                                                              rank=args.rank, seed=args.seed,
+                                                              hm_disc=spec.discrepancy if spec.discrepancy is not None else 0.01),
                        evidence=evidence, claims=ledger_claims, router=_router_if_configured(), paper_text=paper_text)
     for path in args.resume or []:  # reuse earlier runs' branch results (no re-running, no re-paying)
         lines = Path(path).read_text(encoding="utf-8").splitlines()

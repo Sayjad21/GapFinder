@@ -52,8 +52,10 @@ Loop bounds in the repo's code (file:line -> bound):
 List at most 5 differences, most likely to explain the gap first. For each:
 - file and line: a repo file and line from the lists above, where the code does the thing;
 - paper_says / code_does: short, concrete;
-- kind: "literal" when the difference is one hard-coded number on that line (give `name`, the variable or
-  keyword that holds it, and `paper_value`, the number the paper states); otherwise "structural".
+- kind: "literal" when the difference is one hard-coded number on that line (give `name`, the variable,
+  keyword or function parameter that holds it, and `paper_value`, the number the paper states); otherwise
+  "structural";
+- quote: the paper's own words that state it, copied exactly (one sentence or table cell).
 Only differences the paper text supports. If you find none, return an empty list.
 """
 
@@ -66,6 +68,7 @@ class Difference(BaseModel):
     kind: Literal["literal", "structural"]
     name: str | None = None
     paper_value: str | None = None
+    quote: str | None = None  # the paper's words, verbatim: grounded against the paper before use
 
 
 class Differences(BaseModel):
@@ -125,6 +128,13 @@ def _literal_on_line(path: Path, line: int, name: str | None) -> str | None:
     for node in ast.walk(tree):
         if getattr(node, "lineno", None) != line:
             continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):  # a parameter default on the def line
+            a = node.args
+            pos = a.args[len(a.args) - len(a.defaults):] if a.defaults else []
+            pairs = list(zip(pos, a.defaults)) + [(x, y) for x, y in zip(a.kwonlyargs, a.kw_defaults) if y is not None]
+            for arg, dflt in pairs:
+                if arg.arg == name and isinstance(dflt, ast.Constant) and isinstance(dflt.value, (int, float)):
+                    return ast.get_source_segment(src, dflt)
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             if name in (None, node.targets[0].id) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, (int, float)):
                 return ast.get_source_segment(src, node.value)
@@ -135,9 +145,13 @@ def _literal_on_line(path: Path, line: int, name: str | None) -> str | None:
     return None
 
 
-def ground(diffs: list[Difference], root: Path) -> tuple[list[dict], list[dict], list[str]]:
+def ground(diffs: list[Difference], root: Path, paper_text: str | None = None) -> tuple[list[dict], list[dict], list[str]]:
     """(patch leads, structural leads, rejections). A patch lead has the shape of a static lead plus the
-    paper's value; anything that doesn't check out against the repo is rejected with a reason."""
+    paper's value, and the paper's quote when it is verbatim in the paper and contains that number (then it
+    is evidence for the value); anything that doesn't check out against the repo is rejected with a reason."""
+    from gapfinder.ledger.grounding import Grounder, _numbers, _same_num
+
+    g = Grounder(paper_text, root) if paper_text else None
     patch, structural, rejected = [], [], []
     for d in diffs:
         path = root / d.file
@@ -156,8 +170,15 @@ def ground(diffs: list[Difference], root: Path) -> tuple[list[dict], list[dict],
                 structural.append(entry)
                 continue
             pv = _NUM.search(d.paper_value or "")
+            quote = None
+            if pv and d.quote and g is not None and g.quote_in_paper(d.quote) and any(
+                    _same_num(float(pv.group(0)), n) for n in _numbers(d.quote)):
+                quote = d.quote.strip()
+            elif d.quote:
+                rejected.append(f"{d.file}:{d.line}: the quote is not in the paper or lacks {d.paper_value!r}; "
+                                "kept as a lead without evidence")
             patch.append({**entry, "name": d.name, "value": lit, "paper_value": pv.group(0) if pv else None,
-                          "family": "unexposed_setting", "source": "contrast"})
+                          "quote": quote, "family": "unexposed_setting", "source": "contrast"})
         else:
             structural.append(entry)
     return patch, structural, rejected

@@ -78,6 +78,11 @@ class HarnessSpec(BaseModel):
     knobs: dict[str, Knob] = Field(default_factory=dict)
     allowed_paths: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
+    # history matching's model-discrepancy allowance, as a fraction of the paper's value: how far a correct
+    # configuration may still sit from the paper because the reproduction differs (a scaled-down surrogate:
+    # MC Dropout's T and splits, 0.05). None: a full-scale reproduction, and `gapfinder search` uses 0.01.
+    # 0.05 for every case made a 5.8% gap (VGAE), 2.3% (FastGCN) and 2.2% (GraphMAE) look like noise
+    discrepancy: float | None = None
 
     @model_validator(mode="after")
     def _placeholders_known(self):

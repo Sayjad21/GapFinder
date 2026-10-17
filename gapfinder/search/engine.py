@@ -92,6 +92,10 @@ class SearchConfig:
     # out of space: one Super call compares the paper with the traced run (gapfinder/search/contrast.py);
     # grounded literal differences are tried first in the patch round, structural ones are reported only
     contrast: bool = True
+    # also look for a code cause when the answer isn't confident (in space only through settings nothing
+    # supports: devset VGAE fitted with hidden2=1600, while the paper states the 10%/5% edge split the code
+    # changed): leads, contrast and the patch round run then too, and a patch replaces the answer only if better
+    patch_when_unsupported: bool = True
     trace_steps: int = 30  # the dry run stops itself after this many optimizer steps...
     trace_seconds: float = 900  # ...or this many seconds
     coverage_candidates: int = 6  # values per knob at least (the ledger's first, then coverage values)
@@ -706,7 +710,7 @@ class GapSearch:
             self._mde_check(t, res)
         if self.cfg.history_matching:
             self._history_match(t, res)
-            if self.cfg.patch_knobs and (res.diagnosis or {}).get("kind", "").startswith("out_of_space"):
+            if self.cfg.patch_knobs and self._wants_patch(res):
                 await self._contrast(res)
                 try:
                     await self._patch_round(t, res)
@@ -794,6 +798,16 @@ class GapSearch:
         res.notes.append(f"capped at Fits but unsupported (was {res.attribution.confidence_label}): " + "; ".join(why))
         res.attribution = res.attribution.model_copy(update={"confidence_label": ConfidenceLabel.fits_but_unsupported.value})
 
+    def _unsupported(self, res: ClaimResult) -> bool:
+        """No confident answer: the patch round may look for a code cause (patch_when_unsupported)."""
+        confident = {ConfidenceLabel.explained.value, ConfidenceLabel.inconsistency.value}
+        return self.cfg.patch_when_unsupported and not (res.attribution and res.attribution.confidence_label in confident)
+
+    def _wants_patch(self, res: ClaimResult) -> bool:
+        kind = (res.diagnosis or {}).get("kind", "")
+        return kind.startswith("out_of_space") or (kind in ("in_space", "reproduced") and self._unsupported(res)
+                                                    and bool((res.diagnosis or {}).get("leads")))
+
     async def _contrast(self, res: ClaimResult) -> None:
         """Out of space: ask Super where the code, as traced, differs from the paper; ground the answers."""
         if not self.cfg.contrast or self.router is None or not self.paper_text or not self.trace_records:
@@ -810,7 +824,7 @@ class GapSearch:
         except Exception as exc:  # an aid: a failure leaves the patch round as it was
             self.orch.events.emit("note", msg=f"contrast: skipped ({type(exc).__name__}: {str(exc)[:160]})")
             return
-        patch, structural, rejected = ground(diffs, root)
+        patch, structural, rejected = ground(diffs, root, self.paper_text)
         res.diagnosis["contrast_leads"] = patch
         res.diagnosis["structural_leads"] = structural
         self.orch.events.emit("note", msg=f"contrast: {len(patch)} literal and {len(structural)} structural difference(s) "
@@ -1342,6 +1356,13 @@ class GapSearch:
         for x in leads:
             k = ast_patch.knob_name(x["file"], x["line"], x["name"])
             self.spec.knobs.setdefault(k, Knob(layer="environment", default=str(x["value"]), env=True))
+            if x.get("quote") and x.get("paper_value") and k not in self.assumptions:
+                # the paper states this value, verbatim: evidence like a ledger quote, and a paper-code difference
+                self.assumptions[k] = Assumption(
+                    id=f"P{len(self.assumptions) + 1}", knob=k, layer="environment", paper_value=str(x["paper_value"]),
+                    code_default=str(x["value"]), candidate_values=[str(x["paper_value"])], prior_score=0.9,
+                    status=AssumptionStatus.stated_code_differs.value, affects_claims=[],
+                    evidence=[Evidence(kind="paper", ref="paper text", quote=x["quote"])])
             role = "size" if str(x.get("sink", "")).startswith(("batch.", "width.")) else None
             vals = ((role_values(role, str(x["value"])) if role else None) or patch_values(x["name"], str(x["value"])))
             pv = x.get("paper_value")  # a contrast lead: the paper's own number first
@@ -1354,6 +1375,10 @@ class GapSearch:
         def rr(groups):  # round robin over leads: every lead gets its first values first
             return [g[i] for i in range(max((len(g) for g in groups), default=0)) for g in groups if i < len(g)]
         configs = rr(with_base) + rr(alone)
+        stated = {ast_patch.knob_name(x["file"], x["line"], x["name"]): str(x["paper_value"]) for x in leads
+                  if x.get("paper_value") and x.get("source") == "contrast"}
+        if len(stated) > 1:  # every difference the paper states, at the paper's values, together (VGAE: test and val %)
+            configs = [stated] + ([{**base, **stated}] if base else []) + [c for c in configs if c != stated]
         if self._patch_reserve:  # leave room for the confirmation repeats
             room = max(0, self.cfg.max_runs - self.runs_used - self.confirm_repeats(t))
             configs = configs[:room]
@@ -1386,6 +1411,10 @@ class GapSearch:
             res.notes.append(f"patch round: {c} fits every claim but did not pass verification")
             return
         patches = {k: v for k, v in c.items() if ast_patch.is_patch(k)}
+        if res.changes and not _better(trial, res):  # an in-space answer stands unless the patch is better
+            res.notes.append(f"patch round: {c} also fits every claim ({trial.attribution.confidence_label}), "
+                             f"but doesn't beat {res.changes}")
+            return
         for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay", "relations"):
             setattr(res, f, getattr(trial, f))
         res.status = "searched"
@@ -1426,7 +1455,7 @@ class GapSearch:
         d = diagnose(runs, claims, t.claim_id, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc)
         res.diagnosis = d.to_dict()
         root = self.spec.code_root()
-        if d.kind.startswith("out_of_space") and root is not None:
+        if (d.kind.startswith("out_of_space") or self._unsupported(res)) and root is not None:
             from gapfinder.ingest.code_checks import code_checks
 
             leads = code_checks(root, set(self.spec.knobs))
