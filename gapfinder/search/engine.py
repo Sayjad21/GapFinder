@@ -84,6 +84,10 @@ class SearchConfig:
     secant_per_knob: int = 2
     # a confident label needs a complete search: not partial, every knob screened, support beyond code (blind-2)
     complete_for_confidence: bool = True
+    # A knob whose stated paper value matches the naive run: True screens it last in the first pass (that cost
+    # the dev suite 8 of 10 interaction runs in an ablation: GapBench papers state many values that match);
+    # False leaves it out of the first pass and adds it to the fallback round, so it is never dropped for good
+    demote_stated: bool = False
     relation_repeats: int = 2  # runs at each end of a relation claim, per candidate checked
     # out of space: one Super call compares the paper with the traced run (gapfinder/search/contrast.py);
     # grounded literal differences are tried first in the patch round, structural ones are reported only
@@ -357,6 +361,8 @@ class GapSearch:
         self._family = 1  # hypotheses tested together in the current confirm round (multiple comparisons)
         self._artifact_flags = None  # the artifact's repo map, when its code is on this machine
         self.trace_report = None  # set by _trace() when the dry run recorded anything
+        self._stated_skipped: set[str] = set()  # stated and matching the naive run: out of the first pass
+        self._include_stated = False  # the fallback round brings them back
         self.trace_records: list[dict] = []  # the raw dry-run records (for the paper-to-trace contrast)
         self.paper_text = paper_text
         if self.cfg.coverage and self.spec.code_root() is not None:  # a local base, or the spec's `source`
@@ -601,7 +607,12 @@ class GapSearch:
                               for v in stated):
                 # the ledger's stated value may be wrong (blind-2: it wrote alpha_l's code default, 2, as the
                 # paper's value, and the true cause was dropped before a single run): demote, don't drop
-                last.append((k, a, stated))
+                if self.cfg.demote_stated:
+                    last.append((k, a, stated))
+                elif not self._include_stated:
+                    self._stated_skipped.add(k)  # tested in the fallback round if the first pass isn't confident
+                else:
+                    last.append((k, a, stated))
                 continue
             open_knobs.append((k, a, stated))
         open_knobs += last
@@ -686,7 +697,8 @@ class GapSearch:
             res.notes.append(f"stopped early: {exc}")
             await self._label_partial(t, res)
         confident = {ConfidenceLabel.explained.value, ConfidenceLabel.inconsistency.value}
-        if self._fallback and not (res.attribution and res.attribution.confidence_label in confident):
+        if (self._fallback or (self._stated_skipped and not self._include_stated)) and not (
+                res.attribution and res.attribution.confidence_label in confident):
             await self._spec_knob_round(t, res, tried)
         self._cap_confidence(t, res)
         res.hypotheses_tested = len(tried)
@@ -856,11 +868,13 @@ class GapSearch:
     async def _spec_knob_round(self, t: Target, res: ClaimResult, tried: set[frozenset]) -> None:
         """The ledger's knobs gave no confident answer: search again with the spec knobs no assumption names
         added (low prior, code-derived values). Runs already measured are reused. The better result is kept."""
-        added = list(self._fallback)
-        self.orch.events.emit("note", msg=f"{t.claim_id}: no confident answer from the ledger's knobs; adding spec "
-                                          f"knobs no assumption names: {', '.join(added)}")
+        added = list(self._fallback) + sorted(self._stated_skipped)
+        self.orch.events.emit("note", msg=f"{t.claim_id}: no confident answer from the first pass; adding spec "
+                                          f"knobs no assumption names and knobs the paper states at the naive value: "
+                                          f"{', '.join(added)}")
         self.assumptions.update(self._fallback)
         self._fallback = {}
+        self._include_stated = True
         alt = ClaimResult(target=t, status="searched", gap_before=res.gap_before, band=res.band)
         try:
             await self._search(t, alt, tried)

@@ -196,16 +196,23 @@ async def test_costly_values_reported_not_run_and_stated_values_judged_against_n
     o = orch(tmp_path)
     o.spec.knobs["alpha"].max = 10.0
     many = [A("A1", "alpha", ["50.0", "2.0"], supported=["2.0"], prior=0.9),
-            # paper states beta=0.5 and the naive run uses 0.5 -> screened last, not dropped (blind-2: a
-            # wrong "stated" value from the ledger dropped the true cause before a single run)
+            # paper states beta=0.5 and the naive run uses 0.5 -> out of the first pass, kept for the fallback
+            # round (never dropped for good: blind-2's wrong "stated" value dropped the true cause; screening
+            # such knobs in the first pass cost the dev suite 8 of 10 interaction runs)
             Assumption(id="A2", knob="beta", layer="config", paper_value="0.5", candidate_values=["2.0"],
                        prior_score=0.6, status="stated_code_differs")]
     s = GapSearch(o, targets(m), many, SearchConfig())
-    knob_order = list(dict.fromkeys(h.knob for h in s.hypotheses()))
-    assert knob_order.index("beta") == len(knob_order) - 1  # after every other knob, despite its prior
+    assert "beta" not in {h.knob for h in s.hypotheses()} and s._stated_skipped == {"beta"}
     [r] = await s.run()
     assert ("alpha", "50.0") in s.untestable and r.changes == {"alpha": "2.0"}
-    assert any(x["knob"] == "beta" for x in r.screen)
+    assert all(x["knob"] != "beta" for x in r.screen)  # the first pass was confident: no fallback round
+
+    # a first pass that isn't confident brings the stated knob back in the fallback round
+    unsupported = [A("A1", "alpha", ["2.0"], prior=0.9), many[1]]  # no evidence: at most Fits but unsupported
+    s2 = GapSearch(orch(tmp_path, "fb"), targets(m), unsupported, SearchConfig())
+    [r2] = await s2.run()
+    notes = [e["msg"] for e in s2.orch.events.read() if e["type"] == "note"]
+    assert any("knobs the paper states at the naive value" in n and "beta" in n for n in notes)
     md = GapReport.from_search(s, [r], paper="toy").to_markdown()
     assert "Not testable within the budget" in md and "alpha=50.0" in md
 

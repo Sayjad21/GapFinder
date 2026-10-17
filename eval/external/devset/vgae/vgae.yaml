@@ -1,0 +1,24 @@
+# Devset case 1: VGAE / GAE link prediction (Kipf & Welling 2016), Table 1, with input features.
+# Development set: the documented cause is known (CANDIDATES.md); this case tunes GapFinder, it is not blind.
+#
+# Knobs: every tf flag of gae/train.py except those that define the claim (model, dataset, features are fixed
+# per metric). One cell runs the four Table 1 rows with features: VGAE and GAE on Cora and Citeseer, two at a
+# time (a process peaks at about 1.6 GB; a Sandboxes VM has 3.9 GB). No seed is set by the code, so every run
+# draws a new random edge split: that is the noise.
+name: vgae
+base: ${GF_DEV_BASE}
+source: ${GF_DEV_SOURCE}
+run:
+  command: 'export TF_CPP_MIN_LOG_LEVEL=2 OMP_NUM_THREADS=2; mkdir -p out; A="--learning_rate {learning_rate} --epochs {epochs} --hidden1 {hidden1} --hidden2 {hidden2} --weight_decay {weight_decay} --dropout {dropout} --features 1"; cd gae; for ds in cora citeseer; do PYTHONPATH="/work${PYTHONPATH:+:$PYTHONPATH}" python train.py --model gcn_vae --dataset $ds $A > ../out/vgae_$ds.log 2>&1 & PYTHONPATH="/work${PYTHONPATH:+:$PYTHONPATH}" python train.py --model gcn_ae --dataset $ds $A > ../out/gae_$ds.log 2>&1 & wait; done; cd ..; bash gf_harness/emit.sh'
+  output: stdout
+  format: kv
+  timeout: 1800
+knobs:
+  learning_rate: {layer: config, default: "0.01"}
+  epochs:        {layer: config, default: "200", max: 2000}
+  hidden1:       {layer: config, default: "32"}
+  hidden2:       {layer: config, default: "16"}
+  weight_decay:  {layer: config, default: "0.0"}
+  dropout:       {layer: config, default: "0.0"}
+allowed_paths: ["out/"]
+metrics: [vgae_cora_auc, vgae_cora_ap, vgae_citeseer_auc, vgae_citeseer_ap, gae_cora_auc, gae_cora_ap, gae_citeseer_auc, gae_citeseer_ap]

@@ -183,18 +183,62 @@ def _file_leads(path: Path, rel: str, flags: set[str], root: Path) -> list[Lead]
     return out
 
 
+def _default_leads(files: list[tuple[Path, str]]) -> list[Lead]:
+    """A numeric parameter default that no call in the repo overrides is a constant in disguise
+    (devset VGAE: `def mask_test_edges(adj, test_percent=30., val_percent=20.)`, always called as
+    `mask_test_edges(adj)`; the paper held out 10% and 5%)."""
+    defs: list[tuple[str, int, str, str, str, int, str, float]] = []  # fn, line, rel, param, literal, position, code, value
+    calls: dict[str, list[ast.Call]] = {}
+    for path, rel in files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(text)
+        except (OSError, SyntaxError, ValueError):
+            continue
+        lines = text.splitlines()
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                a = n.args
+                pos = a.args[len(a.args) - len(a.defaults):] if a.defaults else []
+                start = len(a.args) - len(pos)
+                pairs = [(arg, d, start + i) for i, (arg, d) in enumerate(zip(pos, a.defaults))]
+                pairs += [(arg, d, None) for arg, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
+                for arg, d, idx in pairs:
+                    v = _number(d)
+                    if v is not None and v not in (0.0, 1.0, -1.0):
+                        code = lines[n.lineno - 1].strip()[:160] if 0 < n.lineno <= len(lines) else ""
+                        defs.append((n.name, n.lineno, rel, arg.arg, ast.unparse(d), -1 if idx is None else idx, code, v))
+            elif isinstance(n, ast.Call):
+                calls.setdefault(_call_name(n), []).append(n)
+    out = []
+    for fn, line, rel, param, lit, idx, code, v in defs:
+        sites = calls.get(fn, [])
+        if not sites:
+            continue  # never called in the repo: not this program's constant
+        if any(any(kw.arg == param for kw in c.keywords) or (idx >= 0 and len(c.args) > idx) for c in sites):
+            continue  # some call sets it
+        out.append(Lead("unexposed_setting", rel, line, code,
+                        f"`{fn}(..., {param}={v:g})`: a default no call in the repo overrides ({len(sites)} call(s))",
+                        max(2, _weight(param)), name=param, value=lit))
+    return out
+
+
 def code_checks(root: str | Path, flags: set[str] | None = None, limit: int = 12) -> list[Lead]:
     """Leads for causes outside the exposed settings, best first. `flags`: knob names the harness sets."""
     root = Path(root)
     norm = {f.lstrip("-").replace("-", "_") for f in (flags or set())}
     out: list[Lead] = []
+    files = []
     for p in sorted(root.rglob("*.py")):
         if any(part.startswith(".") or part in ("tests", "test", "venv", ".venv", "site-packages") for part in p.parts):
             continue
-        out += _file_leads(p, str(p.relative_to(root)).replace("\\", "/"), norm, root)
+        rel = str(p.relative_to(root)).replace("\\", "/")
+        files.append((p, rel))
+        out += _file_leads(p, rel, norm, root)
+    out += [x for x in _default_leads(files) if x.name not in norm]
     seen, uniq = set(), []
     for lead in sorted(out, key=lambda x: (-x.weight, x.family != "selection_in_code", x.file, x.line)):
-        key = (lead.file, lead.line, lead.family)
+        key = (lead.file, lead.line, lead.family, lead.name)  # two defaults on one def line are two leads
         if key not in seen:
             seen.add(key)
             uniq.append(lead)

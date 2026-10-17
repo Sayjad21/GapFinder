@@ -49,3 +49,19 @@ def test_leads_cover_each_family_and_skip_flags(tmp_path):
 def test_flag_only_artifact_has_no_leads(tmp_path):
     (tmp_path / "t.py").write_text('import argparse\np = argparse.ArgumentParser()\np.add_argument("--epochs", default=5)\n')
     assert code_checks(tmp_path, {"epochs"}) == []
+
+
+def test_a_parameter_default_no_call_overrides_is_a_lead(tmp_path):
+    """Devset VGAE: `def mask_test_edges(adj, test_percent=30., val_percent=20.)` is always called as
+    `mask_test_edges(adj)`, so its defaults are constants in disguise (the paper held out 10% and 5%)."""
+    from gapfinder.ingest.code_checks import code_checks
+    from gapfinder.sandbox.ast_patch import apply_source
+
+    (tmp_path / "prep.py").write_text("def mask(adj, test_percent=30., val_percent=20.):\n    return adj\n"
+                                      "def other(x, scale=2.5):\n    return x\n")
+    (tmp_path / "train.py").write_text("from prep import mask, other\nmask(1)\nother(1, 3.0)\n")
+    leads = code_checks(tmp_path)
+    got = {(x.file, x.line, x.name, x.value) for x in leads}
+    assert ("prep.py", 1, "test_percent", "30.0") in got and ("prep.py", 1, "val_percent", "20.0") in got
+    assert not any(x.name == "scale" for x in leads)  # other() is called with it: not a hidden constant
+    assert "test_percent=10.0" in apply_source((tmp_path / "prep.py").read_text(), 1, "test_percent", "10.")

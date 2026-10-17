@@ -1,0 +1,15 @@
+{
+ "name": "vgae",
+ "repo": "https://github.com/tkipf/gae",
+ "commit": "e117287a8475c07c7df9fe483a469afc797b4b9c",
+ "image": "python:3.7-slim",
+ "pip": [
+  "tensorflow==1.15.5",
+  "numpy==1.18.5",
+  "scipy==1.4.1",
+  "networkx==2.4",
+  "scikit-learn==0.22.2",
+  "protobuf==3.20.3"
+ ],
+ "smoke": "export TF_CPP_MIN_LOG_LEVEL=2 OMP_NUM_THREADS=2; mkdir -p out; cd gae; for ds in cora citeseer; do PYTHONPATH=/work python train.py --model gcn_vae --dataset $ds --features 1 > ../out/vgae_$ds.log 2>&1 & PYTHONPATH=/work python train.py --model gcn_ae --dataset $ds --features 1 > ../out/gae_$ds.log 2>&1 & wait; done; cd ..; bash gf_harness/emit.sh"
+}

@@ -80,6 +80,29 @@ class _Swap(ast.NodeTransformer):
                     self.done += 1
         return node
 
+    def _defaults(self, node):
+        # a parameter default on the def line: def mask_test_edges(adj, test_percent=30., ...) (devset VGAE)
+        if node.lineno == self.line:
+            a = node.args
+            pos = a.args[len(a.args) - len(a.defaults):] if a.defaults else []
+            for i, arg in enumerate(pos):
+                if arg.arg == self.name and _is_literal(a.defaults[i]):
+                    a.defaults[i] = self._new(a.defaults[i])
+                    self.done += 1
+            for i, arg in enumerate(a.kwonlyargs):
+                d = a.kw_defaults[i]
+                if arg.arg == self.name and d is not None and _is_literal(d):
+                    a.kw_defaults[i] = self._new(d)
+                    self.done += 1
+        self.generic_visit(node)
+        return node
+
+    def visit_FunctionDef(self, node):
+        return self._defaults(node)
+
+    def visit_AsyncFunctionDef(self, node):
+        return self._defaults(node)
+
 def patch_tree(tree, entries):
     for _rel, line, name, val in entries:
         sw = _Swap(line, name, val)
