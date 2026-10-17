@@ -1411,7 +1411,10 @@ class GapSearch:
             res.notes.append(f"patch round: {c} fits every claim but did not pass verification")
             return
         patches = {k: v for k, v in c.items() if ast_patch.is_patch(k)}
-        if res.changes and not _better(trial, res):  # an in-space answer stands unless the patch is better
+        # an in-space answer stands unless the patch earns a strictly better label (VGAE: a paper-backed
+        # inconsistency over an unsupported fit); a closer fit alone would let an unsupported patch displace a
+        # correct, equally unsupported setting (GapBench answers are mostly "Fits but unsupported")
+        if res.changes and not _rank(trial) < _rank(res):
             res.notes.append(f"patch round: {c} also fits every claim ({trial.attribution.confidence_label}), "
                              f"but doesn't beat {res.changes}")
             return
