@@ -1,0 +1,22 @@
+# Devset case 9: pygcn (the PyTorch port of GCN, Kipf & Welling ICLR 2017), Cora test accuracy (Table 2: 81.5).
+# Development set: the documented differences are known (CANDIDATES.md, case 9); not blind.
+#
+# Knobs: every argparse flag of pygcn/train.py except how-to-run ones (--no-cuda, --fastmode: skips the
+# validation pass, --seed: each run's seed comes from RUN_TAG, so repeats differ the way the paper's 100 runs
+# with random initialisations do). One cell = one run, about 7 s, about 1 GB.
+name: pygcn
+base: ${GF_DEV_BASE}
+source: ${GF_DEV_SOURCE}
+run:
+  command: 'mkdir -p out; S=$(( $(printf %s "$RUN_TAG" | cksum | cut -d" " -f1) % 100000 )); cd pygcn && PYTHONPATH="/work${PYTHONPATH:+:$PYTHONPATH}" python train.py --no-cuda --seed $S --epochs {epochs} --lr {lr} --weight_decay {weight_decay} --hidden {hidden} --dropout {dropout} > ../out/run.log 2>&1; cd ..; bash gf_harness/emit.sh'
+  output: stdout
+  format: kv
+  timeout: 1200
+knobs:
+  epochs:       {layer: config, default: "200", max: 5000}
+  lr:           {layer: config, default: "0.01"}
+  weight_decay: {layer: config, default: "5e-4"}
+  hidden:       {layer: config, default: "16"}
+  dropout:      {layer: config, default: "0.5"}
+allowed_paths: ["out/"]
+metrics: [cora_acc]

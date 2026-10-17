@@ -42,7 +42,7 @@ async def main(case: dict) -> None:
     src = await b.base("local:" + stage)
     pip = " ".join(f"'{p}'" for p in case.get("pip", []))
     build = (fetch(case["repo"], case["commit"]) + "; "
-             + (f"pip install -q {pip} 2>&1 | grep -v -i warning | tail -3; " if pip else "")
+             + (f"pip install -q {case.get('pip_args', '')} {pip} 2>&1 | grep -v -i warning | tail -3; " if pip else "")
              + (case.get("setup", "") + "; " if case.get("setup") else "")
              + "python --version; pip freeze | head -40")
     t = time.time()
