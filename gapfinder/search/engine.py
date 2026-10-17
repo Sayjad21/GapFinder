@@ -25,7 +25,7 @@ from gapfinder.models import budget
 from gapfinder.sandbox.noise import NoiseBand, bootstrap_diff_ci, mde, noise_band
 from gapfinder.sandbox.runner import Orchestrator
 from gapfinder.search.bisect import minimal_set
-from gapfinder.search.hypotheses import _same_number, coverage_values, fill_choices, mark_multipliers_from_flow
+from gapfinder.search.hypotheses import _NUM, _same_number, coverage_values, fill_choices, mark_multipliers_from_flow
 from gapfinder.ledger.assumptions import derive_status
 from gapfinder.search.verify import Plausibility, gap_returns, held_out_ok, plausible
 
@@ -73,6 +73,10 @@ class SearchConfig:
     # runtime sink tracing (gapfinder/search/trace.py): one dry run before the search learns each knob's
     # role from the sink its value reaches, and finds literals that reach sinks with no knob behind them
     trace: bool = True
+    # secant step: where the paper's number lies between two measured values of a numeric knob, interpolate
+    # the crossing (log scale for rates, sizes and counts; logit for fractions), snap it to a round value and
+    # screen it. Finds a x4 or x25 the fixed ladder never tries. At most this many per knob:
+    secant_per_knob: int = 2
     trace_steps: int = 30  # the dry run stops itself after this many optimizer steps...
     trace_seconds: float = 900  # ...or this many seconds
     coverage_candidates: int = 6  # values per knob at least (the ledger's first, then coverage values)
@@ -222,6 +226,65 @@ def _core(name: str) -> frozenset[str]:
             if t and t not in _FILLER:
                 out.add(t)
     return frozenset(out)
+
+
+_NICE = (1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0)
+
+
+def _snap(x: float, integer: bool, fraction: bool) -> float:
+    """A value a person would write: 1, 1.5, 2, 2.5, 3, 4, 5, 6 or 8 times a power of ten (0.0025, 40, 250);
+    a fraction to 2 decimals; an integer below 10 to the nearest integer, and always at least 1."""
+    if fraction:
+        return min(0.99, max(0.01, round(x, 2)))
+    if x <= 0:
+        return x
+    if integer and x < 10:
+        return float(max(1, int(x + 0.5)))
+    e = math.floor(math.log10(x))
+    cands = [m * 10 ** k for k in (e - 1, e, e + 1) for m in _NICE]
+    best = min(cands, key=lambda c: abs(math.log(c) - math.log(x)))
+    return float(max(1, int(best + 0.5))) if integer else best
+
+
+def secant_values(points: list[tuple[str, float | None]], target: float, role: str | None, default: str) -> list[str]:
+    """Interpolated values where the measured metric crosses the paper's number, between neighbouring measured
+    values of one knob: log scale for positive rates, sizes, counts and multipliers, logit for fractions.
+    Nearest crossing to the default first."""
+    num = []
+    for v, y in points:
+        try:
+            num.append((float(v), y))
+        except (TypeError, ValueError):
+            return []
+    num = [(x, y) for x, y in num if y is not None and math.isfinite(y)]
+    if len(num) < 2:
+        return []
+    integer = re.fullmatch(r"[-+]?\d+", default.strip()) is not None
+    fraction = role == "fraction" or (role is None and all(0 < x < 1 for x, _ in num) and not integer)
+    if fraction and all(0 < x < 1 for x, _ in num):
+        fwd, back = (lambda x: math.log(x / (1 - x))), (lambda u: 1 / (1 + math.exp(-u)))
+    elif all(x > 0 for x, _ in num):
+        fwd, back = math.log, math.exp
+    else:
+        fwd, back = (lambda x: x), (lambda u: u)
+    pts = sorted((fwd(x), y) for x, y in num)
+    d = float(default) if _NUM.fullmatch(default.strip()) else None
+    out = []
+    for (u1, y1), (u2, y2) in zip(pts, pts[1:]):
+        if u1 == u2 or (y1 - target) * (y2 - target) > 0 or y1 == y2:
+            continue
+        u = u1 + (target - y1) * (u2 - u1) / (y2 - y1)
+        x = _snap(back(u), integer, fraction)
+        s = str(int(x)) if integer else f"{x:.6g}"
+        if s not in out:
+            out.append(s)
+    if d is not None:  # the crossing nearest the default first
+
+        def dist(s):
+            x = float(s)
+            return abs(math.log(x / d)) if x > 0 and d > 0 else abs(x - d)
+        out.sort(key=dist)
+    return out
 
 
 def paper_mentions(text: str, knob: str, limit: int = 5) -> list[str]:
@@ -620,6 +683,44 @@ class GapSearch:
                               changes=res.changes, gap_before=g0, gap_after=res.gap_after)
         return res
 
+    async def _secant_step(self, t: Target, hyps: list[Hypothesis], tried: set[frozenset]) -> list[Hypothesis]:
+        """Secant iteration on each numeric knob the paper's number is bracketed on: interpolate the crossing,
+        snap it to a round value, screen it, and repeat with that point included (up to secant_per_knob
+        rounds). Linear-in-log interpolation of a linear response lands short (alpha 2 -> 5, crossing 3:
+        2.7 snaps to 2.5); the second round closes it (2.5 -> 5 gives 3)."""
+        if self.cfg.secant_per_knob <= 0 or not self.cfg.coverage:  # part of value coverage (off: the v1.0 grid)
+            return []
+        y0 = self.value({}, t.metric)
+        if y0 is None:
+            return []
+        added: list[Hypothesis] = []
+        for _ in range(self.cfg.secant_per_knob):
+            new: list[Hypothesis] = []
+            pool = hyps + added
+            for knob in dict.fromkeys(h.knob for h in pool):
+                kn = self.spec.knobs.get(knob)
+                if kn is None or kn.choices or kn.role == "seed":
+                    continue
+                pts = [(kn.default, y0)] + [(h.value, self.value(h.changes, t.metric)) for h in pool if h.knob == knob]
+                have = {v for v, _ in pts}
+                for v in secant_values(pts, t.paper_value, kn.role, kn.default)[:1]:  # the crossing nearest the default
+                    if v in have or any(_same_number(v, w) for w in have) or not kn.affordable(v):
+                        continue
+                    new.append(Hypothesis(knob, v, getattr(self.assumptions.get(knob), "id", None)))
+            if self.cfg.max_runs is not None:
+                room = (self.cfg.max_runs - self.runs_used - self._patch_reserve
+                        - int(self.cfg.escrow_frac * self.cfg.max_runs))
+                new = new[: max(0, room // max(1, self.cfg.screen_repeats))]
+            if not new:
+                break
+            self.orch.events.emit("note", msg=f"{t.claim_id}: secant step: the paper's number is bracketed; screening "
+                                              + ", ".join(f"{h.knob}={h.value}" for h in new))
+            await _all(*(self.measure(h.changes, self.cfg.screen_repeats, f"screen (secant) {h.knob}={h.value}")
+                         for h in new))
+            tried.update(frozenset(h.changes.items()) for h in new)
+            added += new
+        return added
+
     async def _spec_knob_round(self, t: Target, res: ClaimResult, tried: set[frozenset]) -> None:
         """The ledger's knobs gave no confident answer: search again with the spec knobs no assumption names
         added (low prior, code-derived values). Runs already measured are reused. The better result is kept."""
@@ -677,6 +778,7 @@ class GapSearch:
                      for h in hyps))
         tried.update(frozenset(h.changes.items()) for h in hyps)
         hyps += await self._triage_failures(hyps, tried)
+        hyps += await self._secant_step(t, hyps, tried)
         score = {h: self.units(t, h.changes) for h in hyps}
         res.screen = [{"knob": h.knob, "value": h.value, "assumption": h.assumption_id,
                        "units": round(score[h], 2), "gap": self.gap(t, h.changes)} for h in hyps]

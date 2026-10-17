@@ -236,3 +236,29 @@ def test_paper_sentences_naming_a_knob_are_evidence_for_fallback_knobs():
                    evidence=[Evidence(kind="paper", ref="paper text", quote=q) for q in paper_mentions(text, "learning_rate")])
     assert plausible(a, "0.001").supported and not plausible(a, "0.002").supported
     assert not plausible(a, "0.0001".replace("1", "2")).supported
+
+
+def test_secant_values_interpolate_the_crossing_and_snap_to_round_numbers():
+    from gapfinder.search.engine import secant_values as sv
+
+    assert sv([("1", 10.0), ("10", 50.0), ("100", 60.0)], 30.0, "multiplier", "1") == ["3"]  # a x3 the ladder skips
+    assert sv([("15", 60.0), ("150", 90.0), ("2", 30.0)], 80.0, "count", "15") == ["80"]
+    assert sv([("0.01", 70.0), ("0.1", 40.0), ("0.001", 85.0)], 80.0, "rate", "0.01") == ["0.002"]
+    assert sv([("0.5", 0.6), ("0.05", 0.9), ("0.95", 0.2)], 0.8, "fraction", "0.5") == ["0.12"]
+    assert sv([("0.01", 70.0), ("0.001", 72.0)], 80.0, "rate", "0.01") == []  # not bracketed: no guess
+    assert sv([("1", 10.0)], 30.0, None, "1") == []
+
+
+async def test_secant_step_finds_a_value_between_ladder_rungs(tmp_path):
+    """Planted alpha=3.0: the ladder (2, 5, 10, ...) never tries 3; the secant iteration gets there."""
+    m = await toy_metrics(tmp_path, {"alpha": "3.0"})
+    asm, _ = assumptions_from_spec(HarnessSpec.load_yaml(TOY))
+    targets = [Target("C1", "score", m["score"]), Target("C2", "write_amp", m["write_amp"], held_out=True)]
+    s = GapSearch(orch(tmp_path), targets, asm, SearchConfig(trace=False))
+    [r] = await s.run()
+    assert r.changes == {"alpha": "3"}, (r.changes, [x for x in r.screen if x["knob"] == "alpha"])
+    notes = [e["msg"] for e in s.orch.events.read() if e["type"] == "note" and "secant" in e.get("msg", "")]
+    assert notes and "alpha=2.5" in notes[0]
+    off = GapSearch(orch(tmp_path, "off"), targets, asm, SearchConfig(trace=False, secant_per_knob=0))
+    [r0] = await off.run()
+    assert r0.changes != {"alpha": "3"}
