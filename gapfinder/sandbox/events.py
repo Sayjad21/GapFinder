@@ -14,6 +14,7 @@ from typing import Any, Iterator
 
 EVENT_TYPES = {
     "run_started",
+    "trace",  # the dry-run sink trace (gapfinder/search/trace.py)
     "checkpoint",
     "branch_created",
     "branch_started",

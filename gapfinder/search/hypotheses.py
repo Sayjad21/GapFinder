@@ -33,7 +33,7 @@ _UNBOUNDED_NAME = re.compile(r"(?:^|_)(?:lr|eta|learning|step_size|temperature|t
 # a multiplier knob's natural values are the factors a paper states ("10x more iterations")
 MULTIPLIER_FACTORS = ("1", "2", "5", "10", "100")
 _MULT_NAME = re.compile(r"(?:_|^)(?:mult|multiplier|scale|factor|times)$|^[a-z]{3,}x$", re.I)
-_MULT_HELP = re.compile(r"multipl|factor|scal(?:e|ing)|times", re.I)
+_MULT_HELP = re.compile(r"multipl|\bfactor\b|\bscal(?:e|ing)\b|\btimes\b", re.I)
 _FLIP = {"true": "false", "false": "true", "on": "off", "off": "on", "yes": "no", "no": "yes",
          "enabled": "disabled", "disabled": "enabled"}
 _NUM = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
@@ -78,6 +78,9 @@ def coverage_values(knob, name: str = "") -> list[str]:
     if knob.choices:
         return [c for c in knob.choices if c != knob.default]
     d = knob.default.strip()
+    if knob.role:  # a traced role (gapfinder/search/trace.py) beats the name rules below
+        if (vals := role_values(knob.role, d)) is not None:
+            return vals
     if knob.multiplier:
         out = [f for f in MULTIPLIER_FACTORS if not _same_number(f, d)]
         return out + [v for v in generate_values(d, LADDER) if not any(_same_number(v, f) for f in out)]
@@ -90,6 +93,30 @@ def coverage_values(knob, name: str = "") -> list[str]:
     if "." in d and _NUM.fullmatch(d) and float(d) > 0:  # a float knob's boundary value 0 (no exploration, no noise)
         return _with_zero(vals)
     return vals
+
+
+def role_values(role: str, d: str) -> list[str] | None:
+    """Candidate values from a traced role; None when the role says nothing for this default (e.g. text)."""
+    if role == "seed":
+        return []  # a seed is noise, not a cause
+    if not _NUM.fullmatch(d):
+        return None
+    x = float(d)
+    if role == "fraction" and 0 <= x < 1:
+        return _with_zero(fraction_values(x)) if x > 0 else ["0.1", "0.5", "0.25", "0.05", "0.75", "0.9"]
+    if role == "rate" and x > 0:
+        return generate_values(d, LADDER)  # log scale, above 1 allowed, never 0
+    if role == "rate0":
+        return _with_zero(generate_values(d, LADDER)) if x > 0 else ["1e-4", "1e-3", "1e-5", "1e-2", "1e-6"]
+    if role == "size" and re.fullmatch(r"\d+", d) and int(d) >= 1:
+        return patch_values("size", d)
+    if role == "count" and re.fullmatch(r"\d+", d) and int(d) >= 1:
+        ladder = generate_values(d, LADDER)
+        return ladder[:2] + (["1"] if int(d) >= 2 else []) + [v for v in ladder[2:] if v != "1"]
+    if role == "multiplier":
+        out = [f for f in MULTIPLIER_FACTORS if not _same_number(f, d)]
+        return out + [v for v in generate_values(d, LADDER) if not any(_same_number(v, f) for f in out)]
+    return None
 
 
 _SIZE_NAME = re.compile(r"batch|size|hidden|units|width|dim|channels|heads|layers|_n$|^n_", re.I)

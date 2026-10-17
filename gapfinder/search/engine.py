@@ -70,6 +70,11 @@ class SearchConfig:
     coverage: bool = True
     # spec knobs that no ledger assumption names are screened too, at a low prior (blind-1)
     screen_spec_knobs: bool = True
+    # runtime sink tracing (gapfinder/search/trace.py): one dry run before the search learns each knob's
+    # role from the sink its value reaches, and finds literals that reach sinks with no knob behind them
+    trace: bool = True
+    trace_steps: int = 30  # the dry run stops itself after this many optimizer steps...
+    trace_seconds: float = 900  # ...or this many seconds
     coverage_candidates: int = 6  # values per knob at least (the ledger's first, then coverage values)
     # ...and up to this many when the run budget allows: per knob, coverage_budget_frac x max_runs spread
     # over the open knobs (test-v11-05: a fixed 6 cut epochs=75 on a task with few open knobs)
@@ -274,6 +279,7 @@ class GapSearch:
         self.spec = orch.spec
         self._family = 1  # hypotheses tested together in the current confirm round (multiple comparisons)
         self._artifact_flags = None  # the artifact's repo map, when its code is on this machine
+        self.trace_report = None  # set by _trace() when the dry run recorded anything
         if self.cfg.coverage and self.spec.code_root() is not None:  # a local base, or the spec's `source`
             self._fill_choices_from_artifact()
         # assumption -> spec knob; assumptions about knobs the harness can't set are skipped (and reported)
@@ -468,6 +474,8 @@ class GapSearch:
             self.orch.events.emit("note", msg="knob names: " + ", ".join(f"{a} -> {k}" for a, k in self.renamed.items())
                                   + (f"; spec knobs no assumption names (a fallback round): {', '.join(self.spec_only)}"
                                      if self.spec_only else ""))
+        if self.cfg.trace:
+            await self._trace()
         await self.calibrate()
         results = []
         for t in self.targets:
@@ -475,12 +483,35 @@ class GapSearch:
                 results.append(await self.explain(t))
         return results
 
+    async def _trace(self) -> None:
+        """Dry-run trace: roles for the knobs (candidate values follow the sink a value reaches, not its
+        name) and literal leads for the patch round. Nothing changes when nothing was traced."""
+        from gapfinder.search.trace import analyze, apply_roles
+
+        try:
+            recs = await self.orch.trace_run(self.cfg.trace_steps, self.cfg.trace_seconds)
+        except (budget.BudgetExceeded, RunBudgetExceeded):
+            raise
+        except Exception as exc:  # tracing is an aid: a failure leaves the search as it was
+            self.orch.events.emit("note", msg=f"trace: skipped ({type(exc).__name__}: {str(exc)[:160]})")
+            return
+        if not recs:
+            self.orch.events.emit("note", msg="trace: no records (not a Python artifact, or the hook didn't load)")
+            return
+        rep = analyze(recs, self.spec.knobs, self.spec.code_root())
+        self.trace_report = rep
+        changed = apply_roles(self.spec, rep)
+        self.orch.events.emit("trace", **rep.to_dict(), applied=changed)
+        self.orch.events.emit("note", msg="trace: " + rep.summary())
+
     def hypotheses(self) -> list[Hypothesis]:
         """One hypothesis per (knob, candidate value). A knob whose value the paper states and the
         code already uses can't cause the gap (the naive run already matches the paper there)."""
         out = []
         open_knobs = []
         for k, a in self.assumptions.items():
+            if self.spec.knobs[k].role == "seed":
+                continue  # traced to a random seed: noise, never a cause
             stated = self._stated_values(k)
             default = self.spec.knobs[k].default
             # "matches" is judged against what the naive run used (the spec default), not the artifact's
@@ -1027,11 +1058,16 @@ class GapSearch:
         from gapfinder.sandbox import ast_patch
         from gapfinder.sandbox.spec import Knob
         from gapfinder.search.history import diagnose
-        from gapfinder.search.hypotheses import patch_values
+        from gapfinder.search.hypotheses import patch_values, role_values
 
         root = self.spec.code_root()
         leads = [x for x in (res.diagnosis or {}).get("leads") or []
                  if x["family"] == "unexposed_setting" and x.get("name") and x.get("value")]
+        if self.trace_report is not None:  # literals seen reaching a sink at runtime come first
+            traced = [{"file": x.file, "line": x.line, "name": x.name, "value": x.literal, "family": "unexposed_setting",
+                       "source": "trace", "sink": x.sink} for x in self.trace_report.leads]
+            have = {(t["file"], t["line"]) for t in traced}
+            leads = traced + [x for x in leads if (x["file"], x["line"]) not in have]
         # imported modules through the import hook; entry scripts only when the command runs them directly
         leads = [x for x in leads if root is not None and (not ast_patch.entry_script(root / x["file"])
                                                            or ast_patch.direct_entry(self.spec.run.command, x["file"]))]
@@ -1045,7 +1081,9 @@ class GapSearch:
         for x in leads:
             k = ast_patch.knob_name(x["file"], x["line"], x["name"])
             self.spec.knobs.setdefault(k, Knob(layer="environment", default=str(x["value"]), env=True))
-            vals = patch_values(x["name"], str(x["value"]))[: self.cfg.patch_values]
+            role = "size" if str(x.get("sink", "")).startswith(("batch.", "width.")) else None
+            vals = ((role_values(role, str(x["value"])) if role else None) or patch_values(x["name"], str(x["value"])))
+            vals = vals[: self.cfg.patch_values]
             with_base.append([{**base, k: v} for v in vals] if base else [])
             alone.append([{k: v} for v in vals])
 

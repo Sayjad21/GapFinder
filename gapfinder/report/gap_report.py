@@ -32,6 +32,7 @@ class GapReport:
     spec_only_knobs: list[str] = field(default_factory=list)  # screened though no assumption named them
     corrected_defaults: list[dict] = field(default_factory=list)  # ledger code defaults the code contradicts
     unverified_defaults: list[str] = field(default_factory=list)  # "code differs" the code can't confirm
+    trace: dict | None = None  # the dry-run trace (gapfinder/search/trace.py): roles, literal leads
     untestable: list[tuple[str, str]] = field(default_factory=list)
     closest: list[dict] = field(default_factory=list)
     triaged: list[dict] = field(default_factory=list)
@@ -54,7 +55,8 @@ class GapReport:
                    unmapped_assumptions=search.unmapped, renamed_assumptions=dict(search.renamed),
                    spec_only_knobs=list(search.spec_only),
                    corrected_defaults=list(search.corrected_defaults),
-                   unverified_defaults=sorted(search.unverified_defaults), untestable=list(search.untestable),
+                   unverified_defaults=sorted(search.unverified_defaults),
+                   trace=search.trace_report.to_dict() if search.trace_report else None, untestable=list(search.untestable),
                    closest=search.closest_overall(), triaged=list(search.triaged),
                    setup_check=search.setup_check,
                    paper_claims={r.target.claim_id: c for r in results if (c := _paper_claim(search, r.target))},
@@ -90,6 +92,7 @@ class GapReport:
                    spec_only_knobs=d.get("spec_only_knobs") or [],
                    corrected_defaults=d.get("corrected_defaults") or [],
                    unverified_defaults=d.get("unverified_defaults") or [],
+                   trace=d.get("trace"),
                    untestable=[(x["knob"], x["value"]) for x in d.get("untestable") or []],
                    closest=d.get("closest_overall") or [], triaged=d.get("triaged_failures") or [],
                    setup_check=d.get("setup_check"),
@@ -117,6 +120,7 @@ class GapReport:
                 "naive": self.naive, "noise": self.noise, "unmapped_assumptions": self.unmapped_assumptions,
                 "renamed_assumptions": self.renamed_assumptions, "spec_only_knobs": self.spec_only_knobs,
                 "corrected_defaults": self.corrected_defaults, "unverified_defaults": self.unverified_defaults,
+                "trace": self.trace,
                 "untestable": [{"knob": k, "value": v} for k, v in self.untestable],
                 "closest_overall": self.closest,
                 "triaged_failures": self.triaged,
@@ -307,6 +311,18 @@ class GapReport:
             if self.unverified_defaults:
                 out.append("- Code defaults the code doesn't confirm, so no paper-artifact inconsistency is claimed "
                            "on them: " + ", ".join(f"`{k}`" for k in self.unverified_defaults))
+        if self.trace:
+            tr = self.trace
+            out += ["", "## Runtime trace (one dry run)",
+                    f"{tr.get('processes', 0)} process(es) traced. Each role comes from the sink the knob's value "
+                    "reached, not from its name."]
+            for k, r in sorted((tr.get("roles") or {}).items()):
+                out.append(f"- `{k}`: {r['role']} ({r['sink']}" + (f" at {r['site']}" if r.get("site") else "") + ")")
+            for x in tr.get("leads") or []:
+                out.append(f"- literal `{x['name']} = {x['literal']}` at {x['file']}:{x['line']} reaches {x['sink']}, "
+                           "with no knob behind it: a patch-knob lead")
+            if tr.get("ambiguous"):
+                out.append(f"- {len(tr['ambiguous'])} sink value(s) shared by several knobs: no role assigned")
         if self.unmapped_assumptions:
             out += ["", "## Not testable with this harness",
                     "Assumptions about knobs the harness spec can't set: " +

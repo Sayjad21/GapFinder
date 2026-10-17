@@ -183,6 +183,24 @@ class Orchestrator:
         self.events.emit("cost", **self.cost.summary())
         return branch
 
+    async def trace_run(self, steps: int = 30, seconds: float = 900) -> list[dict]:
+        """One dry run of the naive command with the sink-tracing hook (gapfinder/sandbox/trace_hook.py),
+        from the loaded checkpoint. Returns the per-process trace records (empty when nothing was traced:
+        not a Python artifact, or an infrastructure failure). Not a branch: it counts toward no budget."""
+        from gapfinder.sandbox import trace_hook
+
+        parent = await self.stage("loaded", {})
+        cmd, env = self.spec.render(self.spec.run, {})
+        tenv, tfiles, prefix, suffix = trace_hook.run_parts(steps, seconds)
+        try:
+            res = await self._exec(parent, prefix + cmd + suffix, {**env, **tenv, "RUN_TAG": "gf-trace"},
+                                   min(self.spec.run.timeout, seconds + 300), disposable=True, files=tfiles)
+        except InfraError as exc:
+            self.events.emit("note", msg=f"trace: dry run failed to start ({str(exc)[:200]})")
+            return []
+        self.cost.add_run(res.resources.cost_usd)
+        return trace_hook.parse_output(res.stdout)
+
     async def fanout(self, change_sets: list[dict[str, str]], labels: list[str] | None = None,
                      fresh_setup: bool = False) -> list[Branch]:
         """`fresh_setup`: each branch gets its own new build/load instead of forking the shared one."""

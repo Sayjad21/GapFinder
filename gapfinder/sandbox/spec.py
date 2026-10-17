@@ -53,6 +53,9 @@ class Knob(BaseModel):
     multiplier: bool = False  # scales another quantity (e.g. epochs = base x epochx): literal factors are candidates
     scales: list[str] = Field(default_factory=list)  # what the code multiplies by this knob (static config flow)
     max: float | None = None  # values above this are too costly to test (reported, not run)
+    # what a dry-run trace saw the value do (gapfinder/search/trace.py): rate, rate0, fraction, size, count,
+    # multiplier or seed. None: not traced, so candidate values fall back to the name rules
+    role: str | None = None
 
     def affordable(self, value: str) -> bool:
         if self.max is None:
