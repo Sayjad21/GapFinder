@@ -464,11 +464,22 @@ scoring fixed before any run.
 - Other bugs: GapFinder's hooks shadow an existing `sitecustomize`; env-build's default goal is too weak; an
   image whose imports load is not a runnable image.
 
-Next (class-level, then a fresh batch):
-1. audit reproduced numbers (leakage leads, held-out misses, relation claims from the paper's tables, stated
-   evaluation protocols);
-2. make env-build's default goal a short run of the entry script;
-3. chain the hooks to an existing sitecustomize.
+Done after the batch (`b2fe1bd`, `ba82204`; 293 tests). None of it was judged on the three papers:
+1. **Audit section in every report**, whatever the label (`gapfinder/search/audit.py`):
+   - selection on test data in the code;
+   - comparisons the runs reverse beyond noise;
+   - held-out claims outside noise;
+   - settings the paper states that the harness can't vary.
+
+   The selection check now reads tuple targets.
+2. **env-build's default goal:** the README's first experiment command runs 5 minutes without failing
+   (`--imports-only` keeps the old goal).
+3. **The hooks chain** to the environment's own sitecustomize.
+4. **One spend ledger** for every checkout. Worktree runs had their own ledger, so the true billed total was
+   **$30.99**, not $30.42. The entries were merged into the main ledger.
+
+Next: a fresh batch. The dev-set candidates are used up, except two weak ones (DKT, unverified; DP-SGD, low
+priority). So new papers have to come from a sealer, as in blind-1 and blind-2.
 
 ## 8. Where things are
 
