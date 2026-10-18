@@ -202,7 +202,8 @@ def _knob_matches(found: str, planted: str) -> bool:
 
 def score() -> None:
     """correct: the answer sets the planted knob to its value (10%, or one of its equally good values);
-    confidently wrong: Explained or Paper-artifact inconsistency without it; missed: anything else."""
+    confidently wrong: Explained or Paper-artifact inconsistency without it; missed: anything else. A miss whose
+    planted change is among the history-matching fits was measured but can't be told apart from the claims."""
     rows = []
     for t_dir in sorted(TASKS.iterdir()) if TASKS.exists() else []:
         rep = t_dir / "run" / "gap_report.json"
@@ -220,14 +221,20 @@ def score() -> None:
                   for k, v in changes.items())
         verdict = ("correct" if hit and label not in ("Unexplained", "Inconclusive", "Reproduced") else
                    "confidently wrong" if label in ("Explained", "Paper-artifact inconsistency") else "missed")
+        # identifiability vs search: was the planted change measured and among the configurations that fit?
+        fits = [x["config"] for v in ((res.get("diagnosis") or {}).get("per_claim") or {}).values() for x in v]
+        among = any(any(_knob_matches(k, a["knob"]) and _same(v, a["value"]) for k, v in c.items()) for c in fits)
         rows.append({"task": t_dir.name, "kind": a["kind"], "planted": f"{a['knob']}={a['value']}", "label": label,
-                     "found": changes, "verdict": verdict})
+                     "found": changes, "verdict": verdict, "planted_among_fits": among, "fits": len(fits)})
     for x in rows:
-        print(f"{x['task']:24s} {x['kind']:8s} {x['verdict']:18s} {x['label']:30s} planted {x['planted']}  found {x['found']}")
+        print(f"{x['task']:24s} {x['kind']:8s} {x['verdict']:18s} {x['label']:30s} among {x['fits']} fits: "
+              f"{'yes' if x['planted_among_fits'] else 'no ':3s}  planted {x['planted']}  found {x['found']}")
     if rows:
         c = sum(x["verdict"] == "correct" for x in rows)
         w = sum(x["verdict"] == "confidently wrong" for x in rows)
-        print(f"\n{c}/{len(rows)} correct, {w} confidently wrong")
+        among = sum(x["planted_among_fits"] for x in rows if x["verdict"] == "missed")
+        print(f"\n{c}/{len(rows)} correct, {w} confidently wrong; of the misses, {among} had the planted change "
+              "among the fits (not identifiable from these claims), the rest were not found")
         (HERE / "scores.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
 
 

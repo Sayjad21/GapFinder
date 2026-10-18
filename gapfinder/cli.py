@@ -277,6 +277,69 @@ async def cmd_missing_sentence(args) -> int:
     return 0
 
 
+async def cmd_diff(args) -> int:
+    import statistics
+
+    from gapfinder.report.gap_report import GapReport
+    from gapfinder.sandbox.backend import make_backend
+    from gapfinder.sandbox.events import EventLog
+    from gapfinder.sandbox.runner import Orchestrator
+    from gapfinder.sandbox.spec import HarnessSpec, Knob
+    from gapfinder.search.difftrace import diff, hypotheses, report_markdown
+    from gapfinder.search.engine import GapSearch, SearchConfig, Target
+
+    out = Path(args.out)
+    mine_spec, ref_spec = HarnessSpec.load_yaml(args.spec), HarnessSpec.load_yaml(args.ref_spec)
+    backend = make_backend(args.backend)
+    mine = Orchestrator(backend, mine_spec, EventLog(out / "events.jsonl"), concurrency=args.concurrency)
+    ref = Orchestrator(backend, ref_spec, EventLog(out / "reference" / "events.jsonl"), concurrency=args.concurrency)
+    ref_recs, my_recs = await asyncio.gather(ref.trace_run(), mine.trace_run())
+    if not ref_recs or not my_recs:
+        print("diff: a trace came back empty (not a Python program, or the hook didn't load); nothing to compare",
+              file=sys.stderr)
+    diffs = diff(ref_recs, my_recs)
+    plan = hypotheses(diffs, my_recs, mine_spec.knobs, mine_spec.code_root())
+    pairs = ([(m.split("=")[0], m.split("=")[-1]) for m in args.metric] if args.metric else
+             [(m, m) for m in mine_spec.metrics if m in ref_spec.metrics])
+    if not pairs:
+        print("diff: no metric to compare (give --metric MINE=REF)", file=sys.stderr)
+        return 2
+    runs = await ref.fanout([{}] * args.ref_runs, [f"reference-{i}" for i in range(args.ref_runs)])
+    ok = [b.parsed_metrics for b in runs if b.status == "succeeded"]
+    targets = []
+    for i, (m, r) in enumerate(pairs):
+        vals = [x[r] for x in ok if r in x]
+        if vals:
+            targets.append(Target(f"R_{m}", m, statistics.mean(vals), held_out=i > 0))
+    if not targets:
+        print("diff: the reference runs produced none of the metrics", file=sys.stderr)
+        return 1
+    for k, lit in plan.patch_knobs.items():
+        mine_spec.knobs.setdefault(k, Knob(layer="environment", default=lit, env=True))
+    _write(out / "diff.json", {"differences": [d.__dict__ for d in diffs], "plan": plan.to_dict(),
+                               "reference_targets": [t.__dict__ for t in targets]})
+    (out / "differences.md").write_text(report_markdown(diffs, plan) + "\n", encoding="utf-8")
+    print(f"{len(diffs)} difference(s) from the reference; {len(plan.assumptions)} testable, "
+          f"{len(plan.untestable)} reported only")
+    for d in diffs:
+        print("  " + d.text())
+    if not plan.assumptions:
+        print(f"nothing testable; see {out / 'differences.md'}")
+        return 0
+    # only the reference's values are candidates (no value coverage): the differences are the hypotheses, and
+    # combine plus bisect shrink them to the ones that matter
+    search = GapSearch(mine, targets, plan.assumptions,
+                       SearchConfig(max_runs=args.max_runs, semantic_map=False, coverage=False))
+    results = await search.run()
+    md, _ = GapReport.from_search(search, results, paper=f"reference {ref_spec.name}").write(out)
+    for r in results:
+        label = r.attribution.confidence_label if r.attribution else "Reproduced"
+        print(f"{r.target.claim_id}: {label}  {r.changes or ''}")
+    print("(here the reference plays the paper's part: \"paper\" in the labels means the reference run)")
+    print(f"report: {md}; differences: {out / 'differences.md'}")
+    return 0
+
+
 async def cmd_env_build(args) -> int:
     from gapfinder.env_build import build_env, fetch, write_result
     from gapfinder.models.router import Router
@@ -391,11 +454,24 @@ def main(argv: list[str] | None = None) -> int:
     pe.add_argument("--max-steps", type=int, default=12)
     pe.add_argument("--out", required=True, help="where to write the result JSON (checkpoint, recipe, steps)")
 
+    pq = sub.add_parser("diff", help="your reproduction vs a reference implementation: trace both runs, test where "
+                                     "they differ against the reference's measured numbers")
+    pq.add_argument("--spec", required=True, help="harness spec of your reproduction")
+    pq.add_argument("--ref-spec", required=True, help="harness spec of the reference implementation")
+    pq.add_argument("--metric", action="append", metavar="MINE[=REF]",
+                    help="metrics to compare (the first is the target); default: the metrics both specs declare")
+    pq.add_argument("--ref-runs", type=int, default=3, help="reference runs whose mean is the target")
+    pq.add_argument("--max-runs", type=int, default=60)
+    pq.add_argument("--backend", default=None)
+    pq.add_argument("--concurrency", type=int, default=settings().max_concurrency)
+    pq.add_argument("--out", required=True)
+
     args = p.parse_args(argv)
     if args.cmd == "repomap":
         return cmd_repomap(args)
     coro = {"ledger": cmd_ledger, "fanout": cmd_fanout, "search": cmd_search, "spec-draft": cmd_spec_draft,
-            "missing-sentence": cmd_missing_sentence, "env-build": cmd_env_build}[args.cmd](args)
+            "missing-sentence": cmd_missing_sentence, "env-build": cmd_env_build,
+            "diff": cmd_diff}[args.cmd](args)
     return asyncio.run(coro)
 
 
