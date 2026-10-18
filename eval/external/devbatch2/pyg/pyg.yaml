@@ -1,0 +1,45 @@
+# devbatch-2 pyg: GAT vs GCN with PyG's benchmark/citation scripts (pyg-team/pytorch_geometric ff9fb3d7, 2.3.1),
+# against Velickovic et al., "Graph Attention Networks" (ICLR 2018), Table 2 (transductive, fixed Planetoid split).
+# Target: GAT on Cora (83.0). Held-out: GAT on CiteSeer (72.5), GCN on Cora (81.5) and CiteSeer (70.3).
+#
+# One cell runs four script processes at once, one per vCPU (OMP_NUM_THREADS=1; more threads per process did not
+# help): gcn.py and gat.py on Cora and CiteSeer. Naive = run.sh's fixed-split lines for these models and datasets
+# (`python gcn.py --dataset=X`, `python gat.py --dataset=X`), i.e. every flag at the script's own default.
+# Deviation: gat.py runs --runs 10, not 100 (halved from 20 after both 20-run smoke runs timed out at 3600 s under load;
+# measured unloaded: 51 s per GAT run on CiteSeer, 21 s on Cora),
+# so discrepancy 0.05. gcn.py keeps --runs 100. PubMed is left out (time).
+#
+# Knobs: every argparse flag of gcn.py and gat.py except --dataset (defines the claim), --runs (repeat count of
+# the mean: the scale, fixed by the time limit), --inference, --profile, --bf16 (how-to-run: inference-only timing,
+# profiler, bf16 only in the inference path). Model hyperparameters are model-prefixed (gcn_*, gat_*), each at its
+# own script's default; the two protocol flags shared by both scripts (--random_splits, --no_normalize_features)
+# are one knob each, passed to both. Store_true flags are 0/1 knobs.
+# Seeds: the code sets no seed, so its own randomness is the noise (torch's default generator).
+name: pyg
+base: ${GF_DEV_BASE}
+source: ${GF_DEV_SOURCE}
+run:
+  command: 'export OMP_NUM_THREADS=1 PYTHONWARNINGS=ignore PYTHONDONTWRITEBYTECODE=1; mkdir -p out; cd benchmark/citation; P="/work/benchmark${PYTHONPATH:+:$PYTHONPATH}"; F=""; if [ "{random_splits}" = 1 ]; then F="$F --random_splits"; fi; if [ "{no_normalize_features}" = 1 ]; then F="$F --no_normalize_features"; fi; GCN="--runs 100 --epochs {gcn_epochs} --lr {gcn_lr} --weight_decay {gcn_weight_decay} --early_stopping {gcn_early_stopping} --hidden {gcn_hidden} --dropout {gcn_dropout}"; GAT="--runs 10 --epochs {gat_epochs} --lr {gat_lr} --weight_decay {gat_weight_decay} --early_stopping {gat_early_stopping} --hidden {gat_hidden} --dropout {gat_dropout} --heads {gat_heads} --output_heads {gat_output_heads}"; for d in Cora CiteSeer; do PYTHONPATH="$P" python gcn.py --dataset=$d $GCN $F > /work/out/gcn_$d.log 2>&1 & PYTHONPATH="$P" python gat.py --dataset=$d $GAT $F > /work/out/gat_$d.log 2>&1 & done; wait; cd /work; bash gf_harness/emit.sh'
+  output: stdout
+  format: kv
+  timeout: 3500
+knobs:
+  random_splits:         {layer: config, default: "0", choices: ["0", "1"]}
+  no_normalize_features: {layer: config, default: "0", choices: ["0", "1"]}
+  gcn_epochs:            {layer: config, default: "200", max: 1000}
+  gcn_lr:                {layer: config, default: "0.01"}
+  gcn_weight_decay:      {layer: config, default: "0.0005"}
+  gcn_early_stopping:    {layer: config, default: "10"}
+  gcn_hidden:            {layer: config, default: "16", max: 64}
+  gcn_dropout:           {layer: config, default: "0.5"}
+  gat_epochs:            {layer: config, default: "1000", max: 1500}
+  gat_lr:                {layer: config, default: "0.005"}
+  gat_weight_decay:      {layer: config, default: "0.0005"}
+  gat_early_stopping:    {layer: config, default: "100"}
+  gat_hidden:            {layer: config, default: "8", max: 16}
+  gat_dropout:           {layer: config, default: "0.6"}
+  gat_heads:             {layer: config, default: "8", max: 16}
+  gat_output_heads:      {layer: config, default: "1", max: 8}
+allowed_paths: ["out/"]
+metrics: [gat_cora_acc, gat_citeseer_acc, gcn_cora_acc, gcn_citeseer_acc, gat_cora_std, gat_citeseer_std, gcn_cora_std, gcn_citeseer_std]
+discrepancy: 0.05

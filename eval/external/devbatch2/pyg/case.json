@@ -1,0 +1,9 @@
+{
+ "name": "pyg",
+ "repo": "https://github.com/pyg-team/pytorch_geometric",
+ "commit": "ff9fb3d7cdbaa2f2b8a848fb6cc5f4c3f465118c",
+ "image": "python:3.8-slim",
+ "pip": [],
+ "setup": "pip install --no-cache-dir https://download.pytorch.org/whl/cpu/torch-1.9.0%2Bcpu-cp38-cp38-linux_x86_64.whl && pip install --no-cache-dir numpy>=1.19.5 tqdm scipy jinja2 requests pyparsing scikit-learn psutil>=5.8.0 meshio ogb wandb && pip install --no-cache-dir torchdata==0.8.0 && pip install -e . --no-cache-dir 2>&1 | tail -2; cd /work/benchmark/citation && PYTHONPATH=/work/benchmark PYTHONWARNINGS=ignore python -c \"from citation import get_planetoid_dataset as g; [print(g(d), g(d)[0]) for d in ('Cora', 'CiteSeer', 'PubMed')]\"; python -c 'import torch, torch_geometric; print(torch.__version__, torch_geometric.__version__, torch.initial_seed())'; cd /work",
+ "smoke": "(while :; do awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{print t-a}' /proc/meminfo; sleep 2; done > /tmp/mem.txt) & MP=$!; s=$(date +%s); export OMP_NUM_THREADS=1 PYTHONWARNINGS=ignore PYTHONDONTWRITEBYTECODE=1; mkdir -p out; cd benchmark/citation; P=\"/work/benchmark${PYTHONPATH:+:$PYTHONPATH}\"; F=''; GCN='--runs 100 --epochs 200 --lr 0.01 --weight_decay 0.0005 --early_stopping 10 --hidden 16 --dropout 0.5'; GAT='--runs 20 --epochs 1000 --lr 0.005 --weight_decay 0.0005 --early_stopping 100 --hidden 8 --dropout 0.6 --heads 8 --output_heads 1'; for d in Cora CiteSeer; do PYTHONPATH=$P python gcn.py --dataset=$d $GCN $F > /work/out/gcn_$d.log 2>&1 & PYTHONPATH=$P python gat.py --dataset=$d $GAT $F > /work/out/gat_$d.log 2>&1 & done; wait; cd /work; kill $MP; echo wall_s=$(( $(date +%s) - s )); echo peak_used_mb=$(( $(sort -n /tmp/mem.txt | tail -1) / 1024 )); cat /sys/fs/cgroup/memory.peak 2>/dev/null; tail -qn1 out/*.log; bash gf_harness/emit.sh"
+}

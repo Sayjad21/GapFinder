@@ -1,0 +1,15 @@
+{
+ "name": "ncf",
+ "repo": "https://github.com/hexiangnan/neural_collaborative_filtering",
+ "commit": "4aab159e81c44b062c091bdaed0ab54ac632371f",
+ "image": "python:2.7",
+ "pip": [
+  "numpy==1.11.0",
+  "scipy==0.17.1",
+  "Theano==0.8.0",
+  "keras==1.0.7",
+  "h5py==2.6.0"
+ ],
+ "setup": "curl -sSfL https://codeload.github.com/hexiangnan/neural_collaborative_filtering/tar.gz/4aab159e81c44b062c091bdaed0ab54ac632371f | tar xz -C /tmp && cp -r /tmp/neural_collaborative_filtering-4aab159e81c44b062c091bdaed0ab54ac632371f/. /work/ && rm -rf /tmp/neural_collaborative_filtering-* && ls /work && md5sum /work/Data/ml-1m.*; export KERAS_BACKEND=theano; python -c \"import keras, theano, numpy, scipy; print('keras', keras.__version__, 'theano', theano.__version__, 'numpy', numpy.__version__, 'scipy', scipy.__version__, 'floatX', theano.config.floatX, 'cxx', theano.config.cxx, 'blas', theano.config.blas.ldflags)\"",
+ "smoke": "export KERAS_BACKEND=theano OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1; mkdir -p out; python -c \"import keras\" > /dev/null 2>&1; C='--epochs 2 --batch_size 256 --num_neg 4 --lr 0.001 --learner adam --verbose 1 --out 0 --dataset ml-1m'; s=$(date +%s); python NeuMF.py $C --num_factors 8 --layers '[64,32,16,8]' --reg_mf 0 --reg_layers '[0,0,0,0]' > out/neumf.log 2>&1 & python GMF.py $C --num_factors 8 --regs '[0,0]' > out/gmf.log 2>&1 & python MLP.py $C --layers '[64,32,16,8]' --reg_layers '[0,0,0,0]' > out/mlp.log 2>&1 & wait; echo wall_s=$(( $(date +%s) - s )); bash gf_harness/emit.sh; tail -n 4 out/*.log"
+}

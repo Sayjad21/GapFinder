@@ -1,0 +1,32 @@
+# devbatch-2 at: Anomaly Transformer (Xu et al., ICLR 2022), SMD precision / recall / F1 (Table 1, page 7:
+# P 89.40, R 95.45, F1 92.33). Target: F1; held-out: P and R (same run, same setting). See HARNESS.md.
+#
+# One cell = scripts/SMD.sh's two commands, `main.py --mode train` then `main.py --mode test`, on SMD, scaled
+# down to fit a Sandboxes VM (4 vCPU, 3.9 GB, ulimit -t 6000 CPU-s per process): batch_size 256 -> 32 (halved
+# until the training run is not OOM-killed) and num_epochs 10 -> 3 (the largest count whose worst case fits
+# the CPU-time guard and the timeout with 20% margin). Hence discrepancy 0.05.
+# Knobs: every argparse flag of main.py that sets how the model is trained or evaluated, at SMD.sh's values
+# (anormly_ratio 0.5; num_epochs, batch_size scaled as above) or main.py's defaults (lr 1e-4, k 3, win_size 100).
+# Each knob goes to both the train and the test command, as SMD.sh passes the same flags to both.
+# Left out: --dataset, --data_path, --mode, --model_save_path (how to run); --input_c / --output_c (fixed by
+# SMD's 38 channels: other values break the model's shapes); --pretrained_model (parsed, never read).
+# No seed is set anywhere in the code: each run's own randomness (initialisation, shuffling) is the noise.
+# max: batch_size above 32 and win_size above 100 run out of memory; num_epochs above 3 exceeds the CPU guard.
+name: at
+base: ${GF_DEV_BASE}
+source: ${GF_DEV_SOURCE}
+run:
+  command: 'mkdir -p out; A="--lr {lr} --num_epochs {num_epochs} --k {k} --win_size {win_size} --batch_size {batch_size} --anormly_ratio {anormly_ratio}"; python main.py $A --mode train --dataset SMD --data_path dataset/SMD --input_c 38 > out/train.log 2>&1; python main.py $A --mode test --dataset SMD --data_path dataset/SMD --input_c 38 --pretrained_model 20 > out/test.log 2>&1; bash gf_harness/emit.sh'
+  output: stdout
+  format: kv
+  timeout: 3500
+knobs:
+  lr:            {layer: config, default: "1e-4"}
+  num_epochs:    {layer: config, default: "3", max: 3}
+  k:             {layer: config, default: "3"}
+  win_size:      {layer: config, default: "100", max: 100}
+  batch_size:    {layer: config, default: "32", max: 32}
+  anormly_ratio: {layer: config, default: "0.5"}
+allowed_paths: ["out/", "checkpoints/"]
+metrics: [smd_f1, smd_precision, smd_recall]
+discrepancy: 0.05

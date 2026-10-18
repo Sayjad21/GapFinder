@@ -1,0 +1,17 @@
+{
+ "name": "at",
+ "repo": "https://github.com/thuml/Anomaly-Transformer",
+ "commit": "b0ee470c8012bff857fb600462aec6209c4a18d9",
+ "image": "python:3.6-slim",
+ "pip": [
+  "numpy==1.19.5",
+  "pandas==1.1.5",
+  "pillow==8.4.0",
+  "scikit-learn==0.24.2",
+  "scipy==1.5.4",
+  "torch==1.4.0"
+ ],
+ "auto_checkpoint": "d7884403-4902-42f3-a930-aa1fd59d1d71",
+ "setup": "cp gf_harness/sitecustomize.py \"$(python -c 'import site; print(site.getsitepackages()[0])')/\" && python -c 'import torch; torch.zeros(2).cuda(); print(\"cpu shim ok\")' && (apt-get update -qq && apt-get install -y -qq libjemalloc2) > /tmp/apt.log 2>&1 && echo /usr/lib/x86_64-linux-gnu/libjemalloc.so.2 > /etc/ld.so.preload && python -c 'print(\"jemalloc\", [l.split()[-1] for l in open(\"/proc/self/maps\") if \"jemalloc\" in l][:1])' && mkdir -p dataset/SMD && python -c \"import io, zipfile, urllib.request; d = urllib.request.urlopen('https://drive.usercontent.google.com/download?id=187cjlXCedf4v3-Xm-fK7iTQZ6k6BFaDK&export=download&confirm=t', timeout=900).read(); print('SMD.zip', len(d)); z = zipfile.ZipFile(io.BytesIO(d)); [open('dataset/SMD/' + n, 'wb').write(z.read('SMD/' + n)) for n in ('SMD_train.npy', 'SMD_test.npy', 'SMD_test_label.npy')]\" && cd dataset/SMD && printf '%s  %s\\n' ef3a4a4e9c87c939c23e0cdf1190c18a1d41ef1aadb5d6c5ae909514332ef791 SMD_train.npy 64520f6b9351d609bb395e947a3c98f6c513f608c794c571f9a0176d98cdb671 SMD_test.npy 400a29e062ca8c8f8d7e4801c68c35801f3a2180d5d70fe118d6525a33dd3ed2 SMD_test_label.npy | sha256sum -c && ls -l",
+ "smoke": "mkdir -p out; A=\"--lr 1e-4 --num_epochs 3 --k 3 --win_size 100 --batch_size 32 --anormly_ratio 0.5\"; s=$(date +%s); python main.py $A --mode train --dataset SMD --data_path dataset/SMD --input_c 38 > out/train.log 2>&1; t=$(date +%s); python main.py $A --mode test --dataset SMD --data_path dataset/SMD --input_c 38 --pretrained_model 20 > out/test.log 2>&1; echo train_s=$(( t - s )) test_s=$(( $(date +%s) - t )); grep -a -E 'cost time|Early stopping|Vali Loss|Threshold' out/train.log out/test.log; bash gf_harness/emit.sh"
+}

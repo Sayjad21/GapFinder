@@ -1,0 +1,37 @@
+# devbatch-2 case ncf: Neural Collaborative Filtering (He et al., WWW 2017), MovieLens-1M, predictive factors 8.
+# Target: NeuMF HR@10 (Table 2, without pre-training: 0.688). Held-out: NeuMF NDCG@10 (0.410), and, tuned
+# separately per the paper, MLP-3 (Tables 3/4) and GMF (Figure 4, read from the plot). See HARNESS.md.
+#
+# One cell runs the README's three commands (NeuMF without pre-training, GMF, MLP) at once on ml-1m. Knobs:
+# every argparse flag of NeuMF.py / GMF.py / MLP.py that defines training or evaluation, with the code's
+# defaults (epochs: the README's 20, see HARNESS.md). Shared flag names (epochs, batch_size, num_neg, lr,
+# learner, verbose, num_factors, layers, reg_layers) are one knob for every script that has them. List
+# flags are written without brackets (a knob value may not hold [ ]) and wrapped by the command. Left out:
+# --path and --dataset (which data: ml-1m is the claim), --out 0 (only saves weights into Pretrain/).
+# The code sets no seed (numpy/Keras init and negative sampling are unseeded): that is the run noise.
+# One cell at the defaults: 891 s, 1.0 GB peak per process, 2.4 GB for the three. num_neg 10 runs out of
+# memory (3.9 GB) with three processes, hence max 8 (3.4 GB measured); epochs max 70 (about 44 s an epoch).
+name: ncf
+base: ${GF_DEV_BASE}
+source: ${GF_DEV_SOURCE}
+run:
+  command: 'export KERAS_BACKEND=theano OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1; mkdir -p out; python -c "import keras" > /dev/null 2>&1; C="--dataset ml-1m --out 0 --epochs {epochs} --batch_size {batch_size} --num_neg {num_neg} --lr {lr} --learner {learner} --verbose {verbose}"; P=""; if [ -n "{mf_pretrain}" ]; then P="$P --mf_pretrain {mf_pretrain}"; fi; if [ -n "{mlp_pretrain}" ]; then P="$P --mlp_pretrain {mlp_pretrain}"; fi; s=$(date +%s); python NeuMF.py $C --num_factors {num_factors} --layers "[{layers}]" --reg_mf {reg_mf} --reg_layers "[{reg_layers}]" $P > out/neumf.log 2>&1 & python GMF.py $C --num_factors {num_factors} --regs "[{regs}]" > out/gmf.log 2>&1 & python MLP.py $C --layers "[{layers}]" --reg_layers "[{reg_layers}]" > out/mlp.log 2>&1 & wait; echo wall_s=$(( $(date +%s) - s )); bash gf_harness/emit.sh'
+  output: stdout
+  format: kv
+  timeout: 3500
+knobs:
+  epochs:       {layer: workload, default: "20", max: 70}
+  batch_size:   {layer: workload, default: "256"}
+  num_neg:      {layer: workload, default: "4", max: 8}
+  lr:           {layer: config, default: "0.001"}
+  learner:      {layer: config, default: "adam", choices: ["adagrad", "adam", "rmsprop", "sgd"]}
+  verbose:      {layer: workload, default: "1"}
+  num_factors:  {layer: config, default: "8"}
+  layers:       {layer: config, default: "64,32,16,8"}
+  reg_mf:       {layer: config, default: "0"}
+  reg_layers:   {layer: config, default: "0,0,0,0"}
+  regs:         {layer: config, default: "0,0"}
+  mf_pretrain:  {layer: config, default: ""}
+  mlp_pretrain: {layer: config, default: ""}
+allowed_paths: ["out/"]
+metrics: [neumf_hr, neumf_ndcg, gmf_hr, gmf_ndcg, mlp_hr, mlp_ndcg, neumf_best_iter, gmf_best_iter, mlp_best_iter, neumf_hr_init, neumf_ndcg_init, gmf_hr_init, gmf_ndcg_init, mlp_hr_init, mlp_ndcg_init, neumf_hr_e0, neumf_ndcg_e0, neumf_loss_e0, neumf_hr_e1, neumf_ndcg_e1, neumf_loss_e1, neumf_hr_e2, neumf_ndcg_e2, neumf_loss_e2, neumf_hr_e3, neumf_ndcg_e3, neumf_loss_e3, neumf_hr_e4, neumf_ndcg_e4, neumf_loss_e4, neumf_hr_e5, neumf_ndcg_e5, neumf_loss_e5, neumf_hr_e6, neumf_ndcg_e6, neumf_loss_e6, neumf_hr_e7, neumf_ndcg_e7, neumf_loss_e7, neumf_hr_e8, neumf_ndcg_e8, neumf_loss_e8, neumf_hr_e9, neumf_ndcg_e9, neumf_loss_e9, neumf_hr_e10, neumf_ndcg_e10, neumf_loss_e10, neumf_hr_e11, neumf_ndcg_e11, neumf_loss_e11, neumf_hr_e12, neumf_ndcg_e12, neumf_loss_e12, neumf_hr_e13, neumf_ndcg_e13, neumf_loss_e13, neumf_hr_e14, neumf_ndcg_e14, neumf_loss_e14, neumf_hr_e15, neumf_ndcg_e15, neumf_loss_e15, neumf_hr_e16, neumf_ndcg_e16, neumf_loss_e16, neumf_hr_e17, neumf_ndcg_e17, neumf_loss_e17, neumf_hr_e18, neumf_ndcg_e18, neumf_loss_e18, neumf_hr_e19, neumf_ndcg_e19, neumf_loss_e19, gmf_hr_e0, gmf_ndcg_e0, gmf_loss_e0, gmf_hr_e1, gmf_ndcg_e1, gmf_loss_e1, gmf_hr_e2, gmf_ndcg_e2, gmf_loss_e2, gmf_hr_e3, gmf_ndcg_e3, gmf_loss_e3, gmf_hr_e4, gmf_ndcg_e4, gmf_loss_e4, gmf_hr_e5, gmf_ndcg_e5, gmf_loss_e5, gmf_hr_e6, gmf_ndcg_e6, gmf_loss_e6, gmf_hr_e7, gmf_ndcg_e7, gmf_loss_e7, gmf_hr_e8, gmf_ndcg_e8, gmf_loss_e8, gmf_hr_e9, gmf_ndcg_e9, gmf_loss_e9, gmf_hr_e10, gmf_ndcg_e10, gmf_loss_e10, gmf_hr_e11, gmf_ndcg_e11, gmf_loss_e11, gmf_hr_e12, gmf_ndcg_e12, gmf_loss_e12, gmf_hr_e13, gmf_ndcg_e13, gmf_loss_e13, gmf_hr_e14, gmf_ndcg_e14, gmf_loss_e14, gmf_hr_e15, gmf_ndcg_e15, gmf_loss_e15, gmf_hr_e16, gmf_ndcg_e16, gmf_loss_e16, gmf_hr_e17, gmf_ndcg_e17, gmf_loss_e17, gmf_hr_e18, gmf_ndcg_e18, gmf_loss_e18, gmf_hr_e19, gmf_ndcg_e19, gmf_loss_e19, mlp_hr_e0, mlp_ndcg_e0, mlp_loss_e0, mlp_hr_e1, mlp_ndcg_e1, mlp_loss_e1, mlp_hr_e2, mlp_ndcg_e2, mlp_loss_e2, mlp_hr_e3, mlp_ndcg_e3, mlp_loss_e3, mlp_hr_e4, mlp_ndcg_e4, mlp_loss_e4, mlp_hr_e5, mlp_ndcg_e5, mlp_loss_e5, mlp_hr_e6, mlp_ndcg_e6, mlp_loss_e6, mlp_hr_e7, mlp_ndcg_e7, mlp_loss_e7, mlp_hr_e8, mlp_ndcg_e8, mlp_loss_e8, mlp_hr_e9, mlp_ndcg_e9, mlp_loss_e9, mlp_hr_e10, mlp_ndcg_e10, mlp_loss_e10, mlp_hr_e11, mlp_ndcg_e11, mlp_loss_e11, mlp_hr_e12, mlp_ndcg_e12, mlp_loss_e12, mlp_hr_e13, mlp_ndcg_e13, mlp_loss_e13, mlp_hr_e14, mlp_ndcg_e14, mlp_loss_e14, mlp_hr_e15, mlp_ndcg_e15, mlp_loss_e15, mlp_hr_e16, mlp_ndcg_e16, mlp_loss_e16, mlp_hr_e17, mlp_ndcg_e17, mlp_loss_e17, mlp_hr_e18, mlp_ndcg_e18, mlp_loss_e18, mlp_hr_e19, mlp_ndcg_e19, mlp_loss_e19]
