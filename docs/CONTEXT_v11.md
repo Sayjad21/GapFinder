@@ -440,6 +440,35 @@ confident label would be unearned.
 - On a one-claim repo, the correct rate is bounded by identifiability, not by the search.
 - Planted tasks are informative only on repos with several claims that the causes move differently. VGAE
   has 8 claims but barely responds to the drawn changes, so a more sensitive multi-claim repo is needed.
+- GAT (planted, seed 2): 0 tasks from 7 draws. PubMed accuracy didn't move past noise either.
+
+### 7.5 devbatch-2 (tag `devbatch-2` = `e0117a2`; `eval/external/devbatch2/`, PROTOCOL.md and RESULTS.md)
+
+Three fresh papers: NCF, PyG GAT vs GCN, and Anomaly Transformer. All in Sandboxes, at least 2 claims each,
+scoring fixed before any run.
+
+- **Result: 0 of 3 documented causes found, 3 correct abstentions, 0 confidently wrong.**
+  - Every target reproduced within noise on its first 5 runs: NCF -0.8%, PyG 0.0%, AT -0.5%.
+  - The documented causes are protocol and noise findings that the paper's number already contains: NCF
+    picks the epoch on the test set; AT's point adjustment uses the labels (and the paper states it); PyG's
+    ranking depends on the split.
+- **Environment builder on unseen repos:** imports loaded on 3/3, but the experiment ran on only 1/3 (PyG).
+  NCF is Python 2 code; AT calls `.cuda()` unconditionally and runs out of memory at the paper's batch size.
+- **The class it revealed (all three papers): a reproduced number is not audited.** The report says nothing
+  about:
+  - static leakage findings: NCF's `if hr > best_hr` loop over test evaluations;
+  - held-out misses and broken comparisons: PyG CiteSeer, where GCN 71.1 beats GAT 70.8 against the paper's
+    72.5 vs 70.3;
+  - the paper's own stated protocol: AT's adjustment, extracted with prior 0.8 but listed only as "not
+    settable".
+- Other bugs: GapFinder's hooks shadow an existing `sitecustomize`; env-build's default goal is too weak; an
+  image whose imports load is not a runnable image.
+
+Next (class-level, then a fresh batch):
+1. audit reproduced numbers (leakage leads, held-out misses, relation claims from the paper's tables, stated
+   evaluation protocols);
+2. make env-build's default goal a short run of the entry script;
+3. chain the hooks to an existing sitecustomize.
 
 ## 8. Where things are
 
