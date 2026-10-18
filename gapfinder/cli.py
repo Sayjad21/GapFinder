@@ -188,6 +188,11 @@ async def cmd_search(args) -> int:
 
     spec = HarnessSpec.load_yaml(args.spec)
     targets = [Target(**t) for t in json.loads(Path(args.targets).read_text())]
+    if not any(t.held_out for t in targets):
+        # one number can't tell causes apart: any change that moves it the right way fits (planted pygcn: 4 of
+        # 8 misses had the planted change among equally good fits)
+        print("warning: no held-out claim; with one number, different causes are rarely distinguishable",
+              file=sys.stderr)
     if args.hypotheses == "repomap":  # no ledger: every spec knob, uniform priors, no paper values or evidence
         from gapfinder.search.hypotheses import assumptions_from_spec
 
@@ -346,7 +351,7 @@ async def cmd_env_build(args) -> int:
     from gapfinder.sandbox.backend import ContreeBackend
 
     res = await build_env(Router(), ContreeBackend(), args.local, fetch=fetch(args.repo, args.commit), image=args.image,
-                          date=args.date, max_steps=args.max_steps)
+                          date=args.date, max_steps=args.max_steps, goal=args.goal)
     out = write_result(res, args.out)
     print(f"{'ok' if res.ok else 'FAILED'}: image {res.image}, checkpoint {res.checkpoint}, {len(res.recipe)} of "
           f"{len(res.steps)} commands kept, ${res.cost_usd:.4f}" + (f"; {res.reason}" if res.reason else ""))
@@ -452,6 +457,8 @@ def main(argv: list[str] | None = None) -> int:
     pe.add_argument("--image", help="base image (default: the model picks from a fixed list)")
     pe.add_argument("--date", help="the commit date, when --local is not a git clone")
     pe.add_argument("--max-steps", type=int, default=12)
+    pe.add_argument("--goal", help="a shell command that must also exit 0 (e.g. a short run), so system tools it "
+                                   "needs get installed in the same loop")
     pe.add_argument("--out", required=True, help="where to write the result JSON (checkpoint, recipe, steps)")
 
     pq = sub.add_parser("diff", help="your reproduction vs a reference implementation: trace both runs, test where "

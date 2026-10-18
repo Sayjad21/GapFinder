@@ -70,3 +70,27 @@ async def test_the_model_can_switch_the_base_image_and_the_recipe_keeps_only_the
     assert res.recipe == ["mkdir -p src/toylib && touch src/toylib/__init__.py src/toylib/core.py"]
     assert any(s.command.startswith("# switch base image python:3.12-slim -> python:3.7-slim") for s in res.steps)
     assert "python:3.12-slim" not in prompts[-1].split("this list instead:")[1].split("\n")[0]  # not offered again
+
+
+async def test_a_goal_command_that_fails_keeps_the_loop_going_until_it_passes(tmp_path):
+    """The imports load but the run needs something else (PatchTST: the `free` tool): the goal's failure goes
+    to the model, which installs it in the same rollback loop."""
+    root = _repo(tmp_path)
+    (root / "src" / "toylib").mkdir()
+    (root / "src" / "toylib" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "src" / "toylib" / "core.py").write_text("", encoding="utf-8")
+    prompts = []
+    answers = iter([NextStep(command="mkdir -p bin && printf '#!/bin/sh\necho ok\n' > bin/free && chmod +x bin/free")])
+
+    class FakeRouter:
+        meter = type("Meter", (), {"total_cost": lambda self: 0.0})()
+
+        async def structured(self, tier, messages, schema):
+            prompts.append(messages[0]["content"])
+            return next(answers)
+
+    res = await build_env(FakeRouter(), LocalBackend(tmp_path / "sbx"), root, image="python:3.12-slim",
+                          goal="test -x bin/free && bin/free", max_steps=3)
+    assert res.ok, res.reason
+    assert "goal command failed" in prompts[0] and "apt-get" in prompts[0]
+    assert len(res.recipe) == 1

@@ -31,8 +31,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-IMAGES = ("python:3.6-slim", "python:3.7-slim", "python:3.8-slim", "python:3.9-slim", "python:3.10-slim",
-          "python:3.11-slim", "python:3.12-slim")
+IMAGES = ("python:2.7-slim", "python:3.6-slim", "python:3.7-slim", "python:3.8-slim", "python:3.9-slim",
+          "python:3.10-slim", "python:3.11-slim", "python:3.12-slim")
 MAX_TAIL = 2500
 STEP_TIMEOUT_S = 1800
 
@@ -54,7 +54,7 @@ STEP_PROMPT = """You are making a research repository runnable inside a fresh Li
 in /work; the network is available for package installs.
 
 Goal: every module below imports. The check runs `python -c "import <module>"` for each, from the directories
-the entry scripts run in.
+the entry scripts run in.{goal}
 Third-party modules the entry scripts import: {modules}
 
 BUILD FILES:
@@ -71,7 +71,9 @@ The last check said:
 
 Give ONE next shell command (it may chain a few steps with &&). Pin versions that existed at the commit date
 when the build files don't (e.g. tensorflow==1.15.5 for a 2018 TensorFlow 1 repo); prefer pip wheels over
-compiling; use `pip install --no-cache-dir`. Do not edit the repository's source files. If the goal can't be
+compiling; use `pip install --no-cache-dir`. You are root: system packages and tools come from
+`apt-get update && apt-get install -y --no-install-recommends <packages>` (a missing command such as `free`,
+`wget` or `unzip`, or a library a wheel needs). Do not edit the repository's source files. If the goal can't be
 reached in this VM (e.g. it needs a GPU-only package), set "give_up" with the reason. If the base image itself is
 the problem (its Python version can't install what the code needs), set "switch_image" to another image from
 this list instead: {images}. The VM then restarts from a fresh checkout on that image; this history is kept."""
@@ -218,9 +220,11 @@ def fetch(repo: str, commit: str) -> str:
     """A shell command that downloads the repo at `commit` from GitHub into /work (inside the VM)."""
     owner_repo = repo.rstrip("/").removeprefix("https://github.com/").removesuffix(".git")
     name = owner_repo.split("/")[-1]
-    return ("python -c \"import io, tarfile, urllib.request; "
-            f"d = urllib.request.urlopen('https://codeload.github.com/{owner_repo}/tar.gz/{commit}', timeout=300).read(); "
-            "tarfile.open(fileobj=io.BytesIO(d)).extractall('/tmp/src'); print('fetched', len(d))\" "
+    # Python 2 and 3 alike (a 2016 repo runs on python:2.7-slim, which has no python3 and no curl)
+    return ("python -c \"import io, tarfile\n"
+            "try:\n    from urllib.request import urlopen\nexcept ImportError:\n    from urllib2 import urlopen\n"
+            f"d = urlopen('https://codeload.github.com/{owner_repo}/tar.gz/{commit}', timeout=300).read()\n"
+            "tarfile.open(fileobj=io.BytesIO(d)).extractall('/tmp/src'); print('fetched %d' % len(d))\" "
             f"&& cp -r /tmp/src/{name}-{commit}/. /work/ && rm -rf /tmp/src && ls /work")
 
 
@@ -319,9 +323,12 @@ async def _start(backend, root: Path, image: str, fetch: str | None) -> tuple[st
 
 
 async def build_env(router, backend, root: str | Path, *, fetch: str | None = None, image: str | None = None,
-                    date: str | None = None, max_steps: int = 12) -> EnvResult:
+                    date: str | None = None, max_steps: int = 12, goal: str | None = None,
+                    goal_timeout: float = 1800) -> EnvResult:
     """`root`: a local checkout (read for imports and build files). `fetch`: a shell command that puts the repo
-    at /work in the VM (None: the backend's base is the checkout itself, as on the local backend).
+    at /work in the VM (None: the backend's base is the checkout itself, as on the local backend). `goal`: a
+    command that must also exit 0 once the imports load (e.g. a short run of the experiment), so system tools
+    and data steps it needs are installed in the same rollback loop.
 
     The model may ask for another base image when the first can't work (VGAE and GAT in the first env bench:
     TensorFlow 1 has no wheels for the Python it picked, and the loop could only give up). The VM restarts from a
@@ -346,6 +353,13 @@ async def build_env(router, backend, root: str | Path, *, fetch: str | None = No
     for _ in range(max_steps + MAX_IMAGE_SWITCHES + 1):
         c = await _run(backend, ckpt, check, timeout=600, disposable=True)
         out = _tail((c.stdout or "") + (c.stderr or ""))
+        if c.exit_code == 0 and goal:
+            # imports load; the run's own command must work too (PatchTST's smoke needed `free`, a system tool)
+            g = await _run(backend, ckpt, goal, timeout=goal_timeout, disposable=True)
+            if g.exit_code != 0:
+                c = g
+                out = "the imports load, but the goal command failed (exit %d):\n%s" % (
+                    g.exit_code, _tail((g.stdout or "") + (g.stderr or "")))
         if c.exit_code == 0:
             res.ok, res.checkpoint = True, ckpt
             break
@@ -354,6 +368,8 @@ async def build_env(router, backend, root: str | Path, *, fetch: str | None = No
             break
         step = await router.structured("super", [{"role": "user", "content": STEP_PROMPT.format(
             image=image, date=date, modules=", ".join(modules) or "(none)", build=build, readme=readme,
+            goal=(f"\nThen this command must also exit 0 (it uses the programs and files the run needs):\n  {goal}"
+                  if goal else ""),
             history=_history(res.steps), check=out, images=", ".join(i for i in IMAGES if i not in tried))}], NextStep)
         new = step.switch_image.strip()
         if new and new in IMAGES and new not in tried and len(tried) <= MAX_IMAGE_SWITCHES:
