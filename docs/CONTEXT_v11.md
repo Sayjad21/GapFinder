@@ -296,7 +296,67 @@ What is missing, biggest first:
 
 ---
 
-## 7. Where things are
+## 7. The no-patching rule, and what is allowed to change
+
+**Set by the owner on 2026-10-18, for the lifetime of the project** (also in the git-ignored `CLAUDE.md`):
+- **No engine change to make a specific paper or task pass.**
+- **A change is allowed only if it does one of these:**
+  - fixes a failure *class* seen on **at least two different papers**;
+  - adds a capability that **published work** shows generalises.
+
+  Prefer removing a class over handling a case.
+- **Never judge a change on the case that revealed it.** Post-hoc reruns count as nothing.
+- **Progress is a rate on a fresh frozen batch,** compared with the previous one (devbatch-1: 1/5 correct,
+  0 confidently wrong).
+- **No tuning of tie-break or selection rules on GapBench or dev-set cases.** Every past attempt was neutral
+  or harmful.
+- **Plumbing and measurement infrastructure are allowed.**
+
+### 7.1 Assessment of the pasted "host-side" proposal (2026-10-18)
+
+It was written against the v1.1/v1.2 logs, so much of it describes problems that are already solved or
+measured.
+
+| Proposal | Status today | Verdict under the rule |
+|---|---|---|
+| 1. Type knobs from how the code uses them, not regex names | Done, more strongly: the runtime trace types knobs from the call their value reaches (optimizer, dropout, loop, seed). The name rules are only a fallback. | Nothing to add. A static AST typer could back up the trace when no dry run is possible, but that is low value. |
+| 2A. Stop screening flat knobs after 2 coarse probes | Done (`coarse_stop_bands`, coarse-first ladder). | Nothing to add. |
+| 2B. Secant interpolation to the paper's value | Done, and **measured harmful** when always on: it manufactured exact-fit decoys (102 → 92 of 138). Now runs only when nothing fits every claim. | Already settled. |
+| 2C. Confirm a promising pair immediately during combine | Not done. A general "anytime" budget rule (confirm leads when they appear). | **Plausible as a class:** budget ran out before confirmation on MC Dropout, FastGCN post-hoc and Informer. It must be measured on a fresh batch, not on MC Dropout. |
+| 3A. Penalise configurations whose run-to-run spread inflates | **Rejected before, with data:** the true cause often inflates spread too. | Rejected (tuning; measured "don't"). |
+| 3B. Solo-effect gate for passengers in bisect | Tie-break tuning on specific GapBench tasks (v12-08, v11-10). | **Rejected: this is patching.** |
+| 3C. Soft ledger prior inside the likelihood tie | Value-level priors were rejected with data: 45% of true values come from coverage only. | Rejected. |
+| 4. Match code-check literals against the ledger's paper values, deterministically | Partly done, through the contrast step (an LLM, grounded to file:line and a verbatim quote). | **Plausible:** a deterministic matcher is general and costs $0. But it rests on name matching, the recurring weak spot (4.2), so it inherits that class's fix. |
+
+**Overall:** the proposal doesn't touch the blockers that actually stop generalisation: the harness, reading
+the paper, causes in code structure, and measurement. Most of it is search tuning, which the rule forbids.
+
+### 7.2 Existing work that addresses the real blockers (web search, 2026-10-18)
+
+| Blocker | Existing work | What it gives us |
+|---|---|---|
+| 4.1 Harness / environment | **Repo2Run** (NeurIPS 2025: an agent that iteratively builds Docker images until the repo runs; 86% on 420 Python repos, far above SWE-agent); SWE-Factory, SetupX, EnvPilot; CORE-Bench agents (reproducing outputs from repos is largely saturated) | An automatic harness builder is a proven, general capability. Add our own checks: metrics parse, seeds vary, it fits Sandboxes. |
+| 4.2 Reading the paper | **SA-Bench** (2026: single-call extraction skips appendices because attention decays over long papers); **HyperPIE** (hyperparameter extraction as entities + relations; structured YAML beats JSON); **AutoReproduce** (ACL 2026: "paper lineage" pulls settings from cited papers) | Extract section by section, appendix included, with a structured hyperparameter schema, and follow citations for inherited settings ("following [X]"). |
+| 4.3 Causes in code structure | **Delta debugging** (Zeller: isolate the minimal difference between a working and a failing version, combinations included); **TTrace** (2025: compare a reference run tensor by tensor, and the first diverging module is the suspect); **TrainCheck** (OSDI 2025: inferred training invariants, 18/20 silent bugs); Paper2Code and AutoReproduce (generate a paper-faithful implementation) | **Differential testing:** with a second implementation (an independent public one, or one generated from the paper), structural causes become testable: localise where the two runs diverge, then delta-debug the minimal difference. This is also the product's "compare with my code" mode. |
+| 4.4 Identifiability | TTrace's lesson: intermediate signals (curves, tensors) carry far more information than a final number | Use the paper's figures (learning curves) and intermediate metrics as extra claims. |
+| 4.5 Noise tolerances | **Bouthillier et al.** (MLSys 2021): data-sampling, initialisation and hyperparameter variance all matter, and counting them gives fairer comparisons | Our noise varies only the seed, so it should also vary the data split where the protocol allows. |
+| 4.8 Measuring | CORE-Bench, PaperBench, LMR-Bench, REPRO-Bench | Pools of real papers whose code runs. |
+
+### 7.3 The plan (each item names its class or source)
+
+1. **Plumbing** (allowed): a lock on the spend ledger, and provenance from the code that ran.
+2. **Paper reading** (classes: an unread appendix, GraphMAE, with SA-Bench as the published cause; ledger
+   names vs code names, FastGCN and GAT):
+   - extract section by section, appendix included;
+   - give the assumption step the spec's knob names.
+3. **A measurement benchmark on real repos** (allowed, infrastructure): take repos that already run, plant
+   one setting or one code change with a known answer, and score GapFinder on it. This gives a rate on real
+   code without waiting for rare documented reproduction gaps.
+4. **An automatic harness builder** (Repo2Run-style; published capability).
+5. **Differential testing against a reference implementation** (TTrace and delta debugging; published).
+6. After each of 2-5: freeze, and run a fresh batch. Compare the rate.
+
+## 8. Where things are
 
 | What | Where |
 |---|---|
