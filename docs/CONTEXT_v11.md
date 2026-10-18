@@ -378,7 +378,39 @@ Done, each with tests (full suite 279 passed):
   - the answer goes to `eval/planted/sealed/`; the search runs with `--hypotheses repomap`;
   - `score` reports correct, missed and confidently wrong.
   - Measurement only: no change is judged on these tasks.
-- **Regression check:** dev suite run 3800 at `7e46e31`, compared with run 3700.
+- **Regression check:** dev suite run 3800 at `7e46e31` against run 3700. Cause runs went 48/69 → 51/69
+  (6 tasks better, 4 worse, sign test p = 0.75: no change), with 0 confidently wrong and 57 correct
+  abstentions in both. No regression; post-hoc data, so not evidence of improvement.
+- **Item 4, environment builder** (`c59a701`, `gapfinder/env_build.py`, `gapfinder env-build`), Repo2Run-style:
+  - the model picks a base image from a fixed list, given the commit date and the build files;
+  - the repo is fetched at the commit inside the VM;
+  - the model gives one shell command at a time until every third-party module the entry scripts import
+    loads; the module list comes from plain code, no model;
+  - a failed command's checkpoint is not built on (a free rollback); the kept commands are the recipe.
+  - `spec-draft` self-checks: a second smoke run with another RUN_TAG (identical metrics get one redraft
+    with seed advice, then a warning), and memory and time against a Sandboxes VM.
+  - Still hand-written: the data step, the run command for one table cell, and the metric parser.
+  - `eval/env_bench.py` measures the builder on the 7 dev-set repos, without their hand-picked pins.
+- **Item 5, differential trace** (`dff0b0e`, `gapfinder/search/difftrace.py`, `gapfinder diff`):
+  - for a user who has the authors' code (or a working earlier version), both programs get one traced dry
+    run, and the values that reached the same library calls are compared;
+  - each single-value difference becomes a hypothesis: the user's knob, or the literal at the call site,
+    set to the reference value;
+  - the reference's measured numbers are the targets, and combine plus bisect shrink the differences to the
+    ones that matter;
+  - multi-valued, missing and structural differences (another optimizer class) are reported, not tested.
+  - This is the "give it my reproduction" input from section 6, for the case where reference code exists.
+
+**First planted-cause results** (frozen at tag `planted-1`; seed 2; Sandboxes; `eval/planted/scores.json`):
+
+| Case | Draws | Tasks kept | Result |
+|---|---|---|---|
+| pygcn | 12 | 3 | **2/3 correct, 0 confidently wrong.** The miss (hidden=8, found lr=0.005) had the planted change among the fits: one claim can't tell the two apart (section 4.4) |
+| VGAE | 9 | 0 | no draw moved the claim past 3 pooled sd: VGAE is insensitive to the 1/4x to 4x changes drawn |
+| GAT | running | | runs take about an hour under load |
+
+All three labels were "Fits but unsupported", as they should be: with no paper, nothing backs a value.
+Too few tasks for a rate yet. The next step is more cases and seeds, not a change to the engine.
 
 ## 8. Where things are
 

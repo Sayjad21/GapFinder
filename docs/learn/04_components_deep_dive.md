@@ -241,4 +241,51 @@ Anything less is reported as "Fits but unsupported", with the reason. This rule 
 
 Label: Paper-artifact inconsistency, with the paper's sentence as evidence.
 
+## Added under the no-patching rule (2026-10-18)
+
+Each of these targets a kind of failure seen on two or more papers, or follows a published method. None was
+tuned to make one paper pass.
+
+### 4.19 Reading the paper in pieces, and names by meaning
+
+- **The appendix gets its own reading.** One long excerpt loses its end (the SA-Bench study found the same).
+  The two readings are merged, and a value the paper states beats "unstated".
+- **Names by meaning.** The paper may write "number of attention heads" where the code has `n_heads`. One
+  cheap AI call matches such names to the code's real settings. It may only answer with a name that exists.
+
+### 4.20 Paper numbers against code constants (`gapfinder/search/matcher.py`)
+
+A plain-code check, with no AI and no runs, for a paper value with no matching setting:
+1. the number must appear in a sentence quoted word for word from the paper;
+2. the matcher looks for a constant in the code whose name has the same core words (`num_epochs` and
+   `epochs`);
+3. if that constant holds a different number, it becomes a patch knob, tried with the paper's number first.
+
+### 4.21 Building the environment (`gapfinder/env_build.py`, `gapfinder env-build`)
+
+The hardest part of a real paper is often making its old code run at all. The builder works the way
+Repo2Run does:
+- pick a base image from the commit date and the build files;
+- download the repository at that commit;
+- ask the AI for **one** install command at a time;
+- keep each command's save point only if it worked.
+
+A failed command costs nothing, because the next one starts from the last good save point. It stops when
+every library the entry scripts import loads. The kept commands are a readable recipe. `spec-draft` now also
+runs the experiment twice, to check the numbers vary between runs (otherwise there is no noise to measure),
+and checks memory and time against a Sandboxes VM.
+
+### 4.22 Your reproduction against the authors' code (`gapfinder/search/difftrace.py`, `gapfinder diff`)
+
+If you have your own reproduction and the authors' code:
+1. both programs run once, with the trace on;
+2. GapFinder lists every value that reached the same place differently, for example "optimizer learning
+   rate: reference 0.01, yours 0.05", or "dropout: reference 0.5, yours 0.2";
+3. each difference becomes a hypothesis: your setting, or your constant, set to the reference's value;
+4. the authors' measured numbers are the target;
+5. the usual search keeps only the differences that close the gap.
+
+This is the setting-level version of TTrace (which compares a training implementation with a reference) and
+of delta debugging (which shrinks a set of differences to the ones that matter).
+
 Next: [Why it's built this way →](05_design_decisions.md)

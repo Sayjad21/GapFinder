@@ -90,10 +90,28 @@ kinds of real-paper test, from weakest to strongest evidence:
 | Kind | What it means | Results so far |
 |---|---|---|
 | **Known answer** (MC Dropout, the development set) | the cause is documented and we know it; useful for building, but every success can be the result of tuning to it | MC Dropout names the documented settings (v1.3); VGAE found end to end; pygcn honestly "Unexplained" |
-| **Frozen batch** | papers with known causes, but the code is frozen first and not changed between them, and the harness writers don't see the causes | first batch running (5 papers, all in Sandboxes) |
+| **Frozen batch** | papers with known causes, but the code is frozen first and not changed between them, and the harness writers don't see the causes | devbatch-1 (5 papers, all in Sandboxes): 1 correct, 0 confidently wrong |
 | **Sealed blind** | another model picks the paper and seals the answer; GapFinder is frozen; the key is opened only after the run is committed | blind-1 FastGCN: missed. blind-2 GraphMAE: confidently wrong |
 
 The sealed blind cases are the only ones that count as proof. Both were on older versions, and both led to
 the rebuild described in [the journey](07_the_journey.md).
+
+## Planted causes in real repositories (`eval/planted/plant.py`)
+
+Documented reproduction gaps are rare, so the measuring itself is slow. A planted-cause task skips the wait:
+1. take a real repository that already runs in Sandboxes;
+2. a random generator with a fixed seed hides **one** change: a setting given another value, or a constant
+   in the code changed in memory;
+3. the change runs a few times, and the average becomes the "paper" number;
+4. the change is kept only if it moves the number by more than 3 times the noise;
+5. the answer is sealed, and GapFinder searches without seeing it.
+
+The answers are read only by the scoring step, and no change to GapFinder is ever judged on these tasks.
+They measure; they don't train. Scoring splits each miss into two kinds: "the planted change was among the
+configurations that fit" means the claims can't tell the options apart; "not found" means the search missed
+it.
+
+First result (pygcn, 3 tasks): 2 correct, 0 confidently wrong. The miss was a case where two different
+changes give the same single number.
 
 Next: [The journey →](07_the_journey.md)
