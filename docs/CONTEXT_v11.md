@@ -105,19 +105,148 @@ The changes since v1.4 neither helped nor hurt here: the practice tasks don't ex
 
 ---
 
-## 4. Why real papers fail (the patterns, not the cases)
+## 4. What keeps it from generalising
 
-1. **Reading the paper.** The ledger misses or misreads values: appendix tables (GraphMAE), its own names
-   for settings (FastGCN, GAT), a stated value taken from code. Every downstream step depends on it.
-2. **Causes in code structure.** A normalisation, a split procedure, model selection on the test set, an
-   evaluation detail. GapFinder can point to these, never test them. This is by design: rewriting code until
-   the number fits would explain nothing.
-3. **Identifiability.** With one or two numbers, several settings fit equally well (GraphMAE's `mask_rate`
-   against `alpha_l`, VGAE's bigger layers against the edge split). Only more numbers, relations or paper
-   evidence break the tie.
-4. **The harness.** Hand-written per paper. Its choices change results: which run is "naive", which rows are
-   held out, which were tuned separately, whether it is scaled down.
-5. **Compute.** CPU-only Sandboxes; budgets collapse when several searches share them.
+Some blockers stop it from *running* on a new paper at all (4.1, 4.6, 4.7). Others make it run but miss
+(4.2-4.5), or make the results hard to trust (4.8, 4.9). In order of impact:
+
+### 4.1 The harness (the biggest blocker to "any paper")
+
+**What it is.** Before GapFinder can search, someone must tell it how to run this paper's experiment. Today
+that is five hand-written files per paper:
+
+| File | Content | Typical work |
+|---|---|---|
+| `case.json` | Python version, pinned packages, repo commit, dataset download, for the Sandboxes image | trial and error: old TensorFlow/PyTorch pins, missing data files (GAT's PubMed, PatchTST's CSV), broken system libraries (G-Mixup needed headless OpenCV) |
+| `spec.yaml` | the command for one run, every knob with its default, timeout, metrics; the seed taken from the run tag | finding the experiment's entry point and the README's command; deciding which flags define the claim (dataset, model) and which are knobs |
+| `harness/emit.sh` | how to read the metric from the output | each repo prints differently; some pick nothing (G-Mixup logs every epoch, so the harness had to choose "test accuracy at the best validation epoch") |
+| `targets.json` | the paper's target number, held-out numbers, which rows were tuned separately | reading the paper's tables; deciding from the paper's text whether each row shares one setting |
+| `HARNESS.md` | every decision and deviation | writing it honestly |
+
+It takes about 30-90 minutes per paper, for a person or an agent.
+
+**Why it limits generalisation, not just convenience: its choices change the answer.**
+- **Which run is "naive"** (the starting point every candidate is compared against):
+  - VGAE needed the paper's model (`gcn_vae`), not the repo's default (`gcn_ae`);
+  - for GIN, the README's command already contained the main documented fix (`--degree_as_tag`), so little
+    gap was left to explain.
+
+  The same paper can look "solved", "reproduced" or "unexplained" depending on this choice.
+- **Which numbers are held out, and which are tuned separately.** blind-1 failed because one learning rate
+  was shared across rows the paper had tuned separately. Getting this right needs a careful reading of the
+  paper.
+- **Scope and scale.** Cutting datasets, folds, seeds or epochs to fit Sandboxes changes noise and sometimes
+  the cause. G-Mixup's label depended on one seed against two per run. PROTEINS was cut from GraphMAE, and
+  REDDIT-B and NCI1 everywhere.
+- **Which knobs exist.** "Every flag" is mechanical for argparse. For module constants (GAT) or config files
+  (GraphMAE's `configs.yml`, which overrides its flags) the harness writer has to invent a way to set them,
+  and that is a judgment call.
+- **Bias risk.** A writer who knows the answer can shape any of the above toward it, which is why devbatch-1
+  hid the causes from its harness agents.
+
+**What automating it needs** (the devbatch-1 agents showed it's feasible):
+1. build the image by iterating on install errors;
+2. find the experiment's command from the README and scripts;
+3. write and test the metric parser;
+4. check itself:
+   - the metrics parse;
+   - two seeds give different numbers (noise exists);
+   - it fits in 3.9 GB and an hour;
+   - every flag is a knob;
+   - the naive run matches the README's command for the table's row;
+5. write HARNESS.md.
+
+The two judgment calls (the naive run, and tuned-separately) should be stated, with the paper's sentence,
+for a person to confirm.
+
+### 4.2 Reading the paper (the ledger)
+
+Everything downstream depends on what Nemotron extracts, and it is the least reliable step.
+- **Missed content:** GraphMAE's per-dataset values lived in appendix Table 8, after the prompt's cut-off.
+  Tables are now appended, but figures, footnotes and "following [X]" references still aren't read.
+- **Its own names for settings:** FastGCN's `num_epochs` for `epochs`; GAT's `num_attention_heads`,
+  `l2_reg_lambda` and `early_stopping_patience` for `n_heads`, `l2_coef` and `patience`. When names don't
+  map, the paper's stated values never become evidence for the right knob. Twice now, so it is a recurring
+  class. The structural fix is to give the ledger the code's knob names.
+- **Values taken from code, reported as the paper's:** GraphMAE's `alpha_l` "2.0". Now caught when the
+  number isn't in the quote.
+- **Variance:** the same paper gave 28 assumptions one day and 9 the next (FastGCN), with different names.
+  Results depend on which reading came out.
+
+### 4.3 Causes in code structure
+
+A different normalisation (pygcn), a split procedure (pygcn), model selection on the test set (GIN's
+protocol, Errica et al.), `drop_last=True` in an evaluation loader (PatchTST), per-split re-tuning (MC
+Dropout).
+- **What GapFinder can do:**
+  - change settings, numeric literals and function defaults in memory;
+  - *point to* structural differences, through static checks and the paper-to-trace contrast.
+- **What it can't do:** test structural differences. That is deliberate: rewriting code until the number
+  fits would explain nothing. So these papers end as "Unexplained" or "out of space" with leads, at best.
+- True/false literals (`drop_last = True`) aren't leads or patch values yet. Seen once.
+
+### 4.4 Identifiability (too few numbers)
+
+A paper often gives one or two numbers per experiment, and several different changes can hit them equally
+well:
+- GraphMAE: `mask_rate=0.5` fit as well as the true `alpha_l=1`;
+- VGAE: bigger hidden layers partly made up for the changed edge split;
+- GAT: `lr=0.05` against the documented lr + L2 + heads combination.
+
+The confidence rules make this a cautious "Fits but unsupported" instead of a wrong "Explained", but they
+can't turn it into the right answer. Only more numbers, the paper's stated relations, or the paper's own
+values as evidence break the tie, and many papers simply don't provide enough.
+
+### 4.5 History matching tolerances
+
+How far a configuration may sit from the paper and still "fit" decides whether a case is "reproduced", "in
+space" or "out of space".
+- **The discrepancy allowance:** 5% hid every real gap below about 15% until it became 1%. 1% is still a
+  judgment call. pygcn's 2.5% gap was called "within noise".
+- **The paper's own uncertainty:** each paper number is treated as one noisy run, even when the paper
+  averaged 10 or 100 runs, which overstates the paper's uncertainty.
+- Both shift the diagnosis on small gaps, which are common in real papers.
+
+### 4.6 Compute: Sandboxes limits
+
+- **CPU only.** Most current ML papers need a GPU, so they are out of scope as they are. Others must be
+  scaled down, which can hide or change the cause.
+- **3.9 GB RAM, no swap:** GraphMAE's COLLAB couldn't even load.
+- **At most 3600 s per run.** Informer and GAT runs took 15-50 minutes, so a search affords only a few dozen
+  runs.
+- **Shared capacity:** with five searches at once each VM delivered about one CPU, runs took 3-4× longer,
+  and budgets collapsed (Informer got 28 runs). A batch should run two or three papers at a time.
+
+### 4.7 Environment and data
+
+- Old code needs old stacks: TF 1.15 on Python 3.7, dgl < 1.0, torch 1.x. Pins conflict, wheels disappear,
+  base images lack system libraries.
+- Datasets are often not in the repo (Google Drive bundles, PyG downloads, other repos' files), and must be
+  fetched at build time.
+- Some repos don't contain the paper's model at all: G-Mixup's has no GCN, so the case had to switch rows.
+
+Each of these is solvable per paper, but each needs a person or an agent.
+
+### 4.8 Measuring it at all
+
+- **Sample size:** 2 blind real papers and a 5-paper batch. A rate on 5 papers is noisy (1/5 could be 0/5 or
+  2/5 next time).
+- **Answer keys:** documented causes are themselves sometimes partial (FastGCN's owner gave lr *and* maybe
+  epochs; GraphMAE's fix commit also changed pooling), so scoring needs judgment.
+- **Leakage:** dev-set papers have known answers. Anyone who has read them (including the builder) can bias
+  harnesses or fixes, so only fresh, sealed papers give clean numbers.
+- **The synthetic suite doesn't reflect real-paper problems:** it stayed flat (99-102/138) through every
+  real-paper improvement, so it guards against regressions but can't show progress.
+
+### 4.9 Infrastructure that broke under real use
+
+- **Parallel processes tore a line in the shared spend ledger,** and every search crashed until it was
+  repaired. It needs a file lock.
+- **"Frozen" code wasn't frozen at first:** `python -m` imported the main checkout. A frozen worktree needs
+  `python -P` and its own `.env`.
+- **Provenance records the current folder's commit,** not the code that ran.
+- **Agent sessions hit the account's usage limit and stopped mid-run.** Long searches must run as
+  independent processes that survive the agent.
 
 ---
 
