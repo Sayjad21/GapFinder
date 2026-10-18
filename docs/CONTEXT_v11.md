@@ -391,6 +391,20 @@ Done, each with tests (full suite 279 passed):
     with seed advice, then a warning), and memory and time against a Sandboxes VM.
   - Still hand-written: the data step, the run command for one table cell, and the metric parser.
   - `eval/env_bench.py` measures the builder on the 7 dev-set repos, without their hand-picked pins.
+  - **First env bench: 1 of 7 runnable from the repo alone** (`eval/results/env_bench_1.json`, $0.02 of
+    model calls):
+
+    | Repo | Result |
+    |---|---|
+    | pygcn | built (Python 3.6, torch 0.4.1) and ran |
+    | PatchTST | built, but the hand-written smoke command needs `free`, a system tool the import check doesn't cover |
+    | VGAE, GAT | the image picked first (3.8 or 3.9) had no TensorFlow 1 wheels, and the loop could only give up |
+    | GIN, Informer, G-Mixup | Sandboxes network errors (DNS, connect timeout) |
+
+    - The two image failures share one design gap: the model can now switch images, at most twice (`64c4aef`).
+    - Sandboxes calls are now retried.
+    - Not re-judged on these repos: the builder's next number must come from repos it hasn't seen.
+    - Known gap (seen once, not fixed): system tools that the commands use are not checked.
 - **Item 5, differential trace** (`dff0b0e`, `gapfinder/search/difftrace.py`, `gapfinder diff`):
   - for a user who has the authors' code (or a working earlier version), both programs get one traced dry
     run, and the values that reached the same library calls are compared;
@@ -403,14 +417,29 @@ Done, each with tests (full suite 279 passed):
 
 **First planted-cause results** (frozen at tag `planted-1`; seed 2; Sandboxes; `eval/planted/scores.json`):
 
-| Case | Draws | Tasks kept | Result |
+| Case | Seeds | Tasks kept | Result |
 |---|---|---|---|
-| pygcn | 12 | 3 | **2/3 correct, 0 confidently wrong.** The miss (hidden=8, found lr=0.005) had the planted change among the fits: one claim can't tell the two apart (section 4.4) |
-| VGAE | 9 | 0 | no draw moved the claim past 3 pooled sd: VGAE is insensitive to the 1/4x to 4x changes drawn |
-| GAT | running | | runs take about an hour under load |
+| pygcn | 2-5 | 11 (of 39 draws) | **3/11 correct, 0 confidently wrong** |
+| VGAE | 2 | 0 (of 9) | no draw moved the claim past 3 pooled sd: VGAE is insensitive to the 1/4x to 4x changes drawn |
+| GAT | 2 | running | runs take 20-60 min under load |
 
-All three labels were "Fits but unsupported", as they should be: with no paper, nothing backs a value.
-Too few tasks for a rate yet. The next step is more cases and seeds, not a change to the engine.
+**What the 8 pygcn misses are** (measurement only; no change is judged on these):
+- **4 not identifiable.** The planted change was measured and fits, but other single changes fit the one claim
+  (Cora accuracy) equally well. With one number, any knob that lowers accuracy "explains" it (section 4.4).
+- **3 never measured.** The planted value lies between ladder points (epochs=50 between 40 and 100;
+  weight_decay=0.002; lr=0.0025). The secant step that fills such gaps runs only when nothing fits every
+  claim, and with one claim something always fits. This is the same identifiability limit.
+- **1 noise depends on the configuration.** The planted runs spread widely (hidden=4: 56 to 76), while the
+  noise band comes from the naive runs (tight). The planted configuration then looks like it doesn't fit.
+  This is a known general class (per-configuration variance, as in Bayesian history matching): recorded,
+  not fixed.
+
+All 11 labels were "Fits but unsupported", which is right: with no paper, nothing backs a value, so a
+confident label would be unearned.
+- What this measures: the safety property holds on real code (0 confidently wrong).
+- On a one-claim repo, the correct rate is bounded by identifiability, not by the search.
+- Planted tasks are informative only on repos with several claims that the causes move differently. VGAE
+  has 8 claims but barely responds to the drawn changes, so a more sensitive multi-claim repo is needed.
 
 ## 8. Where things are
 
