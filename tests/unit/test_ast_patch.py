@@ -61,3 +61,27 @@ def test_an_entry_script_run_after_cd_is_found_relative_to_the_repo():
     assert direct_entry(c, "pygcn/train.py") and not direct_entry(c, "train.py") and direct_entry(c, "bench.py")
     assert "python -m gf_patch_run train.py --no-cuda" in wrap_command(c, {"pygcn/train.py"})
     assert "gf_patch_run bench.py" not in wrap_command(c, {"pygcn/train.py"})
+
+
+def test_the_hooks_run_the_environments_own_sitecustomize_too(tmp_path):
+    """devbatch-2 (Anomaly Transformer): a CPU shim in the environment's sitecustomize was shadowed by
+    GapFinder's hook on PYTHONPATH. Both hooks now chain to the next sitecustomize on sys.path."""
+    import os
+    import subprocess
+    import sys
+
+    from gapfinder.sandbox import ast_patch, trace_hook
+
+    env_dir = tmp_path / "env"
+    env_dir.mkdir()
+    (env_dir / "sitecustomize.py").write_text("import os\nos.environ['GF_ENV_SHIM'] = 'ran'\n", encoding="utf-8")
+    for name, src in (("patch", ast_patch.HOOK_SOURCE), ("trace", trace_hook.HOOK_SOURCE)):
+        hook = tmp_path / name
+        hook.mkdir()
+        (hook / "sitecustomize.py").write_text(src, encoding="utf-8")
+        out = subprocess.run([sys.executable, "-c", "import os, sitecustomize; print(os.environ.get('GF_ENV_SHIM'), "
+                              "os.path.basename(os.path.dirname(sitecustomize.__file__)))"],
+                             env={**os.environ, "PYTHONPATH": os.pathsep.join([str(hook), str(env_dir)]),
+                                  "GF_TRACE_DIR": str(tmp_path / "tr")},
+                             capture_output=True, text=True, timeout=60)
+        assert out.stdout.split() == ["ran", name], (name, out.stdout, out.stderr)

@@ -23,6 +23,8 @@ ast.Num/Str (3.6-3.7) and ast.Constant (3.8+).
 
 from __future__ import annotations
 
+from gapfinder.sandbox.hook_chain import CHAIN_SOURCE
+
 import ast
 import re
 from pathlib import Path
@@ -139,6 +141,7 @@ _E = _entries()
 if _E:
     sys.meta_path.insert(0, _Finder(_E))
 '''
+HOOK_SOURCE += CHAIN_SOURCE  # run the environment's own sitecustomize too (gapfinder/sandbox/hook_chain.py)
 
 
 RUNNER_SOURCE = r'''

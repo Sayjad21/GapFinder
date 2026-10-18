@@ -94,3 +94,16 @@ async def test_a_goal_command_that_fails_keeps_the_loop_going_until_it_passes(tm
     assert res.ok, res.reason
     assert "goal command failed" in prompts[0] and "apt-get" in prompts[0]
     assert len(res.recipe) == 1
+
+
+def test_the_readme_command_becomes_a_short_run_goal(tmp_path):
+    from gapfinder.env_build import readme_command, short_run_goal
+
+    (tmp_path / "README.md").write_text("## Install\n```\npython setup.py install\n```\n## Run\n```\n$ python -u main.py "
+                                        "--data ETTh1\n```\n", encoding="utf-8")
+    assert readme_command(tmp_path) == "python -u main.py --data ETTh1"  # setup.py is not the experiment
+    (tmp_path / "README.md").write_text("Run `bash ./scripts/SMD.sh` to train.\n\n    bash ./scripts/SMD.sh\n",
+                                        encoding="utf-8")
+    assert readme_command(tmp_path) == "bash ./scripts/SMD.sh"
+    goal = short_run_goal("python a.py --name 'x y'", seconds=60)
+    assert goal.startswith("cd /work && timeout 60 bash -c ") and "[ $rc -eq 124 ]" in goal

@@ -147,8 +147,10 @@ def _file_leads(path: Path, rel: str, flags: set[str], root: Path) -> list[Lead]
         if isinstance(n, ast.If) and isinstance(n.test, ast.Compare) and any(
                 isinstance(o, (ast.Gt, ast.Lt, ast.GtE, ast.LtE)) for o in n.test.ops):
             names = {x.id for x in ast.walk(n.test) if isinstance(x, ast.Name)}
-            kept = [t.id for s in n.body if isinstance(s, ast.Assign) for t in s.targets
-                    if isinstance(t, ast.Name) and t.id.startswith("best")]
+            # `best_x = ...` or `best_hr, best_ndcg, best_iter = ...` (a tuple target names several at once)
+            kept = [x.id for s in n.body if isinstance(s, ast.Assign) for t in s.targets
+                    for x in (t.elts if isinstance(t, (ast.Tuple, ast.List)) else [t])
+                    if isinstance(x, ast.Name) and x.id.startswith("best")]
             if any(x.startswith("best") for x in names) and len(kept) >= 2:
                 loops, p = [], parents.get(n)
                 while p is not None:

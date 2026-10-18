@@ -45,6 +45,7 @@ class GapReport:
     effects: dict[str, dict] = field(default_factory=dict)  # candidate minus naive, its interval, run counts
     effect_threshold: float = 1.0  # noise units a screened hypothesis needed to count as a lead
     provenance: dict | None = None  # code commit, models, prompt and spec hashes, cost; None if not recorded
+    audit: dict | None = None  # what a matching number doesn't show (gapfinder/search/audit.py)
     generated: str = field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M"))
 
     @classmethod
@@ -63,7 +64,8 @@ class GapReport:
                    measured={r.target.claim_id: _measured(search, r.target) for r in results},
                    experiments={r.target.claim_id: e for r in results if (e := _experiment(search, r))},
                    effects={r.target.claim_id: e for r in results if (e := _effect(search, r))},
-                   effect_threshold=search.cfg.effect_threshold, provenance=collect_provenance(search))
+                   effect_threshold=search.cfg.effect_threshold, provenance=collect_provenance(search),
+                   audit=getattr(search, "audit_report", None))
 
     @classmethod
     def from_dict(cls, d: dict) -> "GapReport":
@@ -101,7 +103,7 @@ class GapReport:
                    experiments={c["target"]["claim_id"]: c["experiment"] for c in claims if c.get("experiment")},
                    effects={c["target"]["claim_id"]: c["effect"] for c in claims if c.get("effect")},
                    effect_threshold=d.get("effect_threshold", 1.0), provenance=d.get("provenance"),
-                   generated=d.get("generated", "not recorded"))
+                   audit=d.get("audit"), generated=d.get("generated", "not recorded"))
 
     @property
     def partial(self) -> bool:
@@ -122,7 +124,7 @@ class GapReport:
                 "corrected_defaults": self.corrected_defaults, "unverified_defaults": self.unverified_defaults,
                 "trace": self.trace,
                 "untestable": [{"knob": k, "value": v} for k, v in self.untestable],
-                "closest_overall": self.closest,
+                "closest_overall": self.closest, "audit": self.audit,
                 "triaged_failures": self.triaged,
                 "setup_check": self.setup_check, "effect_threshold": self.effect_threshold,
                 "provenance": self.provenance,
@@ -278,6 +280,9 @@ class GapReport:
             by = ", ".join(f"`{k}={v}`" for k, v in r.changes.items()) or "—"
             out.append(f"| {r.target.claim_id} ({r.target.metric}) | {label} | {_pct(r.gap_before)} | "
                        f"{_pct(r.gap_after)} | ±{r.band * 100:.1f}% | {by} |")
+        from gapfinder.search.audit import audit_markdown
+
+        out += audit_markdown(self.audit)
         for r in self.results:
             out += self._card_markdown(r)
         if self.closest:

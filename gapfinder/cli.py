@@ -346,12 +346,17 @@ async def cmd_diff(args) -> int:
 
 
 async def cmd_env_build(args) -> int:
-    from gapfinder.env_build import build_env, fetch, write_result
+    from gapfinder.env_build import build_env, fetch, readme_command, short_run_goal, write_result
     from gapfinder.models.router import Router
     from gapfinder.sandbox.backend import ContreeBackend
 
+    goal = args.goal
+    if goal is None and not args.imports_only:  # default: the README's own command must start running
+        cmd = readme_command(Path(args.local))
+        goal = short_run_goal(cmd) if cmd else None
+        print(f"goal: {'the README command `' + cmd + '` runs for 5 minutes' if cmd else 'imports only (no README command)'}")
     res = await build_env(Router(), ContreeBackend(), args.local, fetch=fetch(args.repo, args.commit), image=args.image,
-                          date=args.date, max_steps=args.max_steps, goal=args.goal)
+                          date=args.date, max_steps=args.max_steps, goal=goal)
     out = write_result(res, args.out)
     print(f"{'ok' if res.ok else 'FAILED'}: image {res.image}, checkpoint {res.checkpoint}, {len(res.recipe)} of "
           f"{len(res.steps)} commands kept, ${res.cost_usd:.4f}" + (f"; {res.reason}" if res.reason else ""))
@@ -457,8 +462,10 @@ def main(argv: list[str] | None = None) -> int:
     pe.add_argument("--image", help="base image (default: the model picks from a fixed list)")
     pe.add_argument("--date", help="the commit date, when --local is not a git clone")
     pe.add_argument("--max-steps", type=int, default=12)
-    pe.add_argument("--goal", help="a shell command that must also exit 0 (e.g. a short run), so system tools it "
-                                   "needs get installed in the same loop")
+    pe.add_argument("--goal", help="a shell command that must also exit 0, so system tools and data it needs get "
+                                   "installed in the same loop (default: the README's first python command runs "
+                                   "for 5 minutes without failing)")
+    pe.add_argument("--imports-only", action="store_true", help="no goal: stop when the imports load")
     pe.add_argument("--out", required=True, help="where to write the result JSON (checkpoint, recipe, steps)")
 
     pq = sub.add_parser("diff", help="your reproduction vs a reference implementation: trace both runs, test where "

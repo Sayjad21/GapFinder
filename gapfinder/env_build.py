@@ -205,6 +205,34 @@ def readme_install(root: Path, limit: int = 2500) -> str:
     return ""
 
 
+_README_CMD = re.compile(
+    r"(?m)^[ \t>$]*((?:cd [\w./-]+ *(?:&&|;) *)?"
+    r"(?:python[23]?(?:\.\d+)?(?: +-[A-Za-z]+)* +(?!setup\.py\b)[\w./-]+\.py\b|(?:bash|sh) +[\w./-]+\.sh\b)[^\n`]*)")
+
+
+def readme_command(root: Path) -> str | None:
+    """The first experiment command in the README: `python [-u] <script>.py ...` (not setup.py) or
+    `bash <script>.sh ...`, an optional `cd dir &&` kept; None when there is none."""
+    for name in ("README.md", "README.rst", "README.txt", "README"):
+        p = Path(root) / name
+        if p.is_file():
+            m = _README_CMD.search(p.read_text(encoding="utf-8", errors="replace"))
+            if m:
+                return m.group(1).strip()
+    return None
+
+
+def short_run_goal(command: str, seconds: int = 300) -> str:
+    """Run `command` for up to `seconds`: it passes if it exits 0 or is still running at the deadline (an import
+    can succeed and the code still fail at its first step: devbatch-2's NCF was Python 2 code on Python 3.7,
+    and Anomaly Transformer called `.cuda()` with no GPU; both images "loaded every import")."""
+    return f"cd /work && timeout {seconds} bash -c {_shq(command)}; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 124 ]"
+
+
+def _shq(s: str) -> str:
+    return "'" + s.replace("'", "'\"'\"'") + "'"
+
+
 def build_text(root: Path, limit: int = 2500) -> str:
     out = []
     for pat in ("requirements*.txt", "setup.py", "pyproject.toml", "environment*.yml", "setup.cfg", "Pipfile"):

@@ -404,6 +404,7 @@ class GapSearch:
         self.trace_report = None  # set by _trace() when the dry run recorded anything
         self._stated_skipped: set[str] = set()  # stated and matching the naive run: out of the first pass
         self._include_stated = False  # the fallback round brings them back
+        self.audit_report: dict | None = None  # gapfinder/search/audit.py, after the claims
         self.trace_records: list[dict] = []  # the raw dry-run records (for the paper-to-trace contrast)
         self.paper_text = paper_text
         if self.cfg.coverage and self.spec.code_root() is not None:  # a local base, or the spec's `source`
@@ -611,6 +612,13 @@ class GapSearch:
         for t in self.targets:
             if not t.held_out:
                 results.append(await self.explain(t))
+        # what a matching number doesn't show (devbatch-2: three reproduced targets, three silent reports)
+        from gapfinder.search.audit import audit
+        try:
+            self.audit_report = audit(self, results)
+        except Exception as exc:  # an aid: a failure leaves the report as it was
+            self.audit_report = None
+            self.orch.events.emit("note", msg=f"audit: skipped ({type(exc).__name__}: {str(exc)[:160]})")
         return results
 
     async def _map_names(self) -> None:

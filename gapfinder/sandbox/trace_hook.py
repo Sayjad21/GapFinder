@@ -20,6 +20,8 @@ hook body is wrapped, and a failure inside it only loses that record.
 
 from __future__ import annotations
 
+from gapfinder.sandbox.hook_chain import CHAIN_SOURCE
+
 HOOK_DIR = ".gf_trace"
 OUT_DIR = ".gf_trace_out"
 MARKER = "GF_TRACE_JSON:"
@@ -384,6 +386,7 @@ if _yaml is not None:
     except Exception:
         pass
 '''
+HOOK_SOURCE += CHAIN_SOURCE  # run the environment's own sitecustomize too (gapfinder/sandbox/hook_chain.py)
 
 
 def run_parts(steps: int = 30, seconds: float = 900) -> tuple[dict[str, str], dict[str, bytes], str, str]:
