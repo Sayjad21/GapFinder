@@ -1,0 +1,16 @@
+{
+ "name": "patchtst",
+ "repo": "https://github.com/yuqinie98/PatchTST",
+ "commit": "204c21efe0b39603ad6e2ca640ef5896646ab1a9",
+ "image": "python:3.10-slim",
+ "pip": [
+  "torch==2.1.2+cpu",
+  "numpy==1.23.5",
+  "pandas==1.5.3",
+  "scikit-learn==1.2.2",
+  "matplotlib==3.7.1"
+ ],
+ "pip_args": "--extra-index-url https://download.pytorch.org/whl/cpu",
+ "setup": "mkdir -p PatchTST_supervised/dataset && python -c \"import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/ETTh1.csv', 'PatchTST_supervised/dataset/ETTh1.csv')\" && wc -l PatchTST_supervised/dataset/ETTh1.csv && head -2 PatchTST_supervised/dataset/ETTh1.csv && nproc && free -m",
+ "smoke": "mkdir -p out; S=$(( $(printf %s \"$RUN_TAG\" | cksum | cut -d\" \" -f1) % 100000 )); export OMP_NUM_THREADS=2; cd PatchTST_supervised && PYTHONPATH=\"/work${PYTHONPATH:+:$PYTHONPATH}\" python -u run_longExp.py --random_seed $S --is_training 1 --root_path ./dataset/ --data_path ETTh1.csv --model_id ETTh1_96 --model PatchTST --data ETTh1 --features M --pred_len 96 --enc_in 7 --des Exp --itr 1 --seq_len 336 --e_layers 3 --n_heads 4 --d_model 16 --d_ff 128 --dropout 0.3 --fc_dropout 0.3 --head_dropout 0 --patch_len 16 --stride 8 --padding_patch end --revin 1 --affine 0 --subtract_last 0 --decomposition 0 --kernel_size 25 --individual 0 --train_epochs 50 --patience 100 --batch_size 128 --learning_rate 0.0001 --lradj type3 --pct_start 0.3 > ../out/h96.log 2>&1; cd ..; bash gf_harness/emit.sh"
+}

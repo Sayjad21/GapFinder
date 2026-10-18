@@ -1,0 +1,475 @@
+{
+  "root": "C:\\Users\\Legion\\AppData\\Local\\Temp\\claude\\c--Users-Legion-Downloads-nvidia-hackathon\\e8c91548-6b05-48d1-bf91-8a391c52c901\\scratchpad\\devbatch\\informer\\Informer2020",
+  "files": [
+    "Dockerfile",
+    "LICENSE",
+    "Makefile",
+    "README.md",
+    "environment.yml",
+    "main_informer.py",
+    "requirements.txt",
+    "data/__init__.py",
+    "data/data_loader.py",
+    "exp/__init__.py",
+    "exp/exp_basic.py",
+    "exp/exp_informer.py",
+    "img/data.png",
+    "img/informer.png",
+    "img/probsparse_intro.png",
+    "img/result_multivariate.png",
+    "img/result_univariate.png",
+    "models/__init__.py",
+    "models/attn.py",
+    "models/decoder.py",
+    "models/embed.py",
+    "models/encoder.py",
+    "models/model.py",
+    "scripts/ETTh1.sh",
+    "scripts/ETTh2.sh",
+    "scripts/ETTm1.sh",
+    "scripts/WTH.sh",
+    "utils/__init__.py",
+    "utils/masking.py",
+    "utils/metrics.py",
+    "utils/timefeatures.py",
+    "utils/tools.py"
+  ],
+  "build_files": [
+    "Makefile"
+  ],
+  "config_files": [
+    "environment.yml"
+  ],
+  "scripts": [
+    "scripts/ETTh1.sh",
+    "scripts/ETTh2.sh",
+    "scripts/ETTm1.sh",
+    "scripts/WTH.sh"
+  ],
+  "flags": [
+    {
+      "name": "--model",
+      "default": "'informer'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 9,
+      "text": "parser.add_argument('--model', type=str, required=True, default='informer',help='model of experiment, options: [informer, informerstack, informerlight(TBD)]')",
+      "choices": null
+    },
+    {
+      "name": "--data",
+      "default": "'ETTh1'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 11,
+      "text": "parser.add_argument('--data', type=str, required=True, default='ETTh1', help='data')",
+      "choices": null
+    },
+    {
+      "name": "--root_path",
+      "default": "'./data/ETT/'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 12,
+      "text": "parser.add_argument('--root_path', type=str, default='./data/ETT/', help='root path of the data file')",
+      "choices": null
+    },
+    {
+      "name": "--data_path",
+      "default": "'ETTh1.csv'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 13,
+      "text": "parser.add_argument('--data_path', type=str, default='ETTh1.csv', help='data file')",
+      "choices": null
+    },
+    {
+      "name": "--features",
+      "default": "'M'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 14,
+      "text": "parser.add_argument('--features', type=str, default='M', help='forecasting task, options:[M, S, MS]; M:multivariate predict multivariate, S:univariate predict univariate, MS:multivariate predict univariate')",
+      "choices": null
+    },
+    {
+      "name": "--target",
+      "default": "'OT'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 15,
+      "text": "parser.add_argument('--target', type=str, default='OT', help='target feature in S or MS task')",
+      "choices": null
+    },
+    {
+      "name": "--freq",
+      "default": "'h'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 16,
+      "text": "parser.add_argument('--freq', type=str, default='h', help='freq for time features encoding, options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], you can also use more detailed freq like 15min or 3h')",
+      "choices": null
+    },
+    {
+      "name": "--checkpoints",
+      "default": "'./checkpoints/'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 17,
+      "text": "parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')",
+      "choices": null
+    },
+    {
+      "name": "--seq_len",
+      "default": "96",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 19,
+      "text": "parser.add_argument('--seq_len', type=int, default=96, help='input sequence length of Informer encoder')",
+      "choices": null
+    },
+    {
+      "name": "--label_len",
+      "default": "48",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 20,
+      "text": "parser.add_argument('--label_len', type=int, default=48, help='start token length of Informer decoder')",
+      "choices": null
+    },
+    {
+      "name": "--pred_len",
+      "default": "24",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 21,
+      "text": "parser.add_argument('--pred_len', type=int, default=24, help='prediction sequence length')",
+      "choices": null
+    },
+    {
+      "name": "--enc_in",
+      "default": "7",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 24,
+      "text": "parser.add_argument('--enc_in', type=int, default=7, help='encoder input size')",
+      "choices": null
+    },
+    {
+      "name": "--dec_in",
+      "default": "7",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 25,
+      "text": "parser.add_argument('--dec_in', type=int, default=7, help='decoder input size')",
+      "choices": null
+    },
+    {
+      "name": "--c_out",
+      "default": "7",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 26,
+      "text": "parser.add_argument('--c_out', type=int, default=7, help='output size')",
+      "choices": null
+    },
+    {
+      "name": "--d_model",
+      "default": "512",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 27,
+      "text": "parser.add_argument('--d_model', type=int, default=512, help='dimension of model')",
+      "choices": null
+    },
+    {
+      "name": "--n_heads",
+      "default": "8",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 28,
+      "text": "parser.add_argument('--n_heads', type=int, default=8, help='num of heads')",
+      "choices": null
+    },
+    {
+      "name": "--e_layers",
+      "default": "2",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 29,
+      "text": "parser.add_argument('--e_layers', type=int, default=2, help='num of encoder layers')",
+      "choices": null
+    },
+    {
+      "name": "--d_layers",
+      "default": "1",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 30,
+      "text": "parser.add_argument('--d_layers', type=int, default=1, help='num of decoder layers')",
+      "choices": null
+    },
+    {
+      "name": "--s_layers",
+      "default": "'3",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 31,
+      "text": "parser.add_argument('--s_layers', type=str, default='3,2,1', help='num of stack encoder layers')",
+      "choices": null
+    },
+    {
+      "name": "--d_ff",
+      "default": "2048",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 32,
+      "text": "parser.add_argument('--d_ff', type=int, default=2048, help='dimension of fcn')",
+      "choices": null
+    },
+    {
+      "name": "--factor",
+      "default": "5",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 33,
+      "text": "parser.add_argument('--factor', type=int, default=5, help='probsparse attn factor')",
+      "choices": null
+    },
+    {
+      "name": "--padding",
+      "default": "0",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 34,
+      "text": "parser.add_argument('--padding', type=int, default=0, help='padding type')",
+      "choices": null
+    },
+    {
+      "name": "--distil",
+      "default": "True",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 35,
+      "text": "parser.add_argument('--distil', action='store_false', help='whether to use distilling in encoder, using this argument means not using distilling', default=True)",
+      "choices": null
+    },
+    {
+      "name": "--dropout",
+      "default": "0.05",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 36,
+      "text": "parser.add_argument('--dropout', type=float, default=0.05, help='dropout')",
+      "choices": null
+    },
+    {
+      "name": "--attn",
+      "default": "'prob'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 37,
+      "text": "parser.add_argument('--attn', type=str, default='prob', help='attention used in encoder, options:[prob, full]')",
+      "choices": null
+    },
+    {
+      "name": "--embed",
+      "default": "'timeF'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 38,
+      "text": "parser.add_argument('--embed', type=str, default='timeF', help='time features encoding, options:[timeF, fixed, learned]')",
+      "choices": null
+    },
+    {
+      "name": "--activation",
+      "default": "'gelu'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 39,
+      "text": "parser.add_argument('--activation', type=str, default='gelu',help='activation')",
+      "choices": null
+    },
+    {
+      "name": "--output_attention",
+      "default": null,
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 40,
+      "text": "parser.add_argument('--output_attention', action='store_true', help='whether to output attention in ecoder')",
+      "choices": null
+    },
+    {
+      "name": "--do_predict",
+      "default": null,
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 41,
+      "text": "parser.add_argument('--do_predict', action='store_true', help='whether to predict unseen future data')",
+      "choices": null
+    },
+    {
+      "name": "--mix",
+      "default": "True",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 42,
+      "text": "parser.add_argument('--mix', action='store_false', help='use mix attention in generative decoder', default=True)",
+      "choices": null
+    },
+    {
+      "name": "--cols",
+      "default": null,
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 43,
+      "text": "parser.add_argument('--cols', type=str, nargs='+', help='certain cols from the data files as the input features')",
+      "choices": null
+    },
+    {
+      "name": "--num_workers",
+      "default": "0",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 44,
+      "text": "parser.add_argument('--num_workers', type=int, default=0, help='data loader num workers')",
+      "choices": null
+    },
+    {
+      "name": "--itr",
+      "default": "2",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 45,
+      "text": "parser.add_argument('--itr', type=int, default=2, help='experiments times')",
+      "choices": null
+    },
+    {
+      "name": "--train_epochs",
+      "default": "6",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 46,
+      "text": "parser.add_argument('--train_epochs', type=int, default=6, help='train epochs')",
+      "choices": null
+    },
+    {
+      "name": "--batch_size",
+      "default": "32",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 47,
+      "text": "parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input data')",
+      "choices": null
+    },
+    {
+      "name": "--patience",
+      "default": "3",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 48,
+      "text": "parser.add_argument('--patience', type=int, default=3, help='early stopping patience')",
+      "choices": null
+    },
+    {
+      "name": "--learning_rate",
+      "default": "0.0001",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 49,
+      "text": "parser.add_argument('--learning_rate', type=float, default=0.0001, help='optimizer learning rate')",
+      "choices": null
+    },
+    {
+      "name": "--des",
+      "default": "'test'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 50,
+      "text": "parser.add_argument('--des', type=str, default='test',help='exp description')",
+      "choices": null
+    },
+    {
+      "name": "--loss",
+      "default": "'mse'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 51,
+      "text": "parser.add_argument('--loss', type=str, default='mse',help='loss function')",
+      "choices": null
+    },
+    {
+      "name": "--lradj",
+      "default": "'type1'",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 52,
+      "text": "parser.add_argument('--lradj', type=str, default='type1',help='adjust learning rate')",
+      "choices": null
+    },
+    {
+      "name": "--use_amp",
+      "default": "False",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 53,
+      "text": "parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)",
+      "choices": null
+    },
+    {
+      "name": "--inverse",
+      "default": "False",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 54,
+      "text": "parser.add_argument('--inverse', action='store_true', help='inverse output data', default=False)",
+      "choices": null
+    },
+    {
+      "name": "--use_gpu",
+      "default": "True",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 56,
+      "text": "parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')",
+      "choices": null
+    },
+    {
+      "name": "--gpu",
+      "default": "0",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 57,
+      "text": "parser.add_argument('--gpu', type=int, default=0, help='gpu')",
+      "choices": null
+    },
+    {
+      "name": "--use_multi_gpu",
+      "default": "False",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 58,
+      "text": "parser.add_argument('--use_multi_gpu', action='store_true', help='use multiple gpus', default=False)",
+      "choices": null
+    },
+    {
+      "name": "--devices",
+      "default": "'0",
+      "kind": "argparse",
+      "file": "main_informer.py",
+      "line": 59,
+      "text": "parser.add_argument('--devices', type=str, default='0,1,2,3',help='device ids of multile gpus')",
+      "choices": null
+    },
+    {
+      "name": "CUDA_VISIBLE_DEVICES",
+      "default": null,
+      "kind": "env",
+      "file": "exp/exp_basic.py",
+      "line": 17,
+      "text": "os.environ[\"CUDA_VISIBLE_DEVICES\"] = str(self.args.gpu) if not self.args.use_multi_gpu else self.args.devices",
+      "choices": null
+    }
+  ],
+  "readme": "# Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting (AAAI'21 Best Paper)\n![Python 3.6](https://img.shields.io/badge/python-3.6-green.svg?style=plastic)\n![PyTorch 1.2](https://img.shields.io/badge/PyTorch%20-%23EE4C2C.svg?style=plastic)\n![cuDNN 7.3.1](https://img.shields.io/badge/cudnn-7.3.1-green.svg?style=plastic)\n![License CC BY-NC-SA](https://img.shields.io/badge/license-CC_BY--NC--SA--green.svg?style=plastic)\n\nThis is the origin Pytorch implementation of Informer in the following paper: \n[Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting](https://arxiv.org/abs/2012.07436). Special thanks to `Jieqi Peng`@[cookieminions](https://github.com/cookieminions) for building this repo.\n\n:triangular_flag_on_post:**News**(Mar 27, 2023): We will release Informer V2 soon.\n\n:triangular_flag_on_post:**News**(Feb 28, 2023): The Informer's [extension paper](https://www.sciencedirect.com/science/article/pii/S0004370223000322) is online on AIJ.\n\n:triangular_flag_on_post:**News**(Mar 25, 2021): We update all experiment [results](#resultslink) with hyperparameter settings.\n\n:triangular_flag_on_post:**News**(Feb 22, 2021): We provide [Colab Examples](#colablink) for friendly usage.\n\n:triangular_flag_on_post:**News**(Feb 8, 2021): Our Informer paper has been awarded [AAAI'21 Best Paper \\[Official\\]](https://aaai.org/Conferences/AAAI-21/aaai-outstanding-and-distinguished-papers/)[\\[Beihang\\]](http://scse.buaa.edu.cn/info/1097/7443.htm)[\\[Rutgers\\]](https://www.business.rutgers.edu/news/hui-xiong-and-research-colleagues-receive-aaai-best-paper-award)! We will continue this line of research and update on this repo. Please star this repo and [cite](#citelink) our paper if you find our work is helpful for you.\n\n<p align=\"center\">\n<img src=\".\\img\\informer.png\" height = \"360\" alt=\"\" align=center />\n<br><br>\n<b>Figure 1.</b> The architecture of Informer.\n</p>\n\n## ProbSparse Attention\nThe self-attention scores form a long-tail distribution, where the \"active\" queries lie in the \"head\" scores and \"lazy\" queries lie in the \"tail\" area. We designed the ProbSparse Attention to select the \"active\" queries rather than the \"lazy\" queries. The ProbSparse Attention with Top-u queries forms a sparse Transformer by the probability distribution.\n`Why not use Top-u keys?` The self-attention layer's output is the re-represent of input. It is formulated as a weighted combination of values w.r.t. the score of dot-product pairs. The top queries with full keys encourage a complete re-represent of leading components in the input, and it is equivalent to selecting the \"head\" scores among all the dot-product pairs. If we choose Top-u keys, the full keys just preserve the trivial sum of values within the \"long tail\" scores but wreck the leading components' re-represent.\n<p align=\"center\">\n<img src=\".\\img\\probsparse_intro.png\" height = \"320\" alt=\"\" align=center />\n<br><br>\n<b>Figure 2.</b> The illustration of ProbSparse Attention.\n</p>\n\n## Requirements\n\n- Python 3.6\n- matplotlib == 3.1.1\n- numpy == 1.19.4\n- pandas == 0.25.1\n- scikit_learn == 0.21.3\n- torch == 1.8.0\n\nDependencies can be installed using the following command:\n```bash\npip install -r requirements.txt\n```\n\n## Data\n\nThe ETT dataset used in the paper can be downloaded in the repo [ETDataset](https://github.com/zhouhaoyi/ETDataset).\nThe required data files should be put into `data/ETT/` folder. A demo slice of the ETT data is illustrated in the following figure. Note that the input of each dataset is zero-mean normalized in this implementation.\n\n<p align=\"center\">\n<img src=\"./img/data.png\" height = \"168\" alt=\"\" align=center />\n<br><br>\n<b>Figure 3.</b> An example of the ETT data.\n</p>\n\nThe ECL data and Weather data can be downloaded here.\n- [Google Drive](https://drive.google.com/drive/folders/1ohGYWWohJlOlb2gsGTeEq3Wii2egnEPR?usp=sharing)\n- [BaiduPan](https://pan.baidu.com/s/1wyaGUisUICYHnfkZzWCwyA), password: 6gan \n\n## Reproducibility\n\nTo easily reproduce the results you can follow the next steps:\n1. Initialize the docker image using: `make init`.\n2. Download the datasets using: `make dataset`.\n3. Run each script in `scripts/` using `make run_module module=\"bash ETTh1.sh\"` for each script.\n4. Alternatively, run all the scripts at once:\n```\nfor file in `ls scripts`; do make run_module module=\"bash scripts/$script\"; done\n```\n\n## Usage\n<span id=\"colablink\">Colab Examples:</span> We provide google colabs to help reproduce and customize our repo, which includes `experiments(train and test)`, `prediction`, `visualization` and `custom data`.\n[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1_X7O2BkFLvqyCdZzDZvV2MB0aAvYALLC)\n\nCommands for training and testing the model with *ProbSparse* self-attention on Dataset ETTh1, ETTh2 and ETTm1 respectively:\n\n```bash\n# ETTh1\npython -u main_informer.py --model informer --data ETTh1 --attn prob --freq h\n\n# ETTh2\npython -u main_informer.py --model informer --data ETTh2 --attn prob --freq h\n\n# ETTm1\npython -u main_informer.py --model informer --data ETTm1 --attn prob --freq t\n```\n\nMore parameter information please refer to `main_informer.py`.\n\nWe provide a more detailed and complete command description for training and testing the model:\n\n```python\npython -u main_informer.py --model <model> --data <data>\n--root_path <root_path> --data_path <data_path> --features <features>\n--target <target> --freq <freq> --checkpoints <checkpoints>\n--seq_len <seq_len> --label_len <label_len> --pred_len <pred_len>\n--enc_in <enc_in> --dec_in <dec_in> --c_out <c_out> --d_model <d_model>\n--n_heads <n_heads> --e_layers <e_layers> --d_layers <d_layers>\n--s_layers <s_layers> --d_ff <d_ff> --factor <factor> --padding <padding>\n--distil --dropout <dropout> --attn <attn> --embed <embed> --activation <activation>\n--output_attention --do_predict --mix --cols <cols> --itr <itr>\n--num_workers <num_workers> --train_epochs <train_epochs>\n--batch_size <batch_size> --patience <patience> --des <des>\n--learning_rate <learning_rate> --loss <loss> --lradj <lradj>\n--use_amp --inverse --use_gpu <use_gpu> --gpu <gpu> --use_multi_gpu --devices <devices>\n```\n\nThe detailed descriptions about the arguments are as following:\n\n| Parameter name | Description of parameter |\n| --- | --- |\n| model | The model of experiment. This can be set to `informer`, `informerstack`, `informerlight(TBD)` |\n| data           | The dataset name                                             |\n| root_path      | The root path of the data file (defaults to `./data/ETT/`)    |\n| data_path      | The data file name (defaults to `ETTh1.csv`)                  |\n| features       | The forecasting task (defaults to `M`). This can be set to `M`,`S`,`MS` (M : multivariate predict multivariate, S : univariate predict univariate, MS : multivariate predict univariate) |\n| target         | Target feature in S or MS task (defaults to `OT`)             |\n| freq           | Freq for time features encoding (defaults to `h`). This can be set to `s`,`t`,`h`,`d`,`b`,`w`,`m` (s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly).You can also use more detailed freq like 15min or 3h |\n| checkpoints    | Location of model checkpoints (defaults to `./checkpoints/`)  |\n| seq_len | Input sequence length of Informer encoder (defaults to 96) |\n| label_len | Start token length of Informer decoder (defaults to 48) |\n| pred_len | Prediction sequence length (defaults to 24) |\n| enc_in | Encoder input size (defaults to 7) |\n| dec_in | Decoder input size (defaults to 7) |\n| c_out | Output size (defaults to 7) |\n| d_model | Dimension of model (defaults to 512) |\n| n_heads | Num of heads (defaults to 8) |\n| e_layers | Num of encoder layers (defaults to 2) |\n| d_layers | Num of decoder layers (defaults to 1) |\n| s_layers | Num of stack encoder layers (defaults to `3,2,1`) |\n| d_ff | Dimension of fcn (defaults to 2048) |\n| factor | Probsparse attn factor (defaults to 5) |\n| padding | Padding type(defaults to 0). |\n| distil | Whether to use distilling in encoder, using this argument means not using distilling (defaults to `True`) |\n| dropout | The probability of dropout (defaults to 0.05) |\n| attn | Attention used in encoder (defaults to `prob`). This can be set to `prob` (informer), `full` (transformer) |\n| embed | Time features encoding (defaults to `timeF`). This can be set to `timeF`, `fixed`, `learned` |\n| activation | Activation function (defaults to `gelu`) |\n| output_attention | Whether to output attention in encoder, using this argument means outputing attention (defaults to `False`) |\n| do_predict | Whether to predict unseen future data, using this argument means making predictions (defaults to `False`) |\n| mix | Whether to use mix attention in generative decoder, using this argument means not using mix attention (defaults to `True`) |\n| cols | Certain cols from the data files as the input features |\n| num_workers | The num_works of Data loader (defaults to 0) |\n| itr | Experiments times (defaults to 2) |\n| train_epochs | Train epochs (defaults to 6) |\n| batch_size | The batch size of training input data (defaults to 32) |\n| patience | Early stopping patience (defaults to 3) |\n| learning_rate | Optimizer learning rate (defaults to 0.0001) |\n| des | Experiment description (defaults to `test`) |\n| loss | Loss function (defaults to `mse`) |\n| lradj | Ways to adjust the learning rate (defaults to `type1`) |\n| use_amp | Whether to use automatic mixed precision training, using this argument means using amp (defaults to `False`) |\n| inverse | Whether to inverse output data, using this argument means inversing output data (defaults to `False`) |\n| use_gpu | Whether to use gpu (defaults to `True`) |\n| gpu | The gpu no, used for training and inference (defaults to 0) |\n| use_multi_gpu | Whether to use multiple gpus, using this argument means using mulitple gpus (defaults to `False`) |\n| devices | Device ids of multile gpus (defaults to `0,1,2,3`) |\n\n\n## <span id=\"resultslink\">Results</span>\n\nWe have updated the experiment results of all methods due to the change in data scaling. We are lucky that Informer gets performance improvement. Thank you @lk1983823 for reminding the data scaling in [issue 41](https://github.com/zhouhaoyi/Informer2020/issues/41).\n\nBesides, the experiment parameters of each data set are formated in the `.sh` files in the directory `./scripts/`. You can refer to these parameters for experiments, and you can also adjust the parameters to obtain better mse and mae results or draw better prediction figures.\n\n<p align=\"center\">\n<img src=\"./img/result_univariate.png\" height = \"500\" alt=\"\" align=center />\n<br><br>\n<b>Figure 4.</b> Univariate forecasting results.\n</p>\n\n<p align=\"center\">\n<img src=\"./img/result_multivariate.png\" height = \"500\" alt=\"\" align=center />\n<br><br>\n<b>Figure 5.</b> Multivariate forecasting results.\n</p>\n\n\n## FAQ\nIf you run into a problem like `RuntimeError: The size of tensor a (98) must match the size of tensor b (96) at non-singleton dimension 1`, you can check torch version or modify code about `Conv1d` of `TokenEmbedding` in `models/embed.py` as the way of circular padding mode in Conv1d changed in different torch versions.\n\n\n## <span id=\"citelink\">Citation</span>\nIf you find this repository useful in your research, please consider citing the following papers:\n\n```\n@article{haoyietal-informerEx-2023,\n  author    = {Haoyi Zhou and\n               Jianxin Li and\n               Shanghang Zhang and\n               Shuai Zhang and\n               Mengyi Yan and\n               Hui Xiong},\n  title     = {Expanding the prediction capacity in long sequence time-series forecasting},\n  journal   = {Artificial Intelligence},\n  volume    = {318},\n  pages     = {103886},\n  issn      = {0004-3702},\n  year      = {2023},\n}\n```\n```\n@inproceedings{haoyietal-informer-2021,\n  author    = {Haoyi Zhou and\n               Shanghang Zhang and\n               Jieqi Peng and\n               Shuai Zhang and\n               Jianxin Li and\n               Hui Xiong and\n               Wancai Zhang},\n  title     = {Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting},\n  booktitle = {The Thirty-Fifth {AAAI} Conference on Artificial Intelligence, {AAAI} 2021, Virtual Conference},\n  volume    = {35},\n  number    = {12},\n  pages     = {11106--11115},\n  publisher = {{AAAI} Press},\n  year      = {2021},\n}\n```\n\n## Contact\nIf you have any questions, feel free to contact Haoyi Zhou through Email (zhouhaoyi1991@gmail.com) or Github issues. Pull requests are highly welcomed!\n\n## Acknowledgments\nThanks for the computing infrastructure provided by Beijing Advanced Innovation Center for Big Data and Brain Computing ([BDBC](http://bdbc.buaa.edu.cn/)).\nAt the same time, thank you all for your attention to this work! [![hits](https://hits.tianyucn98.workers.dev/informer.svg?action=hit&title=hits&title_bg=%23555555&count_bg=%238CC443&edge_flat=false)](https://hits.tianyucn98.workers.dev)\n[![Stargazers repo roster for @zhouhaoyi/Informer2020](https://reporoster.com/stars/zhouhaoyi/Informer2020)](https://github.com/zhouhaoyi/Informer2020/stargazers)\n"
+}

@@ -1,0 +1,16 @@
+{
+ "name": "informer",
+ "repo": "https://github.com/zhouhaoyi/Informer2020",
+ "commit": "29f2a739226a509202a092b464163da81fa74960",
+ "image": "python:3.7-slim",
+ "pip": [
+  "torch==1.8.0+cpu",
+  "numpy==1.19.4",
+  "pandas==0.25.1",
+  "scikit_learn==0.21.3",
+  "matplotlib==3.1.1"
+ ],
+ "pip_args": "-f https://download.pytorch.org/whl/torch_stable.html",
+ "setup": "python -c \"import urllib.request, os; os.makedirs('data/ETT', exist_ok=True); d = urllib.request.urlopen('https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/ETTh2.csv', timeout=300).read(); open('data/ETT/ETTh2.csv', 'wb').write(d); print('ETTh2.csv', len(d))\" && head -2 data/ETT/ETTh2.csv && wc -l data/ETT/ETTh2.csv",
+ "smoke": "T0=$(date +%s); mkdir -p out; S=$(( $(printf %s \"$RUN_TAG\" | cksum | cut -d\" \" -f1) % 100000 )); B=\"\"; [ \"True\" = False ] && B=\"$B --distil\"; [ \"True\" = False ] && B=\"$B --mix\"; [ \"False\" = True ] && B=\"$B --inverse\"; GF_SEED=$S PYTHONPATH=\"/work${PYTHONPATH:+:$PYTHONPATH}\" python -u gf_harness/run.py --model informer --data ETTh2 --features M --pred_len 24 --root_path /work/data/ETT/ --checkpoints /work/out/checkpoints/ --itr 1 --des Exp --num_workers 0 --freq h --seq_len 48 --label_len 48 --d_model 512 --n_heads 8 --e_layers 2 --d_layers 1 --s_layers 3,2,1 --d_ff 2048 --factor 5 --padding 0 --dropout 0.05 --attn prob --embed timeF --activation gelu --train_epochs 6 --batch_size 32 --patience 3 --learning_rate 0.0001 --lradj type1 $B > out/run.log 2>&1; echo wall_s=$(( $(date +%s) - T0 )); grep -a 'Epoch: .* cost time\\|Early stopping\\|^mse' out/run.log; bash gf_harness/emit.sh"
+}

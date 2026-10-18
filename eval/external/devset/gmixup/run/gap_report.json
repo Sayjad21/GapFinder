@@ -1,0 +1,286 @@
+{
+  "paper": "G-Mixup (ICML 2022), devbatch-1",
+  "artifact": "gmixup",
+  "generated": "2026-10-17 22:47",
+  "partial": false,
+  "runs": 5,
+  "setup_runs": 0,
+  "cost": {
+    "sandbox_usd": 86.924527,
+    "sandbox_runs": 6,
+    "setup_runs": 0,
+    "tokens": {},
+    "total_usd": 86.924527,
+    "cap_usd": null
+  },
+  "naive": {
+    "gin_imdbb_gmixup_acc": 70.0,
+    "gin_imdbb_vanilla_acc": 70.0,
+    "gin_imdbm_gmixup_acc": 48.33,
+    "gin_imdbm_vanilla_acc": 48.33
+  },
+  "noise": {
+    "gin_imdbb_gmixup_acc": {
+      "metric": "gin_imdbb_gmixup_acc",
+      "n": 5,
+      "median": 70.0,
+      "band": 3.0,
+      "cv": 0.04864693369518936
+    },
+    "gin_imdbb_vanilla_acc": {
+      "metric": "gin_imdbb_vanilla_acc",
+      "n": 5,
+      "median": 70.0,
+      "band": 7.0,
+      "cv": 0.06851461769497963
+    },
+    "gin_imdbm_gmixup_acc": {
+      "metric": "gin_imdbm_gmixup_acc",
+      "n": 5,
+      "median": 48.33,
+      "band": 3.319999999999993,
+      "cv": 0.046802086896964475
+    },
+    "gin_imdbm_vanilla_acc": {
+      "metric": "gin_imdbm_vanilla_acc",
+      "n": 5,
+      "median": 48.33,
+      "band": 1.3199999999999932,
+      "cv": 0.03561256301421035
+    }
+  },
+  "unmapped_assumptions": [
+    "ge",
+    "lam_range",
+    "dataset",
+    "model",
+    "gmixup",
+    "seed",
+    "weight_decay",
+    "resolution",
+    "device"
+  ],
+  "renamed_assumptions": {},
+  "spec_only_knobs": [
+    "lam_lo",
+    "lam_hi"
+  ],
+  "corrected_defaults": [],
+  "unverified_defaults": [],
+  "trace": {
+    "processes": 4,
+    "steps": 124,
+    "roles": {
+      "batch_size": {
+        "knob": "batch_size",
+        "role": "size",
+        "sink": "batch.batch_size (DataLoader)",
+        "site": "src/gmixup.py:260",
+        "value": "128"
+      },
+      "num_hidden": {
+        "knob": "num_hidden",
+        "role": "size",
+        "sink": "width.out_features (Linear)",
+        "site": "src/models.py:41",
+        "value": "64"
+      },
+      "lr": {
+        "knob": "lr",
+        "role": "rate",
+        "sink": "optimizer.lr (Adam)",
+        "site": "src/gmixup.py:271",
+        "value": "0.01"
+      },
+      "epoch": {
+        "knob": "epoch",
+        "role": "count",
+        "sink": "range() bound",
+        "site": "src/gmixup.py:275",
+        "value": "800"
+      },
+      "aug_num": {
+        "knob": "aug_num",
+        "role": "count",
+        "sink": "range() bound",
+        "site": "src/utils.py:212",
+        "value": "10"
+      }
+    },
+    "ambiguous": [],
+    "leads": [
+      {
+        "file": "src/gmixup.py",
+        "line": 271,
+        "name": "weight_decay",
+        "literal": "0.0005",
+        "sink": "optimizer.weight_decay (Adam)",
+        "knob": "@ast:src/gmixup.py:271:weight_decay"
+      },
+      {
+        "file": "src/gmixup.py",
+        "line": 272,
+        "name": "step_size",
+        "literal": "100",
+        "sink": "scheduler.step_size (StepLR)",
+        "knob": "@ast:src/gmixup.py:272:step_size"
+      },
+      {
+        "file": "src/gmixup.py",
+        "line": 272,
+        "name": "gamma",
+        "literal": "0.5",
+        "sink": "scheduler.gamma (StepLR)",
+        "knob": "@ast:src/gmixup.py:272:gamma"
+      }
+    ],
+    "runtime_values": {
+      "epoch": "800",
+      "batch_size": "128",
+      "lr": "0.01",
+      "num_hidden": "64",
+      "lam_lo": "0.005",
+      "lam_hi": "0.01",
+      "aug_ratio": "0.15",
+      "aug_num": "10"
+    }
+  },
+  "untestable": [],
+  "closest_overall": [
+    {
+      "changes": {},
+      "runs": 5,
+      "gaps": {
+        "C34": -0.026966916875173726,
+        "C29": -0.021663172606568793,
+        "C34_imdbm": -0.04221165279429256,
+        "C29_imdbm": -0.010239606799098916
+      },
+      "mean_abs_gap": 0.0252703372687835
+    }
+  ],
+  "triaged_failures": [],
+  "setup_check": null,
+  "effect_threshold": 1.0,
+  "provenance": {
+    "gapfinder": {
+      "commit": "d6562d2774e44a34f45631a3179b8702973d32a0",
+      "dirty": true
+    },
+    "models": {
+      "ultra": "nvidia/Nemotron-3-Ultra-550b-a55b",
+      "super": "nvidia/nemotron-3-super-120b-a12b",
+      "nano": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+      "omni": "nvidia/Nemotron-3-Nano-Omni"
+    },
+    "prompt_sha256": {
+      "CLAIM_PROMPT": "79757ce60aaaf5377dde8465230665347bfca143f0f05b752c9efa3b5bde5e34",
+      "FILTER_PROMPT": "439a83d5b510aa71fcfc50c1fdf62816af0a26cce0a8403ac89618d16cabbe32",
+      "ASSUMPTION_PROMPT": "85630aca4795a387ca8bb3c6e51dab78b3cd5c5276c9157843d84ef0128d019b",
+      "TRIAGE_PROMPT": "26293319ecd0ace0815fb8293cf05b4cbb11142f0c2e3e05e580faa74e1e9d5e",
+      "MISSING_SENTENCE_PROMPT": "b935383290f13c0a18521b2e0db1b556e66f5e5e61de1318671d8ad09dcb72e0"
+    },
+    "harness_spec_sha256": "ce6309932f8e6684cfb2278c8e26e5ca1e7988f6a6cc369f0221e45fd20ef3fd",
+    "cost": {
+      "nemotron_billed_usd": 0,
+      "sandbox_reported_usd": 86.924527,
+      "total_usd": 86.924527,
+      "scope": "this search; ledger extraction is included only if it shared the search's router"
+    }
+  },
+  "claims": [
+    {
+      "status": "reproduced",
+      "gap_before": -0.026966916875173726,
+      "band": 0.04170141784820684,
+      "changes": {},
+      "gap_after": null,
+      "held_out": {},
+      "counterfactual": {},
+      "screen": [],
+      "hypotheses_tested": 0,
+      "replay": [],
+      "notes": [
+        "naive run is within the noise band of the paper's value"
+      ],
+      "value_sets": {},
+      "diagnosis": null,
+      "closes": false,
+      "equivalent": [],
+      "relations": {},
+      "target": {
+        "claim_id": "C34",
+        "metric": "gin_imdbb_gmixup_acc",
+        "paper_value": 71.94,
+        "held_out": false,
+        "tuned_separately": false,
+        "figure": "Table 2",
+        "relation": null,
+        "quote": null
+      },
+      "attribution": null,
+      "plausibility": {},
+      "paper_claim": {
+        "quote": "w/ G-Mixup 71.94\u00b13.00 50.46\u00b11.49 92.90\u00b10.87 55.49\u00b10.53 50.50\u00b10.41",
+        "page": 7,
+        "figure": "Table 2",
+        "unit": "percentage",
+        "headline": false,
+        "metric": "gin_imdbb_gmixup_acc",
+        "paper_value": 71.94,
+        "recorded": true
+      },
+      "measured": {
+        "metric": "gin_imdbb_gmixup_acc",
+        "median": 70.0,
+        "repeats": [
+          68.5,
+          74.5,
+          76.5,
+          69.5,
+          70.0
+        ],
+        "n": 5,
+        "min": 68.5,
+        "max": 76.5,
+        "band": 3.0,
+        "cv": 0.04864693369518936,
+        "gap": -0.026966916875173726,
+        "band_rel": 0.04170141784820684,
+        "status": "reproduced",
+        "setup_check": null
+      },
+      "experiment": {
+        "found": false,
+        "note": "none was needed: the naive run is inside the noise band of the paper's value"
+      },
+      "belief": {
+        "checks": [],
+        "note": "nothing to verify: no explanation was proposed"
+      },
+      "unknown": {
+        "untestable": [],
+        "unmapped": [
+          "ge",
+          "lam_range",
+          "dataset",
+          "model",
+          "gmixup",
+          "seed",
+          "weight_decay",
+          "resolution",
+          "device"
+        ],
+        "setup": null,
+        "leads": [],
+        "alternatives": []
+      },
+      "cause": {
+        "kind": null,
+        "text": null,
+        "confirmed": null
+      },
+      "effect": null
+    }
+  ]
+}

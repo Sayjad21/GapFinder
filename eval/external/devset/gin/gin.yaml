@@ -1,0 +1,34 @@
+# Devset batch: GIN (Xu, Hu, Leskovec, Jegelka, ICLR 2019), Table 1, GIN-0 (SUM-MLP) on IMDB-BINARY (75.1).
+# Development batch devbatch-1; see HARNESS.md for the image, scope, knobs and every deviation.
+#
+# One run = the full 10-fold cross-validation (10 `main.py --fold_idx k` processes, 4 at a time) on each of
+# IMDB-BINARY, IMDB-MULTI, PTC and MUTAG, scored the way the README says the paper did it: the epoch with the
+# best fold-averaged validation accuracy. Default run: about 17 min, 0.34 GB peak.
+#
+# Knobs: every argparse flag of main.py with the code's default, except how-to-run ones (--device; --filename,
+# an output file; --seed, the fold-split seed, which each run derives from RUN_TAG so repeats differ: the
+# code fixes the torch/numpy seed to 0, so the split is the only noise), the ones that say which claim a
+# metric belongs to (--dataset; --fold_idx, the harness runs all 10 folds; --neighbor_pooling_type sum and
+# no --learn_eps, which make the row GIN-0 = SUM-MLP with eps fixed at 0), and --degree_as_tag, on for
+# the IMDB datasets as the README says and off for the bioinformatics ones (the paper's input features).
+# `max` values bound the cost: a run must finish in under 3600 s.
+name: gin
+base: ${GF_DEV_BASE}
+source: ${GF_DEV_SOURCE}
+run:
+  command: 'S=$(( $(printf %s "$RUN_TAG" | cksum | cut -d" " -f1) % 100000 )); bash gf_harness/run.sh --seed $S --batch_size {batch_size} --iters_per_epoch {iters_per_epoch} --epochs {epochs} --lr {lr} --num_layers {num_layers} --num_mlp_layers {num_mlp_layers} --hidden_dim {hidden_dim} --final_dropout {final_dropout} --graph_pooling_type {graph_pooling_type}; bash gf_harness/emit.sh'
+  output: stdout
+  format: kv
+  timeout: 3500
+knobs:
+  batch_size:         {layer: config, default: "32", max: 128}
+  iters_per_epoch:    {layer: config, default: "50", max: 100}
+  epochs:             {layer: config, default: "350", max: 700}
+  lr:                 {layer: config, default: "0.01"}
+  num_layers:         {layer: config, default: "5", max: 8}
+  num_mlp_layers:     {layer: config, default: "2", max: 4}
+  hidden_dim:         {layer: config, default: "64", max: 256}
+  final_dropout:      {layer: config, default: "0.5"}
+  graph_pooling_type: {layer: config, default: "sum", choices: ["sum", "average"]}
+allowed_paths: ["out/"]
+metrics: [imdbb_acc, imdbm_acc, ptc_acc, mutag_acc]

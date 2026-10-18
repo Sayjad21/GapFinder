@@ -1,0 +1,21 @@
+{
+ "name": "gmixup",
+ "repo": "https://github.com/ahxt/g-mixup",
+ "commit": "0813bb32319abbfb29fe82b9ee0c353a6862a1ad",
+ "image": "python:3.7-slim",
+ "pip_args": "-f https://download.pytorch.org/whl/torch_stable.html -f https://data.pyg.org/whl/torch-1.7.0+cpu.html",
+ "pip": [
+  "torch==1.7.1+cpu",
+  "numpy==1.19.5",
+  "scipy==1.5.4",
+  "torch-scatter==2.0.5",
+  "torch-sparse==0.6.8",
+  "torch-cluster==1.5.8",
+  "torch-spline-conv==1.2.0",
+  "torch-geometric==1.6.3",
+  "opencv-python-headless==4.5.3.56",
+  "scikit-image==0.18.3"
+ ],
+ "setup": "python -c \"from torch_geometric.datasets import TUDataset; [print(n, len(TUDataset('./' + n, name=n))) for n in ('IMDB-BINARY', 'IMDB-MULTI')]\" && python -c 'import cv2, skimage, torch_scatter, torch_sparse, torch_geometric; print(cv2.__version__, skimage.__version__, torch_geometric.__version__)' && ls /work /work/IMDB-BINARY/IMDB-BINARY; echo GCN-CHECK; python -u ./src/gmixup.py --data_path . --model GCN --dataset IMDB-BINARY --epoch 3 --log_screen True 2>&1 | tail -4",
+ "smoke": "export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1; mkdir -p out; S=$(( $(printf %s \"$RUN_TAG\" | cksum | cut -d' ' -f1) % 100000 )); K=1; A='--lr 0.01 --batch_size 128 --num_hidden 64 --epoch 800 --aug_ratio 0.15 --aug_num 10 --ge USVT'; t0=$(date +%s); for k in $(seq 0 $((K-1))); do s=$((S + 10000*k)); for ds in IMDB-BINARY IMDB-MULTI; do for gm in False True; do ( t=$(date +%s); python -u ./src/gmixup.py --data_path . --model GIN --dataset $ds --gmixup $gm --seed $s --log_screen True --lam_range '[0.005,0.01]' $A > out/${ds}_${gm}_$k.log 2>&1; echo \"$ds $gm seed=$s wall_s=$(( $(date +%s) - t ))\"; tail -1 out/${ds}_${gm}_$k.log ) & done; done; wait; done; echo cell_wall_s=$(( $(date +%s) - t0 )); grep -a -h -e 'real aug ratio' -e 'num_features' -e 'train_dataset size' -e 'lam:' out/*.log | head -20; bash gf_harness/emit.sh"
+}

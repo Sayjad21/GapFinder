@@ -1,0 +1,17 @@
+{
+ "name": "gin",
+ "repo": "https://github.com/weihua916/powerful-gnns",
+ "commit": "9a2ce8ac3e99278307093a464a95caf0fb04b602",
+ "image": "python:3.10-slim",
+ "pip": [
+  "torch==2.1.2+cpu",
+  "numpy<2",
+  "scipy<1.12",
+  "scikit-learn==1.3.2",
+  "networkx==3.2.1",
+  "tqdm==4.66.1"
+ ],
+ "pip_args": "--extra-index-url https://download.pytorch.org/whl/cpu",
+ "setup": "python -m zipfile -e dataset.zip . && rm -rf __MACOSX dataset/COLLAB dataset/REDDITBINARY dataset/REDDITMULTI5K && ls dataset",
+ "smoke": "s=$(date +%s); S=$(( $(printf %s \"$RUN_TAG\" | cksum | cut -d' ' -f1) % 100000 )); bash gf_harness/run.sh --seed $S --batch_size 32 --iters_per_epoch 50 --epochs 350 --lr 0.01 --num_layers 5 --num_mlp_layers 2 --hidden_dim 64 --final_dropout 0.5 --graph_pooling_type sum; echo wall_s=$(( $(date +%s) - s )); grep -h fold_wall_s out/IMDBBINARY_f0.log out/MUTAG_f9.log; bash gf_harness/emit.sh"
+}

@@ -1,0 +1,55 @@
+# Devset case: Informer (Zhou et al., AAAI 2021), Table 2 (multivariate), Informer on ETTh2 at horizon 24:
+# MSE 0.720 (target), MAE 0.665 (held out, same run). Repo zhouhaoyi/Informer2020 @ 29f2a73. See HARNESS.md.
+#
+# Naive run = scripts/ETTh2.sh's first multivariate line (the repo's per-experiment command for ETTh2, M,
+# horizon 24): --seq_len 48 --label_len 48 --pred_len 24 --e_layers 2 --d_layers 1 --attn prob --des Exp,
+# with --itr 1 instead of 5 (one run per cell; repeats give the spread). Every other flag at main_informer.py's
+# default. Full scale: full ETTh2, full epochs, so no discrepancy is set.
+#
+# One cell = one run: about 210 s per epoch on a 4-vCPU VM (4 epochs + early stop = 1020 s), 1.46 GB peak RSS.
+# `max` caps keep a run under the 3500 s timeout (cost grows with epochs, input length, width and depth).
+#
+# Knobs: every argparse flag of main_informer.py that changes training or evaluation, except
+#  - claim-defining: --data ETTh2, --features M, --pred_len 24 (the table cell being reproduced);
+#  - overwritten by main_informer.py's data_parser for ETTh2 (dead): --enc_in --dec_in --c_out --target --data_path;
+#  - never read by this experiment: --loss (exp_informer always uses nn.MSELoss), --cols (Dataset_ETT_hour
+#    ignores it), --output_attention (only returns attention maps), --do_predict (extra forecast after test);
+#  - how-to-run: --root_path --checkpoints (paths), --num_workers (loader processes), --itr (fixed 1),
+#    --des (run name), --use_gpu --gpu --use_multi_gpu --devices --use_amp (GPU only; the VM is CPU-only).
+# No seed flag and no seed in the code: gf_harness/run.py seeds python/numpy/torch from RUN_TAG (cksum), so
+# repeats differ in weight init, ProbSparse sampling and batch order.
+name: informer
+base: ${GF_DEV_BASE}
+source: ${GF_DEV_SOURCE}
+run:
+  command: 'mkdir -p out; S=$(( $(printf %s "$RUN_TAG" | cksum | cut -d" " -f1) % 100000 )); B=""; [ "{distil}" = False ] && B="$B --distil"; [ "{mix}" = False ] && B="$B --mix"; [ "{inverse}" = True ] && B="$B --inverse"; OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 GF_SEED=$S PYTHONPATH="/work${PYTHONPATH:+:$PYTHONPATH}" python -u gf_harness/run.py --model {model} --data ETTh2 --features M --pred_len 24 --root_path /work/data/ETT/ --checkpoints /work/out/checkpoints/ --itr 1 --des Exp --num_workers 0 --freq {freq} --seq_len {seq_len} --label_len {label_len} --d_model {d_model} --n_heads {n_heads} --e_layers {e_layers} --d_layers {d_layers} --s_layers {s_layers} --d_ff {d_ff} --factor {factor} --padding {padding} --dropout {dropout} --attn {attn} --embed {embed} --activation {activation} --train_epochs {train_epochs} --batch_size {batch_size} --patience {patience} --learning_rate {learning_rate} --lradj {lradj} $B > out/run.log 2>&1; bash gf_harness/emit.sh'
+  output: stdout
+  format: kv
+  timeout: 3500
+knobs:
+  model:         {layer: config, default: "informer", choices: ["informer", "informerstack"]}
+  freq:          {layer: config, default: "h"}
+  seq_len:       {layer: config, default: "48", max: 96}
+  label_len:     {layer: config, default: "48", max: 96}
+  d_model:       {layer: config, default: "512", max: 512}
+  n_heads:       {layer: config, default: "8"}
+  e_layers:      {layer: config, default: "2", max: 4}
+  d_layers:      {layer: config, default: "1", max: 3}
+  s_layers:      {layer: config, default: "3,2,1"}
+  d_ff:          {layer: config, default: "2048", max: 2048}
+  factor:        {layer: config, default: "5"}
+  padding:       {layer: config, default: "0", choices: ["0", "1"]}
+  distil:        {layer: config, default: "True", choices: ["True", "False"]}
+  dropout:       {layer: config, default: "0.05"}
+  attn:          {layer: config, default: "prob", choices: ["prob", "full"]}
+  embed:         {layer: config, default: "timeF", choices: ["timeF", "fixed", "learned"]}
+  activation:    {layer: config, default: "gelu", choices: ["gelu", "relu"]}
+  mix:           {layer: config, default: "True", choices: ["True", "False"]}
+  train_epochs:  {layer: config, default: "6", max: 12}
+  batch_size:    {layer: config, default: "32"}
+  patience:      {layer: config, default: "3"}
+  learning_rate: {layer: config, default: "0.0001"}
+  lradj:         {layer: config, default: "type1", choices: ["type1", "type2"]}
+  inverse:       {layer: config, default: "False", choices: ["True", "False"]}
+allowed_paths: ["out/"]
+metrics: [etth2_24_mse, etth2_24_mae]

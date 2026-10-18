@@ -1,0 +1,31 @@
+# Devset case: GAT (Velickovic et al., ICLR 2018), Table 2 transductive. Target: GAT on PubMed (79.0).
+# Held-out: GAT on Cora (83.0) and Citeseer (72.5), which the paper tuned separately from PubMed (HARNESS.md).
+#
+# The repo has no command-line flags: its settings are module-level constants at the top of
+# execute_cora_sparse.py. Knobs: every module-level constant of that script except `dataset` (set per metric)
+# and `checkpt_file` (an output path: each dataset saves under out/<dataset>/), with the script's own values.
+# gf_harness/set_constants.py writes each dataset's copy with the assignment lines replaced (ast-checked);
+# list constants take comma-separated items ("8,1" -> [8, 1]). One cell = the script on cora, citeseer and
+# pubmed in parallel: about 11 min, about 1.3 GB per process. The code sets no seed, so every run differs.
+name: gat
+base: ${GF_DEV_BASE}
+source: ${GF_DEV_SOURCE}
+run:
+  command: 'bash gf_harness/run_cell.sh batch_size={batch_size} nb_epochs={nb_epochs} patience={patience} lr={lr} l2_coef={l2_coef} hid_units={hid_units} n_heads={n_heads} residual={residual} nonlinearity={nonlinearity} model={model} sparse={sparse}'
+  output: stdout
+  format: kv
+  timeout: 3300
+knobs:
+  batch_size:   {layer: config, default: "1"}
+  nb_epochs:    {layer: config, default: "100000"}
+  patience:     {layer: config, default: "100", max: 1000}
+  lr:           {layer: config, default: "0.005"}
+  l2_coef:      {layer: config, default: "0.0005"}
+  hid_units:    {layer: config, default: "8"}
+  n_heads:      {layer: config, default: "8,1"}
+  residual:     {layer: config, default: "False", choices: ["False", "True"]}
+  nonlinearity: {layer: config, default: "tf.nn.elu"}
+  model:        {layer: config, default: "SpGAT", choices: ["SpGAT", "GAT"]}
+  sparse:       {layer: config, default: "True", choices: ["True", "False"]}
+allowed_paths: ["out/"]
+metrics: [gat_pubmed_acc, gat_cora_acc, gat_citeseer_acc]
