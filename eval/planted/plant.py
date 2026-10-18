@@ -1,6 +1,7 @@
 """Planted-cause benchmark on real repositories: measure a rate, not a case.
 
     python eval/planted/plant.py make  --case vgae --n 3 --seed 1     # sample causes, run them, write tasks
+    python eval/planted/plant.py search --task vgae-s1-1 --code <frozen worktree> --max-runs 120
     python eval/planted/plant.py score                                 # score every searched task
 
 A task is a real dev-set repository (its built Sandboxes image and harness spec) with one hidden change:
@@ -17,9 +18,9 @@ Rules (docs/CONTEXT_v11.md section 7):
 
 Distribution: a cause is a flag with probability 1/2, else a literal. Numeric values are scaled by a factor
 drawn from {1/4, 1/2, 2, 4} (integers rounded, at least 1; a flag's `max` respected); a choice flag takes
-another choice. Literals: any named numeric literal (not 0 or +-1) in a file the patch hook can reach. A draw
-is kept if the target claim moves by more than 3 standard deviations of the unchanged runs (and 0.5% of its
-value); otherwise it is redrawn (`--tries`). The draws, kept and rejected, are all recorded.
+another choice. Literals: any named numeric literal (not 0 or +-1, not a flag's default) in a file the patch hook can reach. A draw
+is kept if the target claim moves by more than 3 pooled standard deviations (6 unchanged runs, `--repeats`
+changed ones) and 0.5% of its value; otherwise it is redrawn (`--tries`). The draws, kept and rejected, are all recorded.
 """
 
 from __future__ import annotations
@@ -71,6 +72,8 @@ def candidates(spec, root: Path) -> tuple[list[tuple], list[tuple]]:
         v = _num(x.value)
         if v is None or v in (0.0, 1.0, -1.0) or "seed" in x.name.lower():
             continue
+        if x.name == "default" or "add_argument" in x.detail or "DEFINE_" in x.detail:
+            continue  # a flag's default: the harness passes the flag, so the literal never matters
         if ast_patch.entry_script(root / x.file) and not ast_patch.direct_entry(spec.run.command, x.file):
             continue  # the hook can't reach it
         lits.append((ast_patch.knob_name(x.file, x.line, x.name), x.value))
@@ -120,7 +123,8 @@ async def make(case: str, n: int, seed: int, repeats: int, tries: int, concurren
     rng = random.Random(f"{case}:{seed}")
     work = HERE / "work" / f"{case}-s{seed}"
     orch = Orchestrator(make_backend("contree"), spec, EventLog(work / "events.jsonl"), concurrency=concurrency)
-    base = await orch.fanout([{}] * repeats, [f"base-{i}" for i in range(repeats)])
+    nb = max(6, repeats)  # three runs underestimate the noise (pygcn: sd 0.21 once, 0.95 another time)
+    base = await orch.fanout([{}] * nb, [f"base-{i}" for i in range(nb)])
     ok = [b.parsed_metrics for b in base if b.status == "succeeded"]
     if len(ok) < 2:
         sys.exit(f"baseline failed: {[b.notes for b in base]}")
@@ -147,13 +151,17 @@ async def make(case: str, n: int, seed: int, repeats: int, tries: int, concurren
             entry["kept"] = False
             entry["why"] = "runs failed"
             log.append(entry)
+            print(f"draw {i}: {kind}: runs failed", flush=True)
             continue
         mu = statistics.mean(x[m] for x in got)
         moved = abs(mu - mu0)
-        entry.update({"main": round(mu, 6), "moved": round(moved, 6),
-                      "kept": moved > max(3 * sd0, 0.005 * abs(mu0)) and math.isfinite(mu)})
+        sd1 = statistics.stdev([x[m] for x in got])
+        pooled = math.sqrt((sd0 ** 2 + sd1 ** 2) / 2)
+        entry.update({"main": round(mu, 6), "moved": round(moved, 6), "pooled_sd": round(pooled, 6),
+                      "kept": moved > max(3 * pooled, 0.005 * abs(mu0)) and math.isfinite(mu)})
         log.append(entry)
-        print(f"draw {i}: {kind} {k}={v}: {m} {mu0:.4g} -> {mu:.4g} ({'kept' if entry['kept'] else 'no gap'})", flush=True)
+        # the cause is not printed: the answers are read only by `score`
+        print(f"draw {i}: {kind}: {m} moved {moved:.3g} (3 sd {3 * pooled:.3g}): {'kept' if entry['kept'] else 'no gap'}", flush=True)
         if not entry["kept"]:
             continue
         made += 1
@@ -170,8 +178,8 @@ async def make(case: str, n: int, seed: int, repeats: int, tries: int, concurren
         (t_dir / "task.json").write_text(json.dumps({"case": case, "seed": seed, "index": made}, indent=1), encoding="utf-8")
         (SEALED / f"{name}.json").write_text(json.dumps({**entry, "baseline": round(mu0, 6), "baseline_sd": sd0},
                                                          indent=1), encoding="utf-8")
-    (work / "draws.json").write_text(json.dumps(log, indent=1), encoding="utf-8")
-    print(f"{made} task(s) written to {TASKS}; draws in {work / 'draws.json'}", flush=True)
+    (SEALED / f"draws-{case}-s{seed}.json").write_text(json.dumps(log, indent=1), encoding="utf-8")
+    print(f"{made} task(s) written to {TASKS}; {len(log)} draws recorded (sealed)", flush=True)
 
 
 def _same(a: str, b: str, rel: float = 0.1) -> bool:
@@ -223,6 +231,22 @@ def score() -> None:
         (HERE / "scores.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
 
 
+def search(task: str, code: Path, max_runs: int, concurrency: int) -> int:
+    """Run GapFinder (the frozen checkout at `code`, `python -P` so this checkout isn't imported) on a task."""
+    import subprocess
+
+    t_dir = TASKS / task
+    case = json.loads((t_dir / "task.json").read_text(encoding="utf-8"))["case"]
+    spec = DEVSET / case / f"{case}.yaml"
+    env = {**os.environ, "PYTHONPATH": str(code), "PYTHONIOENCODING": "utf-8"}
+    cmd = [str(ROOT / ".venv" / "Scripts" / "python.exe") if os.name == "nt" else sys.executable, "-P", "-m", "gapfinder.cli",
+           "search", "--spec", str(spec), "--targets", str(t_dir / "targets.json"), "--hypotheses", "repomap",
+           "--backend", "contree", "--concurrency", str(concurrency), "--max-runs", str(max_runs),
+           "--paper", f"planted task {task}", "--out", str(t_dir / "run")]
+    with open(t_dir / "search.log", "w", encoding="utf-8") as out, open(t_dir / "search.err", "w", encoding="utf-8") as err:
+        return subprocess.call(cmd, env=env, cwd=str(code), stdout=out, stderr=err)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -233,10 +257,17 @@ def main() -> None:
     pm.add_argument("--repeats", type=int, default=3)
     pm.add_argument("--tries", type=int, default=3, help="draws per kept task, at most")
     pm.add_argument("--concurrency", type=int, default=6)
+    ps = sub.add_parser("search")
+    ps.add_argument("--task", required=True)
+    ps.add_argument("--code", type=Path, required=True, help="a frozen worktree (tag + .env)")
+    ps.add_argument("--max-runs", type=int, default=120)
+    ps.add_argument("--concurrency", type=int, default=6)
     sub.add_parser("score")
     a = p.parse_args()
     if a.cmd == "make":
         asyncio.run(make(a.case, a.n, a.seed, a.repeats, a.tries, a.concurrency))
+    elif a.cmd == "search":
+        sys.exit(search(a.task, a.code.resolve(), a.max_runs, a.concurrency))
     else:
         score()
 

@@ -394,9 +394,12 @@ class SmokeResult:
     sandbox_usd: float = 0.0
     elapsed_s: float = 0.0
     infra: bool = False  # sandbox trouble: a different draft would not help
+    metrics2: dict[str, float] | None = None  # a second run (another RUN_TAG): do seeds vary?
+    max_rss_kb: int = 0
+    run_s: float = 0.0  # the run stage alone
 
 
-async def smoke_test(spec, backend, *, stage_timeout: float = SMOKE_TIMEOUT_S) -> SmokeResult:
+async def smoke_test(spec, backend, *, stage_timeout: float = SMOKE_TIMEOUT_S, repeat: bool = False) -> SmokeResult:
     """Build, load and run the artifact once with its default settings, and parse the metrics.
 
     This is the orchestrator's own `run_branch({})`, so the drafted spec is exercised exactly the way the
@@ -426,6 +429,13 @@ async def smoke_test(spec, backend, *, stage_timeout: float = SMOKE_TIMEOUT_S) -
             cmd = (spec.load if stage == "load" else spec.build).command
             return SmokeResult(False, stage, text[-2500:], command=cmd, sandbox_usd=orch.cost.sandbox_usd,
                                elapsed_s=time.monotonic() - start)
+        second = None
+        if repeat and branch.status == "succeeded":  # same checkpoints, another RUN_TAG: is there run-to-run noise?
+            try:
+                b2 = await orch.run_branch({}, label="smoke-2")
+                second = dict(b2.parsed_metrics) if b2.status == "succeeded" else None
+            except (InfraError, RuntimeError):
+                second = None
     elapsed = time.monotonic() - start
     usd = orch.cost.sandbox_usd
     if branch.status == "timed_out":
@@ -438,8 +448,28 @@ async def smoke_test(spec, backend, *, stage_timeout: float = SMOKE_TIMEOUT_S) -
         stage = "run" if branch.exit_code else "parse"
         return SmokeResult(False, stage, str(branch.note or "")[-2500:], command=branch.command, sandbox_usd=usd,
                            elapsed_s=elapsed)
-    return SmokeResult(True, "ok", command=branch.command, metrics=dict(branch.parsed_metrics), sandbox_usd=usd,
-                       elapsed_s=elapsed)
+    return SmokeResult(True, "ok", command=branch.command, metrics=dict(branch.parsed_metrics),
+                       sandbox_usd=orch.cost.sandbox_usd, elapsed_s=elapsed, metrics2=second,
+                       max_rss_kb=branch.resources.max_rss_kb, run_s=branch.resources.elapsed_s)
+
+
+SANDBOX_RAM_KB = 3_900_000  # a Sandboxes VM
+SANDBOX_MAX_S = 3600
+
+
+def self_checks(smoke: SmokeResult) -> tuple[list[str], list[str]]:
+    """(problems worth one redraft, warnings) after a smoke run that passed."""
+    problems, warnings = [], []
+    if smoke.metrics2 is not None and smoke.metrics and smoke.metrics2 == smoke.metrics:
+        problems.append("two runs with different $RUN_TAG printed identical metrics, so the search would see no "
+                        "run-to-run noise. If the program has a seed flag, set it from $RUN_TAG in the run command, "
+                        'e.g. --seed $(( $(printf %s "$RUN_TAG" | cksum | cut -d" " -f1) % 100000 )); if it has none, '
+                        "leave the command as it is.")
+    if smoke.max_rss_kb > 0.9 * SANDBOX_RAM_KB:
+        warnings.append(f"the run peaked at {smoke.max_rss_kb / 1e6:.1f} GB of the VM's 3.9 GB: lower its parallelism")
+    if smoke.run_s > 0.8 * SANDBOX_MAX_S:
+        warnings.append(f"the run took {smoke.run_s:.0f} s of the 3600 s limit: a larger setting will not fit")
+    return problems, warnings
 
 
 # ------------------------------------------------------------- the redraft loop
@@ -492,9 +522,13 @@ def _smoke_feedback(smoke: SmokeResult) -> dict:
 
 
 async def draft_spec(router, ctx: DraftContext, backend, *, max_attempts: int = 3, smoke: bool = True,
-                     smoke_timeout: float = SMOKE_TIMEOUT_S) -> DraftResult:
+                     smoke_timeout: float = SMOKE_TIMEOUT_S, self_check: bool = False) -> DraftResult:
     """Draft, validate, smoke-test, redraft. At most `max_attempts` drafts get a smoke test; drafts that
-    fail validation are fed their errors and don't use one of those (but are capped overall)."""
+    fail validation are fed their errors and don't use one of those (but are capped overall).
+
+    `self_check`: a passing smoke test is run a second time with another RUN_TAG, and the run's memory and time
+    are compared with a Sandboxes VM. Identical metrics (no run-to-run noise) get one redraft; the limits are
+    warnings."""
     messages: list[dict] = [{"role": "system", "content": SPEC_PROMPT},
                             {"role": "user", "content": ctx.prompt_block()}]
     attempts: list[Attempt] = []
@@ -504,6 +538,8 @@ async def draft_spec(router, ctx: DraftContext, backend, *, max_attempts: int = 
     last_smoke: SmokeResult | None = None
     gave_up = ""
     spent_before = router.meter.total_cost()
+    self_checked = False
+    check_warnings: list[str] = []
 
     def _cost() -> float:
         return router.meter.total_cost()
@@ -535,13 +571,22 @@ async def draft_spec(router, ctx: DraftContext, backend, *, max_attempts: int = 
         if not smoke:
             attempts.append(Attempt(n, tier, "ok", [], False, _cost() - before))
             break
-        result = await smoke_test(validation.spec, backend, stage_timeout=smoke_timeout)
+        result = await smoke_test(validation.spec, backend, stage_timeout=smoke_timeout, repeat=self_check)
         last_smoke = result
         sandbox_usd += result.sandbox_usd
         missing = []
         if result.ok and validation.spec.metrics:
             missing = [m for m in validation.spec.metrics if m not in (result.metrics or {})]
         if result.ok and not missing:
+            problems, notes = self_checks(result)
+            check_warnings[:] = notes
+            if problems and not self_checked and sum(a.smoke for a in attempts) + 1 < max_attempts:
+                self_checked = True  # one redraft for a self-check; after that the draft stands, with a warning
+                attempts.append(Attempt(n, tier, "self-check", problems, True, _cost() - before))
+                messages += [{"role": "assistant", "content": raw},
+                             _feedback("The draft runs, but a self-check failed", problems)]
+                continue
+            check_warnings.extend(problems)
             attempts.append(Attempt(n, tier, "ok", [], True, _cost() - before))
             break
         if result.ok:  # ran, but the declared metrics aren't in the output: a parse problem
@@ -564,7 +609,7 @@ async def draft_spec(router, ctx: DraftContext, backend, *, max_attempts: int = 
     if last_valid:
         draft, validation = last_valid
         spec_dict = draft_to_dict(draft, ctx.repo_path)
-        warnings = list(validation.warnings)
+        warnings = list(validation.warnings) + check_warnings
         if ok and last_smoke and last_smoke.metrics and not spec_dict["metrics"]:
             spec_dict["metrics"] = sorted(last_smoke.metrics)  # the model couldn't tell; the run did
     meter = router.meter

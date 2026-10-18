@@ -122,7 +122,8 @@ async def cmd_spec_draft(args) -> int:
         backend = make_backend(args.backend)
     try:
         result = await sd.draft_spec(router, ctx, backend, max_attempts=args.max_attempts,
-                                     smoke=not args.no_smoke, smoke_timeout=args.smoke_timeout)
+                                     smoke=not args.no_smoke, smoke_timeout=args.smoke_timeout,
+                                     self_check=not args.no_self_check)
     finally:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -276,6 +277,20 @@ async def cmd_missing_sentence(args) -> int:
     return 0
 
 
+async def cmd_env_build(args) -> int:
+    from gapfinder.env_build import build_env, fetch, write_result
+    from gapfinder.models.router import Router
+    from gapfinder.sandbox.backend import ContreeBackend
+
+    res = await build_env(Router(), ContreeBackend(), args.local, fetch=fetch(args.repo, args.commit), image=args.image,
+                          date=args.date, max_steps=args.max_steps)
+    out = write_result(res, args.out)
+    print(f"{'ok' if res.ok else 'FAILED'}: image {res.image}, checkpoint {res.checkpoint}, {len(res.recipe)} of "
+          f"{len(res.steps)} commands kept, ${res.cost_usd:.4f}" + (f"; {res.reason}" if res.reason else ""))
+    print(f"result: {out}")
+    return 0 if res.ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="gapfinder")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -297,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
     pd.add_argument("--backend", default="local", help="local | contree (smoke test; default local)")
     pd.add_argument("--max-attempts", type=int, default=3, help="drafts that get a smoke test")
     pd.add_argument("--no-smoke", action="store_true", help="validate the draft only, no build/run")
+    pd.add_argument("--no-self-check", action="store_true",
+                    help="skip the second smoke run (seeds vary?) and the memory/time check against a Sandboxes VM")
     pd.add_argument("--smoke-timeout", type=float, default=900, help="cap in seconds on each smoke-test stage")
     pd.add_argument("--compare", metavar="HAND.yaml", help="hand-written spec: report knob recall against it")
     pd.add_argument("--diff", nargs=2, metavar=("DRAFT.yaml", "EDITED.yaml"),
@@ -365,11 +382,20 @@ def main(argv: list[str] | None = None) -> int:
     pm.add_argument("--assumptions", help="assumptions.json from `gapfinder ledger` (adds paper/code values)")
     pm.add_argument("--repo", help="artifact repository URL, for the issue draft's header only")
 
+    pe = sub.add_parser("env-build", help="build a runnable environment in Sandboxes, one command at a time")
+    pe.add_argument("repo", help="GitHub URL of the repository")
+    pe.add_argument("--commit", required=True)
+    pe.add_argument("--local", required=True, help="a local checkout at that commit (read for imports and build files)")
+    pe.add_argument("--image", help="base image (default: the model picks from a fixed list)")
+    pe.add_argument("--date", help="the commit date, when --local is not a git clone")
+    pe.add_argument("--max-steps", type=int, default=12)
+    pe.add_argument("--out", required=True, help="where to write the result JSON (checkpoint, recipe, steps)")
+
     args = p.parse_args(argv)
     if args.cmd == "repomap":
         return cmd_repomap(args)
     coro = {"ledger": cmd_ledger, "fanout": cmd_fanout, "search": cmd_search, "spec-draft": cmd_spec_draft,
-            "missing-sentence": cmd_missing_sentence}[args.cmd](args)
+            "missing-sentence": cmd_missing_sentence, "env-build": cmd_env_build}[args.cmd](args)
     return asyncio.run(coro)
 
 

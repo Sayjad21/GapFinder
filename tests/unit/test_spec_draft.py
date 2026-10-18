@@ -285,3 +285,14 @@ def test_cli_diff_needs_no_key(tmp_path, capsys):
     b.write_text("name: u\n")
     assert main(["spec-draft", "--diff", str(a), str(b)]) == 0
     assert "+name: u" in capsys.readouterr().out
+
+
+async def test_self_check_redrafts_once_when_runs_show_no_noise_then_warns(tmp_path, ctx, backend):
+    """The toy is deterministic: two runs with different RUN_TAGs print the same metrics. One redraft is asked
+    for (with the seed advice); when the redraft is the same, the spec stands with a warning."""
+    router, calls = _router(tmp_path, [GOOD, _variant(notes="no seed flag")])
+    res = await sd.draft_spec(router, ctx, backend, self_check=True)
+    assert res.ok and len(calls) == 2
+    assert [a.stage for a in res.attempts] == ["self-check", "ok"]
+    assert "RUN_TAG" in calls[1]["messages"][-1]["content"]
+    assert any("identical metrics" in w for w in res.warnings)
