@@ -232,3 +232,28 @@ async def test_filter_claims_drops_non_results_and_keeps_unjudged(tmp_path):
     kept, dropped = await filter_claims(r, paper, claims)
     assert [c.id for c in kept] == ["C1", "C3"]  # C3 wasn't judged: kept, never silently dropped
     assert dropped == [("C2", "not a result: setup")]
+
+
+def test_spend_ledger_survives_parallel_writers_and_a_torn_line(tmp_path, monkeypatch):
+    """devbatch-1: parallel searches tore a line in the shared spend ledger and every process crashed."""
+    import multiprocessing as mp
+    import subprocess
+    import sys
+
+    monkeypatch.setenv("GF_CACHE_DIR", str(tmp_path))
+    from gapfinder.config import settings
+    settings.cache_clear() if hasattr(settings, "cache_clear") else None
+    from gapfinder.models import budget
+
+    code = ("import os; os.environ['GF_CACHE_DIR'] = r'%s'; from gapfinder.models import budget; "
+            "[budget.record('llm', 0.001, note='x' * 300) for _ in range(200)]") % tmp_path
+    procs = [subprocess.Popen([sys.executable, "-c", code]) for _ in range(4)]
+    assert all(p.wait() == 0 for p in procs)
+    ledger = tmp_path / "spend.jsonl"
+    lines = [l for l in ledger.read_bytes().split(b"\n") if l.strip()]
+    assert len(lines) == 800
+    import json
+    assert all(json.loads(l)["kind"] == "llm" for l in lines)  # no line interleaved
+    with ledger.open("ab") as f:
+        f.write(b'": 641, "completion_tokens": 391}\n')  # a torn fragment, as seen
+    assert len(budget.entries()) == 800  # skipped, not fatal

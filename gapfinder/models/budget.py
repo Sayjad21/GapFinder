@@ -45,10 +45,56 @@ def cap_usd() -> float:
 
 
 def entries() -> list[dict]:
+    """Every recorded entry. A line that doesn't parse (a write torn by a crash) is skipped, not fatal: one
+    damaged line once crashed every running search (devbatch-1). Locked appends below keep new ones whole."""
     p = _path()
     if not p.exists():
         return []
-    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+    out = []
+    for line in p.read_bytes().split(b"\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+class _FileLock:
+    """An exclusive OS lock on a file, across processes (several searches append to one ledger)."""
+
+    def __init__(self, f):
+        self.f = f
+
+    def __enter__(self):
+        if os.name == "nt":
+            import msvcrt
+
+            self.f.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(self.f.fileno(), msvcrt.LK_LOCK, 1)  # retries for about 10 s, then raises
+                    break
+                except OSError:
+                    continue
+        else:
+            import fcntl
+
+            fcntl.flock(self.f.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        if os.name == "nt":
+            import msvcrt
+
+            self.f.seek(0)
+            msvcrt.locking(self.f.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(self.f.fileno(), fcntl.LOCK_UN)
 
 
 def spent_usd() -> float:
@@ -66,8 +112,9 @@ def record(kind: str, cost_usd: float, **detail) -> None:
         detail.setdefault("tag", os.environ["GF_SPEND_TAG"])
     p = _path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    with _lock, p.open("a", encoding="utf-8") as f:
-        f.write(json.dumps({"t": round(time.time(), 1), "kind": kind, "cost_usd": round(cost_usd, 8), **detail}) + "\n")
+    line = (json.dumps({"t": round(time.time(), 1), "kind": kind, "cost_usd": round(cost_usd, 8), **detail}) + "\n").encode()
+    with _lock, (p.parent / (p.name + ".lock")).open("a+b") as lk, _FileLock(lk), p.open("ab") as f:
+        f.write(line)  # one write of a whole line, under a lock other processes respect
 
 
 def estimate_prompt_tokens(messages: list[dict]) -> int:
