@@ -72,7 +72,9 @@ The last check said:
 Give ONE next shell command (it may chain a few steps with &&). Pin versions that existed at the commit date
 when the build files don't (e.g. tensorflow==1.15.5 for a 2018 TensorFlow 1 repo); prefer pip wheels over
 compiling; use `pip install --no-cache-dir`. Do not edit the repository's source files. If the goal can't be
-reached in this VM (e.g. it needs a GPU-only package), set "give_up" with the reason."""
+reached in this VM (e.g. it needs a GPU-only package), set "give_up" with the reason. If the base image itself is
+the problem (its Python version can't install what the code needs), set "switch_image" to another image from
+this list instead: {images}. The VM then restarts from a fresh checkout on that image; this history is kept."""
 
 
 class ImageChoice(BaseModel):
@@ -84,6 +86,7 @@ class NextStep(BaseModel):
     command: str = ""
     why: str = ""
     give_up: str = ""
+    switch_image: str = ""
 
 
 @dataclass
@@ -94,6 +97,7 @@ class StepRecord:
     tail: str
     elapsed_s: float
     why: str = ""
+    image: str = ""
 
 
 @dataclass
@@ -108,7 +112,8 @@ class EnvResult:
 
     @property
     def recipe(self) -> list[str]:
-        return [s.command for s in self.steps if s.ok]
+        # the commands that worked on the final image (an image switch is recorded as a "# switch" step)
+        return [s.command for s in self.steps if s.ok and s.image in ("", self.image) and not s.command.startswith("#")]
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -269,10 +274,58 @@ def _history(steps: list[StepRecord]) -> str:
                      for s in steps[-12:])
 
 
+MAX_IMAGE_SWITCHES = 2
+INFRA_RETRIES = 3
+
+
+async def _run(backend, *args, **kw):
+    """backend.run with retries on sandbox or network trouble (env bench: DNS and connect timeouts)."""
+    import asyncio
+
+    from gapfinder.sandbox.backend import InfraError
+
+    for i in range(INFRA_RETRIES):
+        try:
+            return await backend.run(*args, **kw)
+        except InfraError:
+            if i == INFRA_RETRIES - 1:
+                raise
+            await asyncio.sleep(20 * (i + 1))
+
+
+async def _start(backend, root: Path, image: str, fetch: str | None) -> tuple[str | None, str]:
+    """A fresh checkpoint with the repo at /work on `image`: (checkpoint, error)."""
+    import asyncio
+    import os
+    import tempfile
+
+    from gapfinder.sandbox.backend import InfraError
+
+    if fetch is None:
+        return await backend.base("local:" + str(root)), ""
+    for i in range(INFRA_RETRIES):
+        try:
+            os.environ["GF_CONTREE_LOCAL_IMAGE"] = image
+            ckpt = await backend.base("local:" + tempfile.mkdtemp(prefix="gf-env-"))
+            break
+        except InfraError:
+            if i == INFRA_RETRIES - 1:
+                raise
+            await asyncio.sleep(20 * (i + 1))
+    r = await _run(backend, ckpt, fetch, timeout=STEP_TIMEOUT_S, disposable=False)
+    if r.exit_code != 0 or not r.checkpoint:
+        return None, f"fetch failed: {_tail((r.stdout or '') + (r.stderr or ''), 600)}"
+    return r.checkpoint, ""
+
+
 async def build_env(router, backend, root: str | Path, *, fetch: str | None = None, image: str | None = None,
                     date: str | None = None, max_steps: int = 12) -> EnvResult:
     """`root`: a local checkout (read for imports and build files). `fetch`: a shell command that puts the repo
-    at /work in the VM (None: the backend's base is the checkout itself, as on the local backend)."""
+    at /work in the VM (None: the backend's base is the checkout itself, as on the local backend).
+
+    The model may ask for another base image when the first can't work (VGAE and GAT in the first env bench:
+    TensorFlow 1 has no wheels for the Python it picked, and the loop could only give up). The VM restarts from a
+    fresh checkout on that image, at most MAX_IMAGE_SWITCHES times; the history goes along."""
     root = Path(root)
     date = date or commit_date(root)
     scripts = entry_scripts(root)
@@ -284,40 +337,44 @@ async def build_env(router, backend, root: str | Path, *, fetch: str | None = No
         choice = await router.structured("super", [{"role": "user", "content": IMAGE_PROMPT.format(
             images="\n".join(IMAGES), date=date, build=build, readme=readme)}], ImageChoice)
         image = choice.image if choice.image in IMAGES else "python:3.10-slim"
-    if fetch is None:
-        ckpt = await backend.base("local:" + str(root))
-    else:
-        import os
-        import tempfile
-
-        os.environ["GF_CONTREE_LOCAL_IMAGE"] = image
-        ckpt = await backend.base("local:" + tempfile.mkdtemp(prefix="gf-env-"))
-        r = await backend.run(ckpt, fetch, timeout=STEP_TIMEOUT_S, disposable=False)
-        if r.exit_code != 0 or not r.checkpoint:
-            return EnvResult(False, image, None, modules, reason=f"fetch failed: {_tail(r.stdout + r.stderr, 600)}")
-        ckpt = r.checkpoint
+    ckpt, err = await _start(backend, root, image, fetch)
+    if ckpt is None:
+        return EnvResult(False, image, None, modules, reason=err)
     res = EnvResult(False, image, ckpt, modules)
+    tried = [image]
     check = check_command(modules, dirs)
-    for _ in range(max_steps + 1):
-        c = await backend.run(ckpt, check, timeout=600, disposable=True)
+    for _ in range(max_steps + MAX_IMAGE_SWITCHES + 1):
+        c = await _run(backend, ckpt, check, timeout=600, disposable=True)
         out = _tail((c.stdout or "") + (c.stderr or ""))
         if c.exit_code == 0:
             res.ok, res.checkpoint = True, ckpt
             break
-        if len(res.steps) >= max_steps:
-            res.reason = f"{max_steps} commands and the check still fails: {out[-400:]}"
+        if sum(s.image == image for s in res.steps) >= max_steps:
+            res.reason = f"{max_steps} commands on {image} and the check still fails: {out[-400:]}"
             break
         step = await router.structured("super", [{"role": "user", "content": STEP_PROMPT.format(
             image=image, date=date, modules=", ".join(modules) or "(none)", build=build, readme=readme,
-            history=_history(res.steps), check=out)}], NextStep)
+            history=_history(res.steps), check=out, images=", ".join(i for i in IMAGES if i not in tried))}], NextStep)
+        new = step.switch_image.strip()
+        if new and new in IMAGES and new not in tried and len(tried) <= MAX_IMAGE_SWITCHES:
+            fresh, err = await _start(backend, root, new, fetch)
+            res.steps.append(StepRecord(f"# switch base image {image} -> {new}", 0, fresh is not None, err, 0.0,
+                                        step.why or step.give_up, image=new))
+            tried.append(new)
+            if fresh is None:
+                res.reason = err
+                break
+            image, ckpt = new, fresh
+            res.image, res.checkpoint = image, ckpt
+            continue
         if step.give_up or not step.command.strip():
             res.reason = f"the model gave up: {step.give_up or 'no command'}"
             break
         t = time.monotonic()
-        r = await backend.run(ckpt, step.command, timeout=STEP_TIMEOUT_S, disposable=False)
+        r = await _run(backend, ckpt, step.command, timeout=STEP_TIMEOUT_S, disposable=False)
         ok = r.exit_code == 0 and bool(r.checkpoint)
         res.steps.append(StepRecord(step.command, r.exit_code, ok, _tail((r.stdout or "") + (r.stderr or ""), 1500),
-                                    round(time.monotonic() - t, 1), step.why))
+                                    round(time.monotonic() - t, 1), step.why, image=image))
         if ok:
             ckpt = r.checkpoint
     res.cost_usd = (router.meter.total_cost() - before) if router is not None else 0.0

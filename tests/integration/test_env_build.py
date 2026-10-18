@@ -49,3 +49,24 @@ async def test_it_stops_when_the_model_gives_up(tmp_path):
 
     res = await build_env(FakeRouter(), LocalBackend(tmp_path / "sbx"), _repo(tmp_path), image="python:3.12-slim")
     assert not res.ok and "CUDA" in res.reason and res.steps == []
+
+
+async def test_the_model_can_switch_the_base_image_and_the_recipe_keeps_only_the_final_images_commands(tmp_path):
+    root = _repo(tmp_path)
+    answers = iter([NextStep(command="true", why="a step on the first image"),
+                    NextStep(switch_image="python:3.7-slim", why="this Python can't install toylib"),
+                    NextStep(command="mkdir -p src/toylib && touch src/toylib/__init__.py src/toylib/core.py")])
+    prompts = []
+
+    class FakeRouter:
+        meter = type("Meter", (), {"total_cost": lambda self: 0.0})()
+
+        async def structured(self, tier, messages, schema):
+            prompts.append(messages[0]["content"])
+            return next(answers)
+
+    res = await build_env(FakeRouter(), LocalBackend(tmp_path / "sbx"), root, image="python:3.12-slim", max_steps=4)
+    assert res.ok and res.image == "python:3.7-slim"
+    assert res.recipe == ["mkdir -p src/toylib && touch src/toylib/__init__.py src/toylib/core.py"]
+    assert any(s.command.startswith("# switch base image python:3.12-slim -> python:3.7-slim") for s in res.steps)
+    assert "python:3.12-slim" not in prompts[-1].split("this list instead:")[1].split("\n")[0]  # not offered again
