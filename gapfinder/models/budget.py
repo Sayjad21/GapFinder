@@ -37,7 +37,29 @@ class BudgetExceeded(RuntimeError):
 
 
 def _path() -> Path:
-    return settings().cache_dir / "spend.jsonl"
+    """One ledger for all of a repo's checkouts. A frozen git worktree (blind and batch runs) used to write its
+    own `.gf_cache/spend.jsonl`, so the cap there saw only that worktree's spend and the main ledger missed it
+    (devbatch-2: $0.54 billed that the main ledger never showed). GF_SPEND_LEDGER overrides."""
+    if os.environ.get("GF_SPEND_LEDGER"):
+        return Path(os.environ["GF_SPEND_LEDGER"])
+    cache = settings().cache_dir
+    main = _main_checkout(cache.parent)
+    if main is not None and main != cache.parent:
+        return main / cache.name / "spend.jsonl"
+    return cache / "spend.jsonl"
+
+
+def _main_checkout(root: Path) -> Path | None:
+    """The main checkout of a git worktree at `root` (its `.git` is a file: "gitdir: <main>/.git/worktrees/x")."""
+    try:
+        g = root / ".git"
+        if g.is_file():
+            gitdir = Path(g.read_text(encoding="utf-8").split("gitdir:", 1)[1].strip())
+            if gitdir.parent.name == "worktrees":
+                return gitdir.parent.parent.parent
+        return root if g.is_dir() else None
+    except (OSError, IndexError):
+        return None
 
 
 def cap_usd() -> float:

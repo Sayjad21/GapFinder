@@ -257,3 +257,17 @@ def test_spend_ledger_survives_parallel_writers_and_a_torn_line(tmp_path, monkey
     with ledger.open("ab") as f:
         f.write(b'": 641, "completion_tokens": 391}\n')  # a torn fragment, as seen
     assert len(budget.entries()) == 800  # skipped, not fatal
+
+
+def test_a_worktree_shares_the_main_checkouts_spend_ledger(tmp_path):
+    """A frozen worktree used to keep its own ledger, so its spend escaped the main ledger and its cap."""
+    from gapfinder.models.budget import _main_checkout
+
+    main = tmp_path / "repo"
+    (main / ".git" / "worktrees" / "wt").mkdir(parents=True)
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {(main / '.git' / 'worktrees' / 'wt').as_posix()}\n", encoding="utf-8")
+    assert _main_checkout(wt) == main
+    assert _main_checkout(main) == main
+    assert _main_checkout(tmp_path / "nothing") is None
