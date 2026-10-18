@@ -107,7 +107,48 @@ async def build_assumption_space(router: Router, paper: PaperText, rm: RepoMap, 
         files=relevant_files(rm, claims),
     )
     out = await router.structured("ultra", [{"role": "user", "content": prompt}], _Assumptions)
-    return _fill_defaults(out.assumptions, rm)
+    found = list(out.assumptions)
+    # one long excerpt loses the appendix (SA-Bench: single-call extraction skips appendices as attention
+    # decays; GraphMAE's alpha_l = 1 for COLLAB was in appendix Table 8): read the appendix in its own call
+    appendix = paper.section(APPENDIX_HEADINGS, max_chars=25_000)
+    if appendix and appendix[:200] not in setup:
+        prompt2 = ASSUMPTION_PROMPT.format(
+            claims="\n".join(f"{c.id}: {c.metric} = {c.reported_value} {c.unit or ''} ({c.figure_or_table}) {c.conditions}" for c in claims),
+            setup=appendix,
+            repo_map=rm.summary(max_files=300, max_flags=500),
+            files=relevant_files(rm, claims),
+        )
+        out2 = await router.structured("ultra", [{"role": "user", "content": prompt2}], _Assumptions)
+        found = merge_assumptions(found, out2.assumptions)
+    return _fill_defaults(found, rm)
+
+
+APPENDIX_HEADINGS = r"^\s*(?:(?:Appendix|APPENDIX|Supplementary|SUPPLEMENTARY)\b[^\n]{0,80}|[A-H](?:\.\d+)?\s+[A-Z][A-Za-z ,&-]{2,60})\s*$"
+
+
+def merge_assumptions(first: list[Assumption], second: list[Assumption]) -> list[Assumption]:
+    """One entry per knob: a stated paper value beats "unstated", the higher prior wins, evidence and
+    candidate values are combined."""
+    def norm(k: str) -> str:
+        return k.strip().lstrip("-").replace("-", "_").lower()
+
+    out: dict[str, Assumption] = {}
+    for a in list(first) + list(second):
+        key = norm(a.knob)
+        if key not in out:
+            out[key] = a
+            continue
+        b = out[key]
+        stated_a = not a.paper_value.strip().lower().startswith("unstated")
+        stated_b = not b.paper_value.strip().lower().startswith("unstated")
+        keep = a if (stated_a and not stated_b) or (stated_a == stated_b and a.prior_score > b.prior_score) else b
+        other = b if keep is a else a
+        out[key] = keep.model_copy(update={
+            "evidence": list(keep.evidence) + [e for e in other.evidence if e not in keep.evidence],
+            "candidate_values": list(dict.fromkeys([str(v) for v in keep.candidate_values] + [str(v) for v in other.candidate_values])),
+            "prior_score": max(keep.prior_score, other.prior_score),
+            "affects_claims": list(dict.fromkeys(list(keep.affects_claims) + list(other.affects_claims)))})
+    return list(out.values())
 
 
 _TABLE_CAPTION = re.compile(r"(?m)^\s*(Table\s+[A-Z]?\d+[.:])")

@@ -274,3 +274,68 @@ async def test_secant_step_stays_out_when_a_screened_value_already_fits(tmp_path
     [r] = await s.run()
     assert r.changes == {"alpha": "2.0"}
     assert not [e for e in s.orch.events.read() if e["type"] == "note" and "secant" in e.get("msg", "")]
+
+
+async def test_ledger_names_are_mapped_to_knobs_by_meaning(tmp_path):
+    """Class seen on FastGCN and GAT: the ledger's names (num_attention_heads, l2_reg_lambda) matched no knob
+    (n_heads, l2_coef), so the paper's values never became evidence. One Super call maps them by meaning, to
+    knobs that exist only."""
+    from gapfinder.ledger.schemas import Assumption, Evidence
+    from gapfinder.search.engine import NameMap
+
+    class Router:
+        meter = type("M", (), {"total_cost": lambda self: 0.0})()
+        calls = []
+
+        async def structured(self, model, messages, schema):
+            self.calls.append(messages[0]["content"])
+            return NameMap(mappings=[{"assumption": "parallel_workers", "knob": "threads"},
+                                     {"assumption": "made_up", "knob": "no_such_knob"},
+                                     {"assumption": "cpu_model", "knob": None}])
+
+    m = await toy_metrics(tmp_path, {"alpha": "2.0"})
+    targets = [Target("C1", "score", m["score"]), Target("C2", "write_amp", m["write_amp"], held_out=True)]
+
+    def asm(knob, paper, quote=None):
+        ev = [Evidence(kind="paper", ref="p.3", quote=quote)] if quote else []
+        return Assumption(id=knob, knob=knob, layer="config", paper_value=paper, code_default="?",
+                          candidate_values=["4"], evidence=ev, prior_score=0.7, status="unstated", affects_claims=[])
+
+    router = Router()
+    s = GapSearch(orch(tmp_path), targets, [asm("parallel_workers", "4", "we run 4 workers"), asm("made_up", "3"),
+                                            asm("cpu_model", "i7")], SearchConfig(trace=False), router=router)
+    assert "threads" in s.spec_only and "parallel_workers" in s.unmapped
+    await s._map_names()
+    assert s.renamed["parallel_workers"] == "threads" and "parallel_workers" not in s.unmapped
+    assert "threads" in s.assumptions and "threads" not in s.spec_only  # promoted from the fallback list
+    assert any(e.quote == "we run 4 workers" for e in s.assumptions["threads"].evidence)
+    assert "made_up" in s.unmapped and "cpu_model" in s.unmapped  # an invented knob, or none: unmapped
+    assert "threads (default 1" in router.calls[0]
+
+    class Offline(Router):
+        async def structured(self, *a, **k):
+            raise RuntimeError("cache miss in cache-only mode")
+
+    s2 = GapSearch(orch(tmp_path, "off"), targets, [asm("parallel_workers", "4")], SearchConfig(trace=False), router=Offline())
+    await s2._map_names()
+    assert "parallel_workers" in s2.unmapped  # skipped, not fatal
+
+
+def test_assumptions_from_two_readings_are_merged():
+    """Section-wise extraction (the appendix in its own call): a stated value beats unstated, evidence combines."""
+    from gapfinder.ledger.assumptions import APPENDIX_HEADINGS, merge_assumptions
+    from gapfinder.ledger.schemas import Assumption, Evidence
+    import re
+
+    a1 = Assumption(id="A1", knob="--alpha_l", layer="config", paper_value="unstated", code_default="2",
+                    candidate_values=["3"], prior_score=0.6, status="unstated", affects_claims=["C1"],
+                    evidence=[Evidence(kind="code", ref="utils.py:80", quote="alpha_l default 2")])
+    a2 = Assumption(id="A9", knob="alpha_l", layer="config", paper_value="1", code_default="2",
+                    candidate_values=["1"], prior_score=0.5, status="stated_code_differs", affects_claims=["C2"],
+                    evidence=[Evidence(kind="paper", ref="p.12", quote="Scaling factor 1")])
+    [m] = merge_assumptions([a1], [a2])
+    assert m.paper_value == "1" and m.prior_score == 0.6
+    assert {e.kind for e in m.evidence} == {"paper", "code"} and m.candidate_values == ["1", "3"]
+    assert set(m.affects_claims) == {"C1", "C2"}
+    text = "Results...\nA key insight is that it works.\nA Hyperparameters\nTable 8: ..."
+    assert re.search(APPENDIX_HEADINGS, text, re.M).group(0).strip() == "A Hyperparameters"

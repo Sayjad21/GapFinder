@@ -49,6 +49,7 @@ class Orchestrator:
         self.cost = cost or CostMeter()
         self.tree = CheckpointTree()
         self.sem = asyncio.Semaphore(concurrency)
+        self.concurrency = concurrency
         self.no_fork = no_fork
         self.infra_retries = infra_retries
         self.tag_prefix = tag_prefix or f"gf/{spec.name}"

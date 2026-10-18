@@ -20,6 +20,8 @@ import re
 import statistics
 from dataclasses import dataclass, field
 
+from pydantic import BaseModel
+
 from gapfinder.ledger.schemas import Assumption, AssumptionStatus, Evidence, Attribution, Branch, BranchStatus, ConfidenceLabel
 from gapfinder.models import budget
 from gapfinder.sandbox.noise import NoiseBand, bootstrap_diff_ci, mde, noise_band
@@ -92,10 +94,20 @@ class SearchConfig:
     # out of space: one Super call compares the paper with the traced run (gapfinder/search/contrast.py);
     # grounded literal differences are tried first in the patch round, structural ones are reported only
     contrast: bool = True
+    # with it, a deterministic matcher ($0, search/matcher.py): a setting the paper states, whose name matches no
+    # knob, against the code's named literals with the same core words; a differing literal is a patch lead
+    match_constants: bool = True
     # also look for a code cause when the answer isn't confident (in space only through settings nothing
     # supports: devset VGAE fitted with hidden2=1600, while the paper states the 10%/5% edge split the code
     # changed): leads, contrast and the patch round run then too, and a patch replaces the answer only if better
     patch_when_unsupported: bool = True
+    # ledger names that match no knob are mapped by meaning (one cached Super call), to a knob that exists or to
+    # none: a class seen on FastGCN (num_epochs for epochs) and GAT (num_attention_heads, l2_reg_lambda and
+    # early_stopping_patience for n_heads, l2_coef and patience), where the paper's own values never became
+    # evidence. Grounded: only the spec's knob names are accepted. Skipped without a router or offline.
+    semantic_map: bool = True
+    # combine in waves, confirming a pair that fits within noise as soon as it appears (anytime budget use)
+    early_confirm: bool = True
     trace_steps: int = 30  # the dry run stops itself after this many optimizer steps...
     trace_seconds: float = 900  # ...or this many seconds
     coverage_candidates: int = 6  # values per knob at least (the ledger's first, then coverage values)
@@ -307,6 +319,31 @@ def secant_values(points: list[tuple[str, float | None]], target: float, role: s
     return out
 
 
+NAME_MAP_PROMPT = """A paper reading produced setting names that don't match the program's own knob names. For each
+reading, name the program knob it refers to, or null if none does. Only use knob names from the list, exactly.
+Match by meaning (what the setting controls), not by spelling; when unsure, answer null.
+
+Program knobs:
+{knobs}
+
+Readings from the paper:
+{items}
+"""
+
+
+class _NameMapping(BaseModel):
+    assumption: str
+    knob: str | None = None
+
+
+class NameMap(BaseModel):
+    mappings: list[_NameMapping] = []
+
+
+def ast_patch_is_patch(k: str) -> bool:
+    return k.startswith("@ast:")
+
+
 def paper_mentions(text: str, knob: str, limit: int = 5) -> list[str]:
     """Sentences of the paper that name the knob's quantity (every core word of its name) and give a
     number, e.g. "We swept learning rate in the set {0.01, 0.001, 0.0001}" for `learning_rate` (blind-1).
@@ -376,10 +413,12 @@ class GapSearch:
         self.all_for: dict[str, list[Assumption]] = {}  # every ledger entry per knob (papers state some twice)
         self.unmapped: list[str] = []
         self.renamed: dict[str, str] = {}  # ledger name -> spec knob, when they differ (`num_epochs` -> `epochs`)
+        self._unmapped_assumptions: list[Assumption] = []
         for a in sorted(assumptions, key=lambda a: -a.prior_score):
             k = map_knob_name(a.knob, self.spec.knobs)
             if k is None:
                 self.unmapped.append(a.knob)
+                self._unmapped_assumptions.append(a)
                 continue
             if _norm_knob(k) != _norm_knob(a.knob):
                 self.renamed[a.knob] = k
@@ -565,12 +604,66 @@ class GapSearch:
                                      if self.spec_only else ""))
         if self.cfg.trace:
             await self._trace()
+        if self.cfg.semantic_map:
+            await self._map_names()
         await self.calibrate()
         results = []
         for t in self.targets:
             if not t.held_out:
                 results.append(await self.explain(t))
         return results
+
+    async def _map_names(self) -> None:
+        """Map unmatched ledger names to the spec's knobs by meaning, then absorb those assumptions."""
+        pending = [a for a in self._unmapped_assumptions if a.knob in self.unmapped]
+        if not pending or self.router is None:
+            return
+        knobs = []
+        for k, kn in self.spec.knobs.items():
+            if ast_patch_is_patch(k):
+                continue
+            role = f", role {kn.role}" if kn.role else ""
+            knobs.append(f"- {k} (default {kn.default}{role})")
+        items = []
+        for a in pending:
+            q = next((e.quote for e in a.evidence if e.kind == "paper"), "")
+            items.append(f"- {a.knob}: paper value {a.paper_value!r}; code default {a.code_default!r}"
+                         + (f'; paper says "{q[:160]}"' if q else ""))
+        msg = NAME_MAP_PROMPT.format(knobs="\n".join(knobs), items="\n".join(items))
+        try:
+            out = await self.router.structured("super", [{"role": "user", "content": msg}], NameMap)
+        except budget.BudgetExceeded:
+            raise
+        except Exception as exc:  # offline, cache-only, or a malformed answer: keep the names as they were
+            self.orch.events.emit("note", msg=f"knob-name mapping skipped ({type(exc).__name__}: {str(exc)[:120]})")
+            return
+        by_name = {a.knob: a for a in pending}
+        mapped = {}
+        for m in out.mappings:
+            if m.assumption in by_name and m.knob and m.knob in self.spec.knobs and not ast_patch_is_patch(m.knob):
+                mapped[m.assumption] = m.knob
+        for name, k in mapped.items():
+            self._absorb(by_name[name].model_copy(update={"knob": k}), k)
+            self.renamed[name] = k
+            self.unmapped = [u for u in self.unmapped if u != name]
+        if mapped:
+            self.orch.events.emit("note", msg="knob names mapped by meaning: "
+                                              + ", ".join(f"{a} -> {k}" for a, k in mapped.items()))
+
+    def _absorb(self, a: Assumption, k: str) -> None:
+        """Add a ledger assumption to knob k: merged into its entry, or promoted from the fallback list."""
+        if k in self._fallback:  # a spec-only knob now has a ledger reading: it joins the first pass
+            self._fallback.pop(k)
+            self.spec_only = [x for x in self.spec_only if x != k]
+            self.all_for[k] = []
+        self.all_for.setdefault(k, []).append(a)
+        self.all_for[k].sort(key=lambda x: -x.prior_score)
+        self._check_code_defaults()
+        entries = self.all_for[k]
+        head = entries[0]
+        self.assumptions[k] = head.model_copy(update={
+            "evidence": [e for x in entries for e in x.evidence],
+            "candidate_values": list(dict.fromkeys(str(v) for x in entries for v in x.candidate_values))})
 
     async def _trace(self) -> None:
         """Dry-run trace: roles for the knobs (candidate values follow the sink a value reaches, not its
@@ -712,6 +805,7 @@ class GapSearch:
             self._history_match(t, res)
             if self.cfg.patch_knobs and self._wants_patch(res):
                 await self._contrast(res)
+                self._match_constants(res)
                 try:
                     await self._patch_round(t, res)
                 except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
@@ -829,6 +923,21 @@ class GapSearch:
         res.diagnosis["structural_leads"] = structural
         self.orch.events.emit("note", msg=f"contrast: {len(patch)} literal and {len(structural)} structural difference(s) "
                                           f"from the paper" + (f"; rejected: {'; '.join(rejected)}" if rejected else ""))
+
+    def _match_constants(self, res: ClaimResult) -> None:
+        """Stated paper values with no knob, against the code's literals of the same name (no model call)."""
+        root = self.spec.code_root()
+        if not self.cfg.match_constants or root is None:
+            return
+        from gapfinder.search.matcher import match_constants
+
+        pending = [a for a in self._unmapped_assumptions if a.knob in self.unmapped]
+        found = match_constants(pending, root)
+        res.diagnosis["matcher_leads"] = found
+        if found:
+            self.orch.events.emit("note", msg=f"constant matcher: {len(found)} literal(s) differ from the paper: "
+                                              + "; ".join(f"{x['name']} {x['value']} -> {x['paper_value']}"
+                                                          f" ({x['file']}:{x['line']})" for x in found[:6]))
 
     async def _secant_step(self, t: Target, hyps: list[Hypothesis], tried: set[frozenset]) -> list[Hypothesis]:
         """Secant iteration on each numeric knob the paper's number is bracketed on: interpolate the crossing,
@@ -1035,7 +1144,20 @@ class GapSearch:
                                               "keeping the rest of the budget for confirmation")
             keep = set(map(lambda c: frozenset(c.items()), fresh[:room]))
             combos = [c for c in combos if self._runs.get(frozenset(c.items())) or frozenset(c.items()) in keep]
-        await _all(*(self.measure(c, 1, "combine") for c in combos))
+        if self.cfg.early_confirm:
+            # in waves: a pair that already fits within noise gets its confirmation repeats right away, so a
+            # budget that runs out later cuts unexplored pairs, not the best one (class: the budget ended before
+            # the best combination's confirmation on MC Dropout, FastGCN post-hoc and Informer)
+            wave = max(4, min(getattr(self.orch, "concurrency", 8), 10))  # parallel, but small enough to react
+            for i in range(0, len(combos), wave):
+                chunk = combos[i: i + wave]
+                await _all(*(self.measure(c, 1, "combine") for c in chunk))
+                early = [c for c in chunk if self.closes(t, c)]
+                if early:
+                    await _all(*(self.measure(c, self.confirm_repeats(t) + (self.cfg.screen_repeats if self.cfg.strict_confirm else 0),
+                                              "confirm-combo (early)") for c in early))
+        else:
+            await _all(*(self.measure(c, 1, "combine") for c in combos))
         tried.update(frozenset(c.items()) for c in combos)
         good_combos = [c for c in combos if self.units(t, c) >= thr]
         # closest to the paper first: runs take budget in launch order, so when it runs short the likeliest
@@ -1335,6 +1457,8 @@ class GapSearch:
         leads = [x for x in (res.diagnosis or {}).get("leads") or []
                  if x["family"] == "unexposed_setting" and x.get("name") and x.get("value")]
         contrasted = [x for x in (res.diagnosis or {}).get("contrast_leads") or []]
+        have = {(c["file"], c["line"]) for c in contrasted}  # the model's reading first, then the matcher's
+        contrasted += [x for x in (res.diagnosis or {}).get("matcher_leads") or [] if (x["file"], x["line"]) not in have]
         if self.trace_report is not None:  # literals seen reaching a sink at runtime come first
             traced = [{"file": x.file, "line": x.line, "name": x.name, "value": x.literal, "family": "unexposed_setting",
                        "source": "trace", "sink": x.sink} for x in self.trace_report.leads]
@@ -1376,7 +1500,7 @@ class GapSearch:
             return [g[i] for i in range(max((len(g) for g in groups), default=0)) for g in groups if i < len(g)]
         configs = rr(with_base) + rr(alone)
         stated = {ast_patch.knob_name(x["file"], x["line"], x["name"]): str(x["paper_value"]) for x in leads
-                  if x.get("paper_value") and x.get("source") == "contrast"}
+                  if x.get("paper_value") and x.get("source") in ("contrast", "matcher")}
         if len(stated) > 1:  # every difference the paper states, at the paper's values, together (VGAE: test and val %)
             configs = [stated] + ([{**base, **stated}] if base else []) + [c for c in configs if c != stated]
         if self._patch_reserve:  # leave room for the confirmation repeats
@@ -1421,7 +1545,7 @@ class GapSearch:
         for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay", "relations"):
             setattr(res, f, getattr(trial, f))
         res.status = "searched"
-        res.diagnosis = {**d.to_dict(), **{k: res.diagnosis.get(k) for k in ("leads", "contrast_leads", "structural_leads")
+        res.diagnosis = {**d.to_dict(), **{k: res.diagnosis.get(k) for k in ("leads", "contrast_leads", "matcher_leads", "structural_leads")
                                            if res.diagnosis.get(k) is not None}}
         res.notes.extend(trial.notes)
         res.notes.append("explained with a code patch (tested in memory, no file edited): " + "; ".join(

@@ -243,3 +243,43 @@ def code_checks(root: str | Path, flags: set[str] | None = None, limit: int = 12
             seen.add(key)
             uniq.append(lead)
     return uniq[:limit]
+
+
+def named_literals(root: str | Path) -> list[Lead]:
+    """Every named numeric literal in the repo's Python, unfiltered: `name = 5`, `self.name = 5`, `f(name=5)`
+    and `def f(name=5)`. The inventory a paper's stated values are compared against (search/matcher.py)."""
+    root = Path(root)
+    out: list[Lead] = []
+    for p in sorted(root.rglob("*.py")):
+        if any(part.startswith(".") or part in ("tests", "test", "venv", ".venv", "site-packages") for part in p.parts):
+            continue
+        rel = str(p.relative_to(root)).replace("\\", "/")
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(text)
+        except (OSError, SyntaxError, ValueError):
+            continue
+        lines = text.splitlines()
+        src = lambda ln: lines[ln - 1].strip()[:160] if 0 < ln <= len(lines) else ""  # noqa: E731
+
+        def add(name: str, node: ast.AST, line: int, how: str) -> None:
+            if _number(node) is not None:
+                out.append(Lead("named_literal", rel, line, src(line), how, 0, name=name, value=ast.unparse(node)))
+
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Assign) and len(n.targets) == 1:
+                t = n.targets[0]
+                if isinstance(t, ast.Name):
+                    add(t.id, n.value, n.lineno, "assignment")
+                elif isinstance(t, ast.Attribute):
+                    add(t.attr, n.value, n.lineno, "attribute")
+            elif isinstance(n, ast.Call):
+                for kw in n.keywords:
+                    if kw.arg:
+                        add(kw.arg, kw.value, n.lineno, f"keyword of {_call_name(n)}()")
+            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                a = n.args
+                pos = a.args[len(a.args) - len(a.defaults):] if a.defaults else []
+                for arg, d in list(zip(pos, a.defaults)) + [(x, d) for x, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]:
+                    add(arg.arg, d, n.lineno, f"default of {n.name}()")
+    return out

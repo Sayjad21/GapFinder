@@ -523,3 +523,17 @@ async def test_relation_claims_check_candidates(tmp_path):
     [r3] = await s3.run()
     assert r3.attribution.confidence_label == "Explained" and not r3.relations["R3"]["checked"]
     assert len(s3.targets) == 2 and len(s3.relations) == 1  # a relation is never a target to explain
+
+
+async def test_a_pair_that_fits_is_confirmed_as_soon_as_it_appears(tmp_path):
+    """Anytime combine: a pair within noise of the paper gets its confirmation runs in its wave, before later
+    pairs are tried (class: the budget ended before the best pair's confirmation on MC Dropout, FastGCN
+    post-hoc and Informer)."""
+    no_alpha = [a for a in ALL if a.knob != "alpha"]
+    s, [r] = await search(tmp_path, {"gamma": "2.0", "CACHE": "on"}, assumptions=no_alpha)
+    assert r.changes == {"gamma": "2.0", "CACHE": "on"}
+    created = [e["branch"] for e in s.orch.events.read() if e["type"] == "branch_created"]
+    early = [b for b in created if (b.get("note") or "").startswith("confirm-combo (early)")]
+    assert early and all(b["knob_changes"] == {"gamma": "2.0", "CACHE": "on"} for b in early)
+    s2, [r2] = await search(tmp_path, {"gamma": "2.0", "CACHE": "on"}, assumptions=no_alpha, early_confirm=False)
+    assert r2.changes == r.changes  # the same answer either way on this task

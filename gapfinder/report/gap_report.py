@@ -402,6 +402,12 @@ class GapReport:
                            "literal ones were tried as patch knobs, structural ones are not tested):")
                 out += [f"  - `{x['file']}:{x['line']}`: paper says {x['paper_says']}; code does {x['code_does']}"
                         for x in diffs[:6]]
+            matched = r.diagnosis.get("matcher_leads") or []
+            if matched:  # found by name and value, no model call
+                out.append("- Code constants that differ from a value the paper states (matched by name; tried as "
+                           "patch knobs):")
+                out += [f"  - `{x['file']}:{x['line']}`: {x['detail'].split(';')[0]}; code has `{x['name']} = {x['value']}`"
+                        f' (paper: "{x["quote"][:120]}")' for x in matched[:6]]
             sets = r.value_sets and {k: v for k, v in r.value_sets.items() if len(v) > 1}
             if sets:
                 out.append("- Equally good values: " + "; ".join(f"`{k}` in {{{', '.join(v)}}}" for k, v in sets.items()))

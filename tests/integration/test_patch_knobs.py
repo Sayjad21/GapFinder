@@ -122,3 +122,28 @@ async def test_a_paper_to_trace_difference_leads_the_patch_round(tmp_path):
     from gapfinder.report.gap_report import GapReport
     md = GapReport.from_search(s, [r], paper="toy").to_markdown()
     assert "Where the code differs from the paper" in md and "bench.py:1" in md
+
+
+async def test_a_stated_value_with_no_knob_is_matched_to_the_code_literal(tmp_path):
+    """No model call: the ledger says the paper states a kernel lengthscale of 0.1, no knob has that name, and
+    model.py:2 holds `lengthscale = 0.01`. The matcher makes it a patch lead with the paper's value and quote."""
+    paper = _paper(tmp_path)
+    spec = HarnessSpec.load_yaml(SPEC)
+    spec.source = str(ART)
+    orch = Orchestrator(LocalBackend(tmp_path / "sbx"), spec, EventLog(tmp_path / "ev.jsonl"))
+    targets = [Target("C1", "score", paper["score"]), Target("C2", "aux", paper["aux"], held_out=True)]
+    from gapfinder.ledger.schemas import Evidence
+    a = Assumption(id="A1", knob="alpha", layer="config", paper_value="unstated", candidate_values=["2.0"],
+                   evidence=[], prior_score=0.5, status="unstated")
+    ls = Assumption(id="A2", knob="kernel lengthscale (RBF)", layer="config", paper_value="0.1", prior_score=0.4,
+                    evidence=[Evidence(kind="paper", ref="p.4", quote="We use a kernel length scale of 0.1")])
+    s = GapSearch(orch, targets, [a, ls], SearchConfig(max_runs=120))
+    [r] = await s.run()
+    knob = ast_patch.knob_name("model.py", 2, "lengthscale")
+    [lead] = r.diagnosis["matcher_leads"]
+    assert (lead["file"], lead["line"], lead["paper_value"]) == ("model.py", 2, "0.1")
+    first_patch = next(e["branch"]["knob_changes"] for e in orch.events.read()
+                       if e["type"] == "branch_created" and knob in e["branch"]["knob_changes"])
+    assert first_patch[knob] == "0.1"
+    assert r.changes == {knob: "0.1"}
+    assert any(e.kind == "paper" for e in s.assumptions[knob].evidence)  # the quote became paper evidence

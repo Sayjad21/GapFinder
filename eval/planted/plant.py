@@ -1,0 +1,245 @@
+"""Planted-cause benchmark on real repositories: measure a rate, not a case.
+
+    python eval/planted/plant.py make  --case vgae --n 3 --seed 1     # sample causes, run them, write tasks
+    python eval/planted/plant.py score                                 # score every searched task
+
+A task is a real dev-set repository (its built Sandboxes image and harness spec) with one hidden change:
+a flag set to another value, or a named numeric literal in the code patched in memory (the same hook the
+patch round uses; no file is edited). The "paper" numbers are the mean of `--repeats` runs with the change.
+GapFinder then searches with the case's spec and targets, no ledger and no paper (`--hypotheses repomap`),
+so it measures the search, the trace and the patch round on real code, not paper reading.
+
+Why: every case so far was scored after looking at it. Causes sampled here are drawn by a seeded random
+generator from a fixed distribution, before any search, so a rate over them is not shaped by the tool.
+Rules (docs/CONTEXT_v11.md section 7):
+- these tasks are measurement only: no change is judged on, or tuned to, a planted task;
+- answers go to eval/planted/sealed/ and are read only by `score`.
+
+Distribution: a cause is a flag with probability 1/2, else a literal. Numeric values are scaled by a factor
+drawn from {1/4, 1/2, 2, 4} (integers rounded, at least 1; a flag's `max` respected); a choice flag takes
+another choice. Literals: any named numeric literal (not 0 or +-1) in a file the patch hook can reach. A draw
+is kept if the target claim moves by more than 3 standard deviations of the unchanged runs (and 0.5% of its
+value); otherwise it is redrawn (`--tries`). The draws, kept and rejected, are all recorded.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import math
+import os
+import random
+import statistics
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+DEVSET = ROOT / "eval" / "external" / "devset"
+HERE = ROOT / "eval" / "planted"
+TASKS = HERE / "tasks"
+SEALED = HERE / "sealed"
+FACTORS = (0.25, 0.5, 2.0, 4.0)
+
+
+def _fmt(v: float, like: str) -> str:
+    if "." not in like and "e" not in like.lower():
+        return str(max(1, int(round(v))))
+    return f"{v:.6g}"
+
+
+def _num(s: str) -> float | None:
+    try:
+        return float(str(s).strip().strip("\"'"))
+    except ValueError:
+        return None
+
+
+def _bool(s: str) -> str | None:
+    x = str(s).strip().lower()
+    return {"true": "false", "false": "true", "1": "0", "0": "1"}.get(x)
+
+
+def candidates(spec, root: Path) -> tuple[list[tuple], list[tuple]]:
+    """(flag causes, literal causes) the generator draws from: (knob, default) pairs."""
+    from gapfinder.ingest.code_checks import named_literals
+    from gapfinder.sandbox import ast_patch
+
+    flags = [(k, kn) for k, kn in spec.knobs.items() if "seed" not in k.lower()]
+    lits = []
+    for x in named_literals(root):
+        v = _num(x.value)
+        if v is None or v in (0.0, 1.0, -1.0) or "seed" in x.name.lower():
+            continue
+        if ast_patch.entry_script(root / x.file) and not ast_patch.direct_entry(spec.run.command, x.file):
+            continue  # the hook can't reach it
+        lits.append((ast_patch.knob_name(x.file, x.line, x.name), x.value))
+    return flags, lits
+
+
+def draw(rng: random.Random, flags, lits) -> tuple[str, str, str] | None:
+    """(kind, knob, planted value)."""
+    if flags and (not lits or rng.random() < 0.5):
+        k, kn = rng.choice(flags)
+        if kn.choices:
+            others = [c for c in kn.choices if c != kn.default]
+            return ("flag", k, rng.choice(others)) if others else None
+        if (b := _bool(kn.default)) is not None and _num(kn.default) is None:
+            return "flag", k, b
+        v = _num(kn.default)
+        if v is None:
+            return None
+        if v == 0:
+            return "flag", k, rng.choice(["0.1", "0.5"]) if "." in kn.default else rng.choice(["1", "4"])
+        new = _fmt(v * rng.choice(FACTORS), kn.default)
+        if kn.max is not None and float(new) > kn.max:
+            new = _fmt(v * 0.5, kn.default)
+        return ("flag", k, new) if new != kn.default else None
+    if not lits:
+        return None
+    k, lit = rng.choice(lits)
+    new = _fmt(float(lit) * rng.choice(FACTORS), lit)
+    return ("literal", k, new) if _num(new) != _num(lit) else None
+
+
+async def make(case: str, n: int, seed: int, repeats: int, tries: int, concurrency: int) -> None:
+    from gapfinder.sandbox.backend import make_backend
+    from gapfinder.sandbox.events import EventLog
+    from gapfinder.sandbox.runner import Orchestrator
+    from gapfinder.sandbox.spec import HarnessSpec, Knob
+
+    d = DEVSET / case
+    spec = HarnessSpec.load_yaml(d / f"{case}.yaml")
+    root = spec.code_root()
+    if root is None:
+        sys.exit("set GF_DEV_SOURCE to the case's local checkout (its code is read for literals)")
+    targets = json.loads((d / "targets.json").read_text(encoding="utf-8"))
+    main = next(t for t in targets if not t.get("held_out"))
+    flags, lits = candidates(spec, root)
+    print(f"{case}: {len(flags)} flags, {len(lits)} reachable literals", flush=True)
+    rng = random.Random(f"{case}:{seed}")
+    work = HERE / "work" / f"{case}-s{seed}"
+    orch = Orchestrator(make_backend("contree"), spec, EventLog(work / "events.jsonl"), concurrency=concurrency)
+    base = await orch.fanout([{}] * repeats, [f"base-{i}" for i in range(repeats)])
+    ok = [b.parsed_metrics for b in base if b.status == "succeeded"]
+    if len(ok) < 2:
+        sys.exit(f"baseline failed: {[b.notes for b in base]}")
+    m = main["metric"]
+    mu0 = statistics.mean(x[m] for x in ok)
+    sd0 = statistics.stdev([x[m] for x in ok]) if len(ok) > 1 else 0.0
+    print(f"baseline {m}: {mu0:.4g} +- {sd0:.3g} over {len(ok)}", flush=True)
+    SEALED.mkdir(parents=True, exist_ok=True)
+    log = []
+    made = 0
+    for i in range(n * tries):
+        if made >= n:
+            break
+        c = draw(rng, flags, lits)
+        if c is None:
+            continue
+        kind, k, v = c
+        if kind == "literal":
+            spec.knobs.setdefault(k, Knob(layer="environment", default=dict(lits)[k], env=True))
+        runs = await orch.fanout([{k: v}] * repeats, [f"plant-{i}-{j}" for j in range(repeats)])
+        got = [b.parsed_metrics for b in runs if b.status == "succeeded" and m in b.parsed_metrics]
+        entry = {"kind": kind, "knob": k, "value": v, "ok_runs": len(got)}
+        if len(got) < 2:
+            entry["kept"] = False
+            entry["why"] = "runs failed"
+            log.append(entry)
+            continue
+        mu = statistics.mean(x[m] for x in got)
+        moved = abs(mu - mu0)
+        entry.update({"main": round(mu, 6), "moved": round(moved, 6),
+                      "kept": moved > max(3 * sd0, 0.005 * abs(mu0)) and math.isfinite(mu)})
+        log.append(entry)
+        print(f"draw {i}: {kind} {k}={v}: {m} {mu0:.4g} -> {mu:.4g} ({'kept' if entry['kept'] else 'no gap'})", flush=True)
+        if not entry["kept"]:
+            continue
+        made += 1
+        name = f"{case}-s{seed}-{made}"
+        t_dir = TASKS / name
+        t_dir.mkdir(parents=True, exist_ok=True)
+        dec = lambda x: len(str(x).split(".")[1]) if "." in str(x) else 0  # noqa: E731  the paper's precision
+        planted = []
+        for t in targets:
+            vals = [x[t["metric"]] for x in got if t["metric"] in x]
+            if vals:
+                planted.append({**t, "paper_value": round(statistics.mean(vals), max(dec(t["paper_value"]), 2))})
+        (t_dir / "targets.json").write_text(json.dumps(planted, indent=1), encoding="utf-8")
+        (t_dir / "task.json").write_text(json.dumps({"case": case, "seed": seed, "index": made}, indent=1), encoding="utf-8")
+        (SEALED / f"{name}.json").write_text(json.dumps({**entry, "baseline": round(mu0, 6), "baseline_sd": sd0},
+                                                         indent=1), encoding="utf-8")
+    (work / "draws.json").write_text(json.dumps(log, indent=1), encoding="utf-8")
+    print(f"{made} task(s) written to {TASKS}; draws in {work / 'draws.json'}", flush=True)
+
+
+def _same(a: str, b: str, rel: float = 0.1) -> bool:
+    x, y = _num(a), _num(b)
+    if x is not None and y is not None:
+        return abs(x - y) <= rel * max(abs(x), abs(y), 1e-12)
+    return str(a).strip().lower() == str(b).strip().lower()
+
+
+def _knob_matches(found: str, planted: str) -> bool:
+    from gapfinder.sandbox import ast_patch
+
+    if found == planted:
+        return True
+    if ast_patch.is_patch(found) and ast_patch.is_patch(planted):
+        (f1, _, n1), (f2, _, n2) = ast_patch.parse(found), ast_patch.parse(planted)
+        return f1 == f2 and n1 == n2
+    return False
+
+
+def score() -> None:
+    """correct: the answer sets the planted knob to its value (10%, or one of its equally good values);
+    confidently wrong: Explained or Paper-artifact inconsistency without it; missed: anything else."""
+    rows = []
+    for t_dir in sorted(TASKS.iterdir()) if TASKS.exists() else []:
+        rep = t_dir / "run" / "gap_report.json"
+        ans = SEALED / f"{t_dir.name}.json"
+        if not rep.exists() or not ans.exists():
+            continue
+        a = json.loads(ans.read_text(encoding="utf-8"))
+        r = json.loads(rep.read_text(encoding="utf-8"))
+        res = (r.get("results") or r.get("claims") or [{}])[0]
+        attr = res.get("attribution") or {}
+        label = attr.get("confidence_label") or "Reproduced"
+        changes = res.get("changes") or {}
+        sets = res.get("value_sets") or {}
+        hit = any(_knob_matches(k, a["knob"]) and (_same(v, a["value"]) or any(_same(s, a["value"]) for s in sets.get(k, [])))
+                  for k, v in changes.items())
+        verdict = ("correct" if hit and label not in ("Unexplained", "Inconclusive", "Reproduced") else
+                   "confidently wrong" if label in ("Explained", "Paper-artifact inconsistency") else "missed")
+        rows.append({"task": t_dir.name, "kind": a["kind"], "planted": f"{a['knob']}={a['value']}", "label": label,
+                     "found": changes, "verdict": verdict})
+    for x in rows:
+        print(f"{x['task']:24s} {x['kind']:8s} {x['verdict']:18s} {x['label']:30s} planted {x['planted']}  found {x['found']}")
+    if rows:
+        c = sum(x["verdict"] == "correct" for x in rows)
+        w = sum(x["verdict"] == "confidently wrong" for x in rows)
+        print(f"\n{c}/{len(rows)} correct, {w} confidently wrong")
+        (HERE / "scores.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="cmd", required=True)
+    pm = sub.add_parser("make")
+    pm.add_argument("--case", required=True)
+    pm.add_argument("--n", type=int, default=3)
+    pm.add_argument("--seed", type=int, default=1)
+    pm.add_argument("--repeats", type=int, default=3)
+    pm.add_argument("--tries", type=int, default=3, help="draws per kept task, at most")
+    pm.add_argument("--concurrency", type=int, default=6)
+    sub.add_parser("score")
+    a = p.parse_args()
+    if a.cmd == "make":
+        asyncio.run(make(a.case, a.n, a.seed, a.repeats, a.tries, a.concurrency))
+    else:
+        score()
+
+
+if __name__ == "__main__":
+    main()
