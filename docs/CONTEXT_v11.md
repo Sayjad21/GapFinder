@@ -356,6 +356,30 @@ the paper, causes in code structure, and measurement. Most of it is search tunin
 5. **Differential testing against a reference implementation** (TTrace and delta debugging; published).
 6. After each of 2-5: freeze, and run a fresh batch. Compare the rate.
 
+### 7.4 Progress on the plan (2026-10-18)
+
+Done, each with tests (full suite 279 passed):
+- **Item 1:** ledger lock (`57d6dce`).
+- **Item 2, both parts** (`7e46e31`):
+  - the appendix is read in its own assumption call and merged; a stated value beats "unstated";
+  - ledger names that match no knob are mapped by meaning, one Super call; only existing knob names are
+    accepted; skipped offline and in cache-only mode, so dev-suite runs are unaffected.
+- **Proposal 2C, early pair confirmation** (`7e46e31`): a pair that fits is confirmed in its own wave of 4-10
+  pairs, before later pairs are measured.
+- **Proposal 4, the constant matcher** (`7e46e31`, `gapfinder/search/matcher.py`). A deterministic, $0
+  companion to contrast. For each paper-stated value that has no knob:
+  - the value's number must appear in a verbatim paper quote;
+  - the code's named literals with the same core words are compared against it;
+  - a literal that differs becomes a patch lead carrying the paper's value and quote.
+- **Plumbing** (`fc3c1ce`): an entry script run after a `cd` (as in `cd pygcn && python train.py`) is now
+  found, so its literals can be patched. Found by reading, not by a measured case.
+- **Item 3, the planted-cause benchmark** (`eval/planted/plant.py`):
+  - a seeded generator draws one hidden flag value or literal on a dev-set repo and runs it in Sandboxes;
+  - the answer goes to `eval/planted/sealed/`; the search runs with `--hypotheses repomap`;
+  - `score` reports correct, missed and confidently wrong.
+  - Measurement only: no change is judged on these tasks.
+- **Regression check:** dev suite run 3800 at `7e46e31`, compared with run 3700.
+
 ## 8. Where things are
 
 | What | Where |
