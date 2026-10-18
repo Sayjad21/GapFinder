@@ -52,3 +52,12 @@ def test_entry_scripts_are_recognised(tmp_path):
     (tmp_path / "e.py").write_text("import argparse\na = argparse.ArgumentParser().parse_args()\n", encoding="utf-8")
     (tmp_path / "m.py").write_text("batch_size = 128\n", encoding="utf-8")
     assert ap.entry_script(tmp_path / "e.py") and not ap.entry_script(tmp_path / "m.py")
+
+
+def test_an_entry_script_run_after_cd_is_found_relative_to_the_repo():
+    from gapfinder.sandbox.ast_patch import direct_entry, wrap_command
+
+    c = 'mkdir -p out; cd pygcn && PYTHONPATH="/work" python train.py --no-cuda > ../out/run.log; cd ..; python bench.py'
+    assert direct_entry(c, "pygcn/train.py") and not direct_entry(c, "train.py") and direct_entry(c, "bench.py")
+    assert "python -m gf_patch_run train.py --no-cuda" in wrap_command(c, {"pygcn/train.py"})
+    assert "gf_patch_run bench.py" not in wrap_command(c, {"pygcn/train.py"})

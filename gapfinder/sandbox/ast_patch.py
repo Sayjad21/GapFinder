@@ -170,15 +170,35 @@ main()
 _PY_SCRIPT = re.compile(r'(?P<py>"?\$\{PYTHON:-python3?\}"?|\$PYTHON|\bpython3?(?:\.\d+)?)(?P<sp>\s+)(?P<script>[\w./-]+\.py)\b')
 
 
+_CD = re.compile(r"(?:^|[;&|(]\s*)cd\s+(?P<dir>[\w./$-]+)")
+
+
+def _script_rel(command: str, m: re.Match) -> str:
+    """The script's path from the repo root: `cd pygcn && python train.py` runs pygcn/train.py. Follows the
+    plain `cd <dir>` commands before it in the command string (a `$`-variable directory resets to the root)."""
+    cwd: list[str] = []
+    for c in _CD.finditer(command[: m.start()]):
+        d = c.group("dir")
+        if d.startswith(("/", "$", "~")):
+            cwd = []
+            continue
+        for part in d.split("/"):
+            if part == "..":
+                cwd = cwd[:-1]
+            elif part not in ("", "."):
+                cwd.append(part)
+    return "/".join(cwd + [x for x in m.group("script").split("/") if x not in ("", ".")])
+
+
 def direct_entry(command: str, rel: str) -> bool:
     """The run command invokes this script directly (python script.py), so the runner can patch it."""
-    return any(m.group("script").lstrip("./") == rel.lstrip("./") for m in _PY_SCRIPT.finditer(command))
+    return any(_script_rel(command, m) == rel.lstrip("./") for m in _PY_SCRIPT.finditer(command))
 
 
 def wrap_command(command: str, rels: set[str]) -> str:
     """Rewrite `python script.py ...` to `python -m gf_patch_run script.py ...` for patched entry scripts."""
     def sub(m):
-        if m.group("script").lstrip("./") in {r.lstrip("./") for r in rels}:
+        if _script_rel(command, m) in {r.lstrip("./") for r in rels}:
             return f"{m.group('py')} -m gf_patch_run{m.group('sp')}{m.group('script')}"
         return m.group(0)
     return _PY_SCRIPT.sub(sub, command)
