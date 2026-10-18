@@ -129,6 +129,8 @@ def patch_values(name: str, literal: str) -> list[str]:
     from gapfinder.sandbox.spec import Knob
 
     d = literal.strip()
+    if d in ("True", "False"):  # a switch has one other value
+        return ["False" if d == "True" else "True"]
     out: list[str] = []
     if re.fullmatch(r"\d+", d) and int(d) >= 2 and _SIZE_NAME.search(name):
         x = int(d)

@@ -32,6 +32,13 @@ _TRAIN = {"batch", "lr", "learning", "momentum", "decay", "l2", "lengthscale", "
 _EVAL = {"samples", "mc", "passes", "draws", "topk", "beam", "threshold"}
 _EXACT = {"T": 1, "K": 1}  # single-letter names used for sample counts
 _EVAL_CALLS = {"predict", "evaluate", "eval", "test", "score", "sample"}
+# keyword switches that only say how to run, never what is computed (left out of the switch leads)
+_HOW_TO_RUN = {"verbose", "inplace", "pin_memory", "non_blocking", "exist_ok", "keepdim", "keepdims", "parents",
+               "persistent_workers", "flush", "copy", "sort_keys", "ensure_ascii", "allow_pickle", "strict",
+               "requires_grad", "retain_graph", "create_graph", "save", "log", "show", "debug", "quiet", "force"}
+# names that hold ground truth (a prediction edited under a test on these uses the labels)
+_LABEL_NAMES = {"gt", "label", "labels", "y_true", "ytrue", "target", "targets", "truth", "ground_truth", "test_labels"}
+_PRED_NAMES = ("pred", "y_pred", "prediction", "predict", "yhat", "y_hat", "output", "detect")
 _SKIP_PREFIX = ("best_", "n_split", "num_split", "split_num")
 _SETTING_FILE_RE = re.compile(r"""['"]([\w./-]*?(\w+)\.(?:txt|json|ya?ml|cfg|ini))['"]""")
 
@@ -105,7 +112,18 @@ def _file_leads(path: Path, rel: str, flags: set[str], root: Path) -> list[Lead]
     flags = flags | _flag_dests(tree)
     out: list[Lead] = []
     parents = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+    # names passed on as a keyword (`DataLoader(..., drop_last=drop_last)`): a true/false assigned to one is a switch
+    passed = {kw.value.id for c in ast.walk(tree) if isinstance(c, ast.Call) for kw in c.keywords
+              if kw.arg and isinstance(kw.value, ast.Name)}
     for n in ast.walk(tree):
+        # drop_last = True (PatchTST's test loader, set under `if flag == 'test'` and passed to the DataLoader)
+        if (isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name)
+                and isinstance(n.value, ast.Constant) and isinstance(n.value.value, bool)
+                and n.targets[0].id in passed and n.targets[0].id not in flags
+                and n.targets[0].id.lower() not in _HOW_TO_RUN):
+            out.append(Lead("unexposed_setting", rel, n.lineno, src(n),
+                            f"`{n.targets[0].id} = {n.value.value}` is a switch passed on to a call; no flag sets it",
+                            1, name=n.targets[0].id, value=str(n.value.value)))
         # name = <number>
         if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
             name, v = n.targets[0].id, _number(n.value)
@@ -126,6 +144,14 @@ def _file_leads(path: Path, rel: str, flags: set[str], root: Path) -> list[Lead]
                     out.append(Lead("unexposed_setting", rel, n.lineno, src(n),
                                     f"`{cname}(..., {kw.arg}={v:g})`: fixed in {where}; no flag sets it",
                                     1 if where == "evaluation" else w, name=kw.arg, value=ast.unparse(kw.value)))
+            # f(..., drop_last=True): a true/false switch fixed in a call (PatchTST: the test loader's drop_last=True
+            # drops the last batch, so the test set is not the whole test set; the numbers-only leads missed it)
+            for kw in n.keywords:
+                if (kw.arg and kw.arg not in flags and kw.arg.lower() not in _HOW_TO_RUN
+                        and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, bool)):
+                    out.append(Lead("unexposed_setting", rel, n.lineno, src(n),
+                                    f"`{cname}(..., {kw.arg}={kw.value.value})`: a switch fixed in the call; no flag "
+                                    "sets it", 1, name=kw.arg, value=str(kw.value.value)))
             # np.random.seed(1), torch.manual_seed(0), random_state=42
             if cname in ("seed", "manual_seed", "set_seed") and n.args and _number(n.args[0]) is not None:
                 out.append(Lead("fixed_seed", rel, n.lineno, src(n), f"random seed fixed to {_number(n.args[0]):g}"))
@@ -143,6 +169,20 @@ def _file_leads(path: Path, rel: str, flags: set[str], root: Path) -> list[Lead]
                             if v is not None and 0 < v < 1:
                                 out.append(Lead("split_fraction", rel, n.lineno, src(n),
                                                 f"`{n.targets[0].id}` uses a fixed fraction {v:g}; no flag sets it"))
+        # predictions edited under a test on the ground truth: `if gt[i] == 1 and pred[i] == 1: ... pred[j] = 1`
+        # (point adjustment in time-series anomaly detection: a detected point marks its whole true segment as found,
+        # Kim et al. AAAI 2022). The label decides the prediction, so the score uses the answer.
+        if isinstance(n, ast.If):
+            test_names = {x.id.lower() for x in ast.walk(n.test) if isinstance(x, ast.Name)}
+            if test_names & _LABEL_NAMES:
+                edits = [t for s in ast.walk(n) if isinstance(s, ast.Assign) for t in s.targets
+                         if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name)
+                         and t.value.id.lower().startswith(_PRED_NAMES)]
+                if edits:
+                    out.append(Lead("label_in_prediction", rel, n.lineno, src(n),
+                                    f"`{edits[0].value.id}` is changed under a test on the ground truth "
+                                    f"({', '.join(sorted(test_names & _LABEL_NAMES))}): the score then uses the labels "
+                                    "(e.g. point adjustment)", 3, name="@if", value="False"))
         # selection: if <metric> > best_<metric>: best_x = ...
         if isinstance(n, ast.If) and isinstance(n.test, ast.Compare) and any(
                 isinstance(o, (ast.Gt, ast.Lt, ast.GtE, ast.LtE)) for o in n.test.ops):
@@ -164,7 +204,8 @@ def _file_leads(path: Path, rel: str, flags: set[str], root: Path) -> list[Lead]
                           + (": it scores on TEST data (leakage)" if on_test else
                              ": a tuning protocol the paper may describe differently (e.g. a different search, grid "
                              "or budget)"))
-                out.append(Lead("selection_in_code", rel, n.lineno, src(n), detail, 3 if on_test else 2))
+                out.append(Lead("selection_in_code", rel, n.lineno, src(n), detail, 3 if on_test else 2,
+                                name="@if" if on_test else "", value="True" if on_test else ""))
     # settings read from files: string literals naming a setting file
     seen = set()
     for m in _SETTING_FILE_RE.finditer(text):
@@ -225,6 +266,24 @@ def _default_leads(files: list[tuple[Path, str]]) -> list[Lead]:
     return out
 
 
+def _outermost_label_edits(leads: list[Lead], root: Path) -> list[Lead]:
+    """A label-edit if nested in another (point adjustment: the outer test and its inner loops) is one finding."""
+    spans: dict[str, list[tuple[int, int]]] = {}
+    for x in leads:
+        if x.family != "label_in_prediction":
+            continue
+        try:
+            tree = ast.parse((root / x.file).read_text(encoding="utf-8", errors="replace"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        for n in ast.walk(tree):
+            if isinstance(n, ast.If) and n.lineno == x.line:
+                spans.setdefault(x.file, []).append((n.lineno, getattr(n, "end_lineno", n.lineno)))
+    def inside(x: Lead) -> bool:
+        return any(a < x.line <= b for a, b in spans.get(x.file, []))
+    return [x for x in leads if not (x.family == "label_in_prediction" and inside(x))]
+
+
 def code_checks(root: str | Path, flags: set[str] | None = None, limit: int = 12) -> list[Lead]:
     """Leads for causes outside the exposed settings, best first. `flags`: knob names the harness sets."""
     root = Path(root)
@@ -238,6 +297,7 @@ def code_checks(root: str | Path, flags: set[str] | None = None, limit: int = 12
         files.append((p, rel))
         out += _file_leads(p, rel, norm, root)
     out += [x for x in _default_leads(files) if x.name not in norm]
+    out = _outermost_label_edits(out, root)
     seen, uniq = set(), []
     for lead in sorted(out, key=lambda x: (-x.weight, x.family != "selection_in_code", x.file, x.line)):
         key = (lead.file, lead.line, lead.family, lead.name)  # two defaults on one def line are two leads

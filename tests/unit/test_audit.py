@@ -57,3 +57,10 @@ def test_a_clean_reproduction_has_no_audit_section(tmp_path):
     naive = {"a_acc": 80.0, "a_f1": 70.1}
     a = audit(_search(tmp_path, naive, {m: 0.5 for m in naive}, targets), [])
     assert not any(a.values()) and audit_markdown(a) == []
+
+
+def test_a_paper_setting_a_prefixed_knob_covers_is_not_listed_as_untestable(tmp_path):
+    from gapfinder.search.audit import _settable
+
+    assert _settable("lr", {"gat_lr": 1, "gcn_lr": 1}) and _settable("dropout", {"gcn_dropout": 1})
+    assert not _settable("adjustment_strategy", {"gat_lr": 1, "anormly_ratio": 1})

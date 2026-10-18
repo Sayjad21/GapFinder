@@ -65,3 +65,38 @@ def test_a_parameter_default_no_call_overrides_is_a_lead(tmp_path):
     assert ("prep.py", 1, "test_percent", "30.0") in got and ("prep.py", 1, "val_percent", "20.0") in got
     assert not any(x.name == "scale" for x in leads)  # other() is called with it: not a hidden constant
     assert "test_percent=10.0" in apply_source((tmp_path / "prep.py").read_text(), 1, "test_percent", "10.")
+
+
+def test_switches_and_label_edits_are_leads(tmp_path):
+    from gapfinder.ingest.code_checks import code_checks
+
+    (tmp_path / "data.py").write_text(
+        "def loaders(ds, DataLoader):\n"
+        "    train = DataLoader(ds, batch_size=32, shuffle=True, pin_memory=True)\n"
+        "    test = DataLoader(ds, batch_size=32, shuffle=False, drop_last=True)\n"
+        "    return train, test\n", encoding="utf-8")
+    (tmp_path / "evaluate.py").write_text(
+        "def adjust(gt, pred):\n"
+        "    for i in range(len(gt)):\n"
+        "        if gt[i] == 1 and pred[i] == 1:\n"
+        "            for j in range(i, 0, -1):\n"
+        "                pred[j] = 1\n"
+        "    return pred\n", encoding="utf-8")
+    leads = code_checks(tmp_path, limit=50)
+    switches = {(x.line, x.name, x.value) for x in leads if x.family == "unexposed_setting" and x.value in ("True", "False")}
+    assert (3, "drop_last", "True") in switches and (2, "shuffle", "True") in switches
+    assert not any(n == "pin_memory" for _, n, _ in switches)  # how-to-run, not what is computed
+    [lab] = [x for x in leads if x.family == "label_in_prediction"]
+    assert (lab.file, lab.line, lab.name, lab.value) == ("evaluate.py", 3, "@if", "False")
+
+
+def test_a_switch_patch_value_is_its_opposite_and_an_if_patch_replaces_the_condition():
+    from gapfinder.sandbox.ast_patch import apply_source
+    from gapfinder.search.hypotheses import patch_values
+
+    assert patch_values("drop_last", "True") == ["False"] and patch_values("shuffle", "False") == ["True"]
+    src = "best = 0\nfor x in [3, 1, 2]:\n    if x > best:\n        best = x\n"
+    out = apply_source(src, 3, "@if", "True")
+    ns: dict = {}
+    exec(out, ns)
+    assert ns["best"] == 2  # the last value, not the best

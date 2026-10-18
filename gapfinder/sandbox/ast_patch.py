@@ -73,6 +73,15 @@ class _Swap(ast.NodeTransformer):
             self.done += 1
         return node
 
+    def visit_If(self, node):
+        # NAME "@if": the condition of the if statement on LINE becomes VALUE (True: always take the branch, e.g.
+        # keep the last evaluation instead of the best by test score; False: never, e.g. no label-based edits)
+        self.generic_visit(node)
+        if self.name == "@if" and node.lineno == self.line:
+            node.test = self._new(node.test)
+            self.done += 1
+        return node
+
     def visit_Call(self, node):
         self.generic_visit(node)
         if node.lineno == self.line:
@@ -110,7 +119,7 @@ def patch_tree(tree, entries):
         sw = _Swap(line, name, val)
         tree = sw.visit(tree)
         if not sw.done:
-            raise RuntimeError("GF_AST_PATCH: no literal %s on line %d" % (name, line))
+            raise RuntimeError("GF_AST_PATCH: no literal %s on line %d" % (name, line))  # or no if statement
     return ast.fix_missing_locations(tree)
 
 class _Loader(importlib.abc.Loader):

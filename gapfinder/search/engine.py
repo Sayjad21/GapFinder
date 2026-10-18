@@ -97,6 +97,13 @@ class SearchConfig:
     # with it, a deterministic matcher ($0, search/matcher.py): a setting the paper states, whose name matches no
     # knob, against the code's named literals with the same core words; a differing literal is a patch lead
     match_constants: bool = True
+    # protocol tests, after the claims (gapfinder/search/audit.py): code that selects its result by the test score,
+    # or edits predictions using the ground truth, is run once more with that logic switched off (an @if patch), so
+    # "the reported number depends on this protocol" is measured, not only pointed at. devbatch-2: NCF (best epoch
+    # by test HR) and Anomaly Transformer (point adjustment) reproduced their numbers, protocol included.
+    protocol_tests: bool = True
+    protocol_tests_max: int = 3
+    protocol_repeats: int = 3
     # also look for a code cause when the answer isn't confident (in space only through settings nothing
     # supports: devset VGAE fitted with hidden2=1600, while the paper states the 10%/5% edge split the code
     # changed): leads, contrast and the patch round run then too, and a patch replaces the answer only if better
@@ -405,6 +412,7 @@ class GapSearch:
         self._stated_skipped: set[str] = set()  # stated and matching the naive run: out of the first pass
         self._include_stated = False  # the fallback round brings them back
         self.audit_report: dict | None = None  # gapfinder/search/audit.py, after the claims
+        self.protocol_results: list[dict] = []  # protocol tests: a selection or label edit, switched off and measured
         self.trace_records: list[dict] = []  # the raw dry-run records (for the paper-to-trace contrast)
         self.paper_text = paper_text
         if self.cfg.coverage and self.spec.code_root() is not None:  # a local base, or the spec's `source`
@@ -612,6 +620,13 @@ class GapSearch:
         for t in self.targets:
             if not t.held_out:
                 results.append(await self.explain(t))
+        if self.cfg.protocol_tests:
+            try:
+                await self._protocol_tests()
+            except budget.BudgetExceeded:
+                raise
+            except Exception as exc:  # an aid: a failure leaves the claims' results as they are
+                self.orch.events.emit("note", msg=f"protocol tests: skipped ({type(exc).__name__}: {str(exc)[:160]})")
         # what a matching number doesn't show (devbatch-2: three reproduced targets, three silent reports)
         from gapfinder.search.audit import audit
         try:
@@ -620,6 +635,51 @@ class GapSearch:
             self.audit_report = None
             self.orch.events.emit("note", msg=f"audit: skipped ({type(exc).__name__}: {str(exc)[:160]})")
         return results
+
+    async def _protocol_tests(self) -> None:
+        """Each code lead that selects by the test score or edits predictions with the labels, switched off and
+        measured: every claim's naive value against its value without that logic, with a bootstrap interval."""
+        root = self.spec.code_root()
+        if root is None:
+            return
+        from gapfinder.ingest.code_checks import code_checks
+        from gapfinder.sandbox import ast_patch
+        from gapfinder.sandbox.spec import Knob
+
+        leads = [x for x in code_checks(root, set(self.spec.knobs), limit=80)
+                 if x.family in ("selection_in_code", "label_in_prediction") and x.name == "@if"
+                 and (not ast_patch.entry_script(root / x.file) or ast_patch.direct_entry(self.spec.run.command, x.file))]
+        leads = leads[: self.cfg.protocol_tests_max]
+        for x in leads:
+            k = ast_patch.knob_name(x.file, x.line, "@if")
+            self.spec.knobs.setdefault(k, Knob(layer="environment", default="as written", env=True))
+            try:
+                await self.measure({k: x.value}, self.cfg.protocol_repeats, "protocol test")
+            except RunBudgetExceeded as exc:
+                self.orch.events.emit("note", msg=f"protocol tests: run budget reached before {x.file}:{x.line} ({exc})")
+                break
+            claims = []
+            for t in self.targets:
+                if getattr(t, "relation", None) or t.metric not in self.bands:
+                    continue
+                v = self.value({k: x.value}, t.metric)
+                if v is None:
+                    continue
+                base = [b.parsed_metrics[t.metric] for b in self.measure_ok({}) if t.metric in b.parsed_metrics]
+                cand = [b.parsed_metrics[t.metric] for b in self.measure_ok({k: x.value}) if t.metric in b.parsed_metrics]
+                ci = bootstrap_diff_ci(base, cand, alpha=0.05) if len(base) >= 2 and len(cand) >= 2 else None
+                claims.append({"claim": t.claim_id, "metric": t.metric, "paper": t.paper_value,
+                               "naive": self.naive.get(t.metric), "without": v,
+                               "ci": list(ci) if ci else None, "held_out": t.held_out,
+                               "depends": bool(ci and (ci[0] > 0 or ci[1] < 0))})
+            runs = self.measure_ok({k: x.value})
+            self.protocol_results.append({"family": x.family, "file": x.file, "line": x.line, "code": x.code,
+                                          "detail": x.detail, "knob": k, "value": x.value, "runs": len(runs),
+                                          "claims": claims})
+            moved = [c for c in claims if c["depends"]]
+            self.orch.events.emit("note", msg=f"protocol test {x.file}:{x.line} ({x.family}) switched off: "
+                                              + ("; ".join(f"{c['metric']} {c['naive']:.4g} -> {c['without']:.4g}"
+                                                           for c in moved) if moved else "no claim moved beyond noise"))
 
     async def _map_names(self) -> None:
         """Map unmatched ledger names to the spec's knobs by meaning, then absorb those assumptions."""

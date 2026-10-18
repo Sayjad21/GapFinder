@@ -37,7 +37,9 @@ def comparable(a: str, b: str) -> bool:
 
 
 def audit(search, results) -> dict:
-    out: dict = {"held_out": [], "comparisons": [], "leakage": [], "stated_untestable": []}
+    out: dict = {"held_out": [], "comparisons": [], "leakage": [], "stated_untestable": [],
+                 "protocol_tests": list(getattr(search, "protocol_results", []) or [])}
+    tested = {(x["file"], x["line"]) for x in out["protocol_tests"]}
     targets = [t for t in search.targets if not getattr(t, "relation", None) and not math.isnan(t.paper_value)]
     naive = search.naive
     bands = search.bands
@@ -81,13 +83,16 @@ def audit(search, results) -> dict:
         except Exception:  # an aid: unreadable code leaves the audit without this part
             leads = []
         for x in leads:
-            if x.family == "selection_in_code" and "TEST data" in x.detail:
+            if ((x.family == "selection_in_code" and "TEST data" in x.detail) or x.family == "label_in_prediction") \
+                    and (x.file, x.line) not in tested:
                 out["leakage"].append({"file": x.file, "line": x.line, "code": x.code, "detail": x.detail})
 
     # 4. paper-stated settings this harness can't vary
     for a in sorted(getattr(search, "_unmapped_assumptions", []), key=lambda a: -a.prior_score):
         if a.knob not in search.unmapped or str(a.paper_value).strip().lower().startswith("unstated"):
             continue
+        if _settable(a.knob, search.spec.knobs):
+            continue  # a knob covers it under a longer name (`lr` -> `gat_lr`): it is variable, just not named so
         quote = next((e.quote for e in a.evidence if e.kind == "paper" and e.quote), None)
         if quote and a.prior_score >= 0.5:
             out["stated_untestable"].append({"setting": a.knob, "paper_value": a.paper_value, "quote": quote,
@@ -97,11 +102,30 @@ def audit(search, results) -> dict:
     return out
 
 
+def _settable(name: str, knobs) -> bool:
+    """Some knob's name holds every core word of `name` plus at most one more (`lr` ~ `gat_lr`, `dropout` ~
+    `gcn_dropout`): the setting is variable in this harness under another name."""
+    import re
+
+    from gapfinder.search.engine import _core
+
+    core = _core(re.sub(r"\s*\(.*$", "", name.strip()).replace(" ", "_"))
+    return bool(core) and any(core <= _core(k) and len(_core(k) - core) <= 1 for k in knobs)
+
+
 def audit_markdown(a: dict | None) -> list[str]:
     if not a or not any(a.values()):
         return []
     out = ["", "## Audit of the reproduction",
-           "What a matching number doesn't show. Static and descriptive: nothing below was tested."]
+           "What a matching number doesn't show. The protocol tests below were run; the rest is static."]
+    for x in a.get("protocol_tests") or []:
+        moved = [c for c in x["claims"] if c["depends"]]
+        what = ("**Measured: the reported numbers depend on this code**" if moved else
+                "Tested: switching this code off moved no claim beyond noise")
+        out.append(f"- {what}: `{x['file']}:{x['line']}` {x['detail']}; switched off ({x['runs']} runs):")
+        out += [f"  - {c['claim']} (`{c['metric']}`): paper {c['paper']:g}, as run {c['naive']:.4g}, without it "
+                f"{c['without']:.4g}" + (f" (difference 95% CI [{c['ci'][0]:+.3g}, {c['ci'][1]:+.3g}])" if c["ci"] else "")
+                for c in (moved or x["claims"])[:6]]
     if a["leakage"]:
         out.append("- **The code selects its result by the test score** (the reported number is then optimistic):")
         out += [f"  - `{x['file']}:{x['line']}`: {x['detail']}" for x in a["leakage"][:6]]
