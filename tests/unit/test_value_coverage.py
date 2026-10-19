@@ -75,3 +75,17 @@ def test_per_knob_cap_grows_with_budget_over_open_knobs():
     cap = lambda max_runs, n: GapSearch._per_knob_cap(SimpleNamespace(cfg=SearchConfig(max_runs=max_runs)), n)  # noqa: E731
     assert cap(None, 5) == 6 and cap(200, 30) == 6  # no budget, or many open knobs: the floor
     assert cap(200, 8) == 7 and cap(200, 2) == 10  # few open knobs: deeper, up to the ceiling
+
+
+def test_a_categorical_knobs_other_choices_are_candidates_in_repo_map_mode(tmp_path):
+    """Planted SparseTSF: `loss` (mse | mae) got no candidate values without a ledger, so loss=mae never ran."""
+    from gapfinder.sandbox.spec import HarnessSpec
+    from gapfinder.search.hypotheses import assumptions_from_spec
+
+    p = tmp_path / "s.yaml"
+    p.write_text("name: t\nbase: local:.\nrun:\n  command: 'python a.py --loss {loss} --mode {mode}'\n  output: stdout\n"
+                 "  format: kv\nknobs:\n  loss: {layer: config, default: mse, choices: [mse, mae]}\n"
+                 "  mode: {layer: config, default: a, choices: [a, b, c]}\nmetrics: [x]\n", encoding="utf-8")
+    asm, skipped = assumptions_from_spec(HarnessSpec.load_yaml(p))
+    assert skipped == []
+    assert {a.knob: a.candidate_values for a in asm} == {"loss": ["mae"], "mode": ["b", "c"]}

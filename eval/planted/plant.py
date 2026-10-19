@@ -37,6 +37,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEVSET = ROOT / "eval" / "external" / "devset"
+
+
+def case_dir(case: str) -> Path:
+    """A case's folder: the dev set's, or any external batch's (eval/external/<batch>/<case>/<case>.yaml)."""
+    d = DEVSET / case
+    if (d / f"{case}.yaml").exists():
+        return d
+    hits = sorted((ROOT / "eval" / "external").glob(f"*/{case}/{case}.yaml"))
+    if not hits:
+        sys.exit(f"no case folder with {case}.yaml under eval/external/")
+    return hits[0].parent
 HERE = ROOT / "eval" / "planted"
 TASKS = HERE / "tasks"
 SEALED = HERE / "sealed"
@@ -111,7 +122,7 @@ async def make(case: str, n: int, seed: int, repeats: int, tries: int, concurren
     from gapfinder.sandbox.runner import Orchestrator
     from gapfinder.sandbox.spec import HarnessSpec, Knob
 
-    d = DEVSET / case
+    d = case_dir(case)
     spec = HarnessSpec.load_yaml(d / f"{case}.yaml")
     root = spec.code_root()
     if root is None:
@@ -244,7 +255,7 @@ def search(task: str, code: Path, max_runs: int, concurrency: int) -> int:
 
     t_dir = TASKS / task
     case = json.loads((t_dir / "task.json").read_text(encoding="utf-8"))["case"]
-    spec = DEVSET / case / f"{case}.yaml"
+    spec = case_dir(case) / f"{case}.yaml"
     env = {**os.environ, "PYTHONPATH": str(code), "PYTHONIOENCODING": "utf-8"}
     cmd = [str(ROOT / ".venv" / "Scripts" / "python.exe") if os.name == "nt" else sys.executable, "-P", "-m", "gapfinder.cli",
            "search", "--spec", str(spec), "--targets", str(t_dir / "targets.json"), "--hypotheses", "repomap",

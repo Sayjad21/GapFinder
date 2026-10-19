@@ -208,6 +208,9 @@ def fill_choices(spec: HarnessSpec, flags) -> int:
 def knob_candidates(spec: HarnessSpec, knob: str) -> list[str]:
     k = spec.knobs[knob]
     out = [c for c in k.candidates if c != k.default]
+    # a categorical knob's other choices (planted SparseTSF: `loss` in {mse, mae} had no candidate values in repo-map
+    # mode, so loss=mae was never run; lradj and embed likewise)
+    out += [c for c in k.choices if c != k.default and c not in out]
     for v in generate_values(k.default):
         if v not in out and not any(_same_number(v, c) for c in out):
             out.append(v)
