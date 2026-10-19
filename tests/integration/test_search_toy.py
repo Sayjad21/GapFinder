@@ -550,3 +550,39 @@ async def test_a_stated_value_that_does_not_fit_is_said_in_the_notes(tmp_path):
     s, [r] = await search(tmp_path, {"alpha": "2.0"}, assumptions=[stated] + [a for a in ALL if a.knob == "beta"])
     assert r.changes.get("alpha") == "2.0"
     assert any("the paper states alpha = 1.0" in n and "likely not the one behind" in n for n in r.notes), r.notes
+
+
+async def test_a_refuted_stated_value_with_a_unique_fit_gets_its_own_label(tmp_path):
+    """The paper states alpha = 1.0, which the run refutes; alpha = 2.0 fits both claims and is the only island."""
+    from gapfinder.ledger.schemas import ConfidenceLabel, Evidence
+
+    stated = Assumption(id="A1", knob="alpha", layer="config", paper_value="1.0", candidate_values=["2.0"],
+                        prior_score=0.9, status="stated_matches",
+                        evidence=[Evidence(kind="paper", ref="p.3", quote="we set alpha = 1.0 in all experiments")])
+    s, [r] = await search(tmp_path, {"alpha": "2.0"}, assumptions=[stated] + [a for a in ALL if a.knob == "beta"])
+    assert r.changes.get("alpha") == "2.0"
+    assert r.attribution.confidence_label == ConfidenceLabel.stated_value_refuted.value, (r.attribution, r.notes)
+    assert any("alpha = 1.0" in n and "only island" in n for n in r.notes)
+
+
+async def test_with_one_claim_a_refuted_stated_value_stays_unsupported(tmp_path):
+    from gapfinder.ledger.schemas import ConfidenceLabel, Evidence
+
+    stated = Assumption(id="A1", knob="alpha", layer="config", paper_value="1.0", candidate_values=["2.0"],
+                        prior_score=0.9, status="stated_matches",
+                        evidence=[Evidence(kind="paper", ref="p.3", quote="we set alpha = 1.0 in all experiments")])
+    m = await paper(tmp_path, {"alpha": "2.0"})
+    s = GapSearch(orch(tmp_path), [Target("C1", "score", m["score"])], [stated] + [a for a in ALL if a.knob == "beta"],
+                  SearchConfig())
+    [r] = await s.run()
+    assert r.attribution is None or r.attribution.confidence_label != ConfidenceLabel.stated_value_refuted.value
+
+
+async def test_split_variance_is_measured_when_the_harness_has_a_split_seed(tmp_path):
+    """No split knob in the toy: nothing is measured, and the calibration is unchanged."""
+    m = await paper(tmp_path, {"alpha": "2.0"})
+    s = GapSearch(orch(tmp_path), targets(m), ALL, SearchConfig(max_runs=40))
+    await s.calibrate()
+    assert s.split_report == {}
+    branches = [e for e in s.orch.events.read() if e["type"] == "branch_created"]
+    assert not any((b["branch"].get("note") or "").startswith("noise (split)") for b in branches)

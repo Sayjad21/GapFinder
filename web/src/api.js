@@ -33,6 +33,7 @@ export const LABEL_CLASS = {
   Explained: "ok",
   "Paper-artifact inconsistency": "ok",
   "Fits but unsupported": "warn",
+  "Paper's stated value refuted; unique fit": "warn",
   "Partially explained": "warn",
   Unexplained: "muted",
   Reproduced: "muted",

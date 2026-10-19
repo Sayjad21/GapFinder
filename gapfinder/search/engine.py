@@ -38,6 +38,7 @@ _LABEL_RANK = {
     ConfidenceLabel.explained.value: 0,
     ConfidenceLabel.inconsistency.value: 0,
     ConfidenceLabel.fits_but_unsupported.value: 1,
+    ConfidenceLabel.stated_value_refuted.value: 1,
     ConfidenceLabel.partially_explained.value: 2,
     ConfidenceLabel.unexplained.value: 3,
 }
@@ -102,6 +103,11 @@ class SearchConfig:
     # "the reported number depends on this protocol" is measured, not only pointed at. devbatch-2: NCF (best epoch
     # by test HR) and Anomaly Transformer (point adjustment) reproduced their numbers, protocol included.
     protocol_tests: bool = True
+    # split variance (Bouthillier et al., MLSys 2021): when the harness has a split or fold seed knob, two more naive
+    # runs at other split seeds measure how much the split moves each claim. Reported always; added to the noise
+    # band only with split_noise (right when the paper uses random splits, wrong for a fixed split such as Planetoid)
+    split_variance: bool = True
+    split_noise: bool = False
     protocol_tests_max: int = 3
     protocol_repeats: int = 3
     # also look for a code cause when the answer isn't confident (in space only through settings nothing
@@ -426,7 +432,8 @@ class GapSearch:
         self._stated_skipped: set[str] = set()  # stated and matching the naive run: out of the first pass
         self._include_stated = False  # the fallback round brings them back
         self.audit_report: dict | None = None  # gapfinder/search/audit.py, after the claims
-        self.protocol_results: list[dict] = []  # protocol tests: a selection or label edit, switched off and measured
+        self.protocol_results: list[dict] = []
+        self.split_report: dict[str, dict] = {}  # claim -> noise band across seeds, and across seeds and splits  # protocol tests: a selection or label edit, switched off and measured
         self.trace_records: list[dict] = []  # the raw dry-run records (for the paper-to-trace contrast)
         self.paper_text = paper_text
         if self.cfg.coverage and self.spec.code_root() is not None:  # a local base, or the spec's `source`
@@ -549,7 +556,10 @@ class GapSearch:
         own = noise_band(t.metric, vals, floor_frac=self.cfg.noise_floor_frac).band / abs(t.paper_value)
         if self.setup_check and self.setup_check["reproducible"] is False:
             return max(own, self.band(t))  # its repeats share one setup; setups themselves vary this much
-        return own
+        # a precise candidate is judged by its own (narrower) band; a noisy one never gets a wider band than the
+        # naive run's, or a scattered configuration could "close" the gap by its spread alone (planted pygcn
+        # hidden=4: runs from 56 to 76; GapBench test-v11-01: max_steps=2000 with a spread of 147)
+        return min(own, self.band(t))
 
     def effect_ci(self, t: Target, changes: Changes) -> tuple[float, float] | None:
         """Bootstrap interval for (candidate - naive) on the target metric, from runs already made."""
@@ -602,6 +612,46 @@ class GapSearch:
             nb = noise_band(t.metric, vals, floor_frac=self.cfg.noise_floor_frac)
             self.bands[t.metric], self.naive[t.metric] = nb, nb.median
             self.orch.events.emit("noise_band", **nb.to_dict())
+        if self.cfg.split_variance:
+            await self._split_variance(runs)
+
+    async def _split_variance(self, runs: list[Branch]) -> None:
+        """Two naive runs at other values of the harness's split or fold seed knob (by name or traced role): the
+        claims' spread across splits, against their spread across seeds alone."""
+        knob = next((k for k, kn in self.spec.knobs.items()
+                     if re.search(r"(?i)(split|fold|data|partition)_?(seed|idx|index|id)?$|^fold$|^split$", k)
+                     and _NUM.fullmatch(str(kn.default).strip() or "x")), None)
+        if knob is None:
+            return
+        d = int(float(self.spec.knobs[knob].default))
+        others = [{knob: str(d + 1)}, {knob: str(d + 2)}]
+        try:
+            extra = [b for c in others for b in await self.measure(c, 1, "noise (split)")]
+        except (RunBudgetExceeded, budget.BudgetExceeded):
+            return
+        self.split_report = {}
+        for t in self.targets:
+            seed_vals = [b.parsed_metrics[t.metric] for b in runs if t.metric in b.parsed_metrics]
+            split_vals = seed_vals + [b.parsed_metrics[t.metric] for b in extra
+                                      if b.status == BranchStatus.succeeded and t.metric in b.parsed_metrics]
+            if len(split_vals) <= len(seed_vals):
+                continue
+            # a plain spread, not the median-based band: two split runs among five seed runs are exactly what a
+            # robust estimator discounts
+            seed_band = self.bands[t.metric].band
+            both = max(seed_band, 2 * statistics.pstdev(split_vals))
+            self.split_report[t.claim_id] = {"seed_band": seed_band, "seed_and_split_band": both}
+            if self.cfg.split_noise and both > seed_band:
+                nb = self.bands[t.metric]
+                self.bands[t.metric] = NoiseBand(**{**nb.to_dict(), "band": both})
+        widest = max(self.split_report.items(), key=lambda kv: kv[1]["seed_and_split_band"] / max(kv[1]["seed_band"], 1e-12),
+                     default=None)
+        if widest:
+            cid, r = widest
+            self.orch.events.emit("note", msg=f"split variance ({knob} at {d + 1}, {d + 2}): {cid}'s band is "
+                                              f"{r['seed_band']:.3g} across seeds, {r['seed_and_split_band']:.3g} with "
+                                              "the split varied too" + (" (used)" if self.cfg.split_noise else
+                                                                         " (reported only)"))
 
     def _check_setups(self, runs: list[Branch], k: int) -> None:
         parents = {b.parent_checkpoint for b in runs}
@@ -692,6 +742,49 @@ class GapSearch:
         if not self.cfg.race_budget_frac or not self.cfg.max_runs:
             return 0
         return max(self.cfg.race_min, int(self.cfg.max_runs * self.cfg.race_budget_frac / (2 + extra)))
+
+    def _refuted_label(self, t: Target, res: ClaimResult) -> None:
+        """"Fits but unsupported" becomes "Paper's stated value refuted; unique fit" only when every one holds:
+        - the search finished, and every knob with candidate values was screened;
+        - the answer closes the target, passes the counterfactual, and fits every claim (at least two, none of
+          them tuned separately) jointly in history matching;
+        - history matching finds a single island of fits (no other explanation);
+        - for a changed knob, the paper states another value, and that value was run and is implausible (> 3)."""
+        a = res.attribution
+        if a is None or a.confidence_label != ConfidenceLabel.fits_but_unsupported.value or res.status == "partial":
+            return
+        if not self.closes(t, res.changes) or a.counterfactual_ok is not True:
+            return
+        claims = [t] + [h for h in self.targets if h.held_out and not getattr(h, "tuned_separately", False)
+                        and not getattr(h, "relation", None) and h.metric in self.bands]
+        if len(claims) < 2:
+            return
+        d = res.diagnosis or {}
+        joint = d.get("joint") or []
+        if len(d.get("islands") or []) != 1:
+            return
+        if not any(j["config"] == res.changes and max(j["I"].values()) <= 2 for j in joint):
+            return
+        knobs_with_values = {h.knob for h in self.hypotheses()}
+        screened = {next(iter(k))[0] for k in self._runs if len(k) == 1 and self.measure_ok(dict(k))}
+        if knobs_with_values - screened:
+            return
+        refuted = []
+        for k, v in res.changes.items():
+            for sv in self._stated_values(k):
+                m = _NUM.search(str(sv))
+                if m is None or _same_value(m.group(0), v):
+                    continue
+                at = {} if _same_value(m.group(0), self.spec.knobs[k].default) else {k: m.group(0)}
+                worst = [self.implausibility(c, at) for c in claims]
+                if all(x is not None for x in worst) and max(worst) > 3:
+                    refuted.append(f"{k} = {m.group(0)} (implausibility {max(worst):.1f})")
+        if not refuted:
+            return
+        res.attribution = a.model_copy(update={"confidence_label": ConfidenceLabel.stated_value_refuted.value})
+        res.notes.append("labelled Paper's stated value refuted; unique fit: the paper's " + "; ".join(refuted)
+                         + f" was run and doesn't fit the claims, while {dict(res.changes)} fits all "
+                         f"{len(claims)} and is the only island of fits")
 
     def _stated_value_notes(self, res: ClaimResult) -> None:
         """When the answer changes a knob whose value the paper states, and the stated value itself was run and
@@ -957,6 +1050,7 @@ class GapSearch:
                     await self._patch_round(t, res)
                 except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
                     res.notes.append(f"patch round stopped early: {exc}")
+        self._refuted_label(t, res)
         if res.attribution is not None:
             res.attribution.hypotheses_tested = len(tried)
         self._stated_value_notes(res)

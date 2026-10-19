@@ -125,6 +125,10 @@ class ConfidenceLabel(str, Enum):
     explained = "Explained"
     partially_explained = "Partially explained"
     fits_but_unsupported = "Fits but unsupported"
+    # the paper states a value for the knob; that value was run and doesn't fit; the answer fits every claim and is
+    # the only island of fits (batch-3 Fair Clustering: the paper's lambda = 10 against the authors' real 100).
+    # Backed by measurements, not by the paper, so it is not a confident label
+    stated_value_refuted = "Paper's stated value refuted; unique fit"
     unexplained = "Unexplained"
     inconsistency = "Paper-artifact inconsistency"
     inconclusive = "Inconclusive"  # within noise, but the noise is too wide to tell values apart
