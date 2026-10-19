@@ -503,7 +503,47 @@ Fixed after it (`bae25f4`, tag `batch-4`; 300 tests):
 - one flag split into several knobs maps as a family;
 - a stated value that was run and doesn't fit is said in the notes.
 
-Next: a sealed batch-4 on that code.
+### 7.7 batch-4 and after (tag `batch-4` = `bae25f4`; `eval/external/batch4/`)
+
+- **b4a, RippleNet (CIKM 2018): partial.** GapFinder named `lr = 0.001`, correct; it missed `l2_weight = 1e-5`.
+  Three reasons:
+  - confirmation used 96 of 150 runs, and the combine round got none;
+  - the paper's table gives the value as the symbol λ1 = 10⁻⁵;
+  - the repo keeps the settings in a commented-out block.
+  The first batch-4 sealer found no usable paper in 90 minutes.
+- **Planted causes on the multi-claim batch-3 harnesses: 6 of 8 correct, 0 confidently wrong** (pygcn, with one
+  claim: 3 of 11). Both misses were `loss = mae`, which never ran: a categorical knob's choices weren't
+  candidates without a ledger. Fixed (`2aca860`).
+- **Sealed blind real papers so far:**
+
+  | Paper | Result |
+  |---|---|
+  | FastGCN | missed |
+  | GraphMAE | confidently wrong (before the confidence cap) |
+  | Variational Fair Clustering | correct |
+  | SparseTSF | missed |
+  | RippleNet | partial |
+
+Fixed after it (none judged on the papers that revealed it):
+- **The race cap** (`bc1814a`): at most a quarter of max_runs goes to the race's first stage (successive halving).
+- **The repo's alternative settings** (`bc1814a`): a second declaration of a flag block (a commented-out argparse
+  block) is tried as one configuration.
+- **Flag help text** (`bc1814a`): the repo map shows each flag's help, and the assumption prompt maps a paper's
+  symbols to flags. The demo cache was refreshed ($0.16).
+- **The paper's own comparisons** (`a811e7d`): ratio claims from the ledger ("we improve upon GCN by 1.6% on
+  Citeseer") are matched to the two measured claims and checked for sign and size.
+- **Long cells** (`c199c95`): `run.shards` (independent jobs in parallel VMs, outputs joined) and `run.segments`
+  (resumable training, piece by piece from checkpoints).
+  - The 3600 s cap is the platform's: it rejects a longer timeout.
+  - GapFinder's own limits are `--max-runs` and the CPU guard `GF_SANDBOX_CPU_LIMIT_S`.
+- **The README command parser** (`7a1e0dd`): prose after the command is dropped, and a `cd` on the line before is
+  kept.
+- **Regression check:** dev suite run 3900 at `bc1814a` against run 3800: 51 → 53 of 69, 0 confidently wrong.
+
+Billed: $31.69.
+
+Next: a sealed batch on this code. Sealers find usable papers slowly (about 1 per 3 hours); GitHub issue threads
+in which the authors confirm a setting worked best.
 
 ## 8. Where things are
 
