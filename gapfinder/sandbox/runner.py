@@ -147,7 +147,7 @@ class Orchestrator:
         self.events.emit("branch_created", branch=branch.model_dump())
         self.events.emit("branch_started", id=bid)
         try:
-            res = await self._exec(parent, cmd, {**env, "RUN_TAG": run_tag}, self.spec.run.timeout, files=files)
+            res = await self._run_cell(parent, cmd, {**env, "RUN_TAG": run_tag}, files)
         except InfraError as exc:
             branch.status, branch.note = BranchStatus.infra_error, _note(label, str(exc))
             self.events.emit("branch_finished", branch=branch.model_dump())
@@ -160,11 +160,14 @@ class Orchestrator:
             branch.status, branch.note = BranchStatus.failed, _note(label, (res.stderr or res.stdout)[-1500:])
         else:
             raw = res.stdout
-            if self.spec.run.output != "stdout" and res.checkpoint:
-                try:
-                    raw = (await self.backend.read_file(res.checkpoint, self.spec.run.output)).decode(errors="replace")
-                except FileNotFoundError:
-                    raw = ""
+            if self.spec.run.output != "stdout":
+                parts = []
+                for ck in getattr(res, "piece_checkpoints", None) or ([res.checkpoint] if res.checkpoint else []):
+                    try:
+                        parts.append((await self.backend.read_file(ck, self.spec.run.output)).decode(errors="replace"))
+                    except FileNotFoundError:
+                        pass
+                raw = "\n".join(parts)
             try:
                 metrics = ground_values(parse_metrics(raw, self.spec.run.format), raw)
             except UngroundedValueError as exc:
@@ -201,6 +204,46 @@ class Orchestrator:
             return []
         self.cost.add_run(res.resources.cost_usd)
         return trace_hook.parse_output(res.stdout)
+
+    async def _run_cell(self, parent: str, cmd: str, env: dict, files: dict | None) -> RunResult:
+        """One cell, as one operation or split into pieces (RunStage.shards in parallel, .segments in sequence):
+        a Sandboxes operation is capped at 3600 s, so a longer experiment is run in pieces under that cap."""
+        run = self.spec.run
+        shards = run.shards or [None]
+        if shards == [None] and run.segments <= 1:
+            return await self._exec(parent, cmd, env, run.timeout, files=files)
+
+        async def chain(shard):
+            c = cmd if shard is None else cmd.replace("{shard}", str(shard))
+            at, outs, errs, pieces, stats = parent, [], [], [], []
+            last = None
+            for i in range(1, max(1, run.segments) + 1):
+                last = await self._exec(at, c.replace("{segment}", str(i)), {**env, "GF_SHARD": str(shard or ""),
+                                        "GF_SEGMENT": str(i)}, run.timeout, files=files if i == 1 else None)
+                outs.append(last.stdout or "")
+                errs.append(last.stderr or "")
+                stats.append(last.resources)
+                if last.exit_code != 0 or last.timed_out or not last.checkpoint:
+                    break
+                at = last.checkpoint
+                pieces.append(last.checkpoint)
+            return last, outs, errs, pieces, stats
+
+        done = await asyncio.gather(*(chain(s) for s in shards))
+        from gapfinder.ledger.schemas import ResourceStats
+
+        stats = [x for d in done for x in d[4]]
+        failed = next((d[0] for d in done if d[0].exit_code != 0 or d[0].timed_out), None)
+        merged = RunResult(
+            parent=parent, checkpoint=done[0][0].checkpoint, exit_code=failed.exit_code if failed else 0,
+            stdout="\n".join(o for d in done for o in d[1]), stderr="\n".join(e for d in done for e in d[2]),
+            timed_out=bool(failed and failed.timed_out),
+            resources=ResourceStats(
+                elapsed_s=max((sum(x.elapsed_s for x in d[4]) for d in done), default=0.0),  # wall: the longest chain
+                user_cpu_s=sum(x.user_cpu_s for x in stats), system_cpu_s=sum(x.system_cpu_s for x in stats),
+                max_rss_kb=max((x.max_rss_kb for x in stats), default=0), cost_usd=sum(x.cost_usd for x in stats)))
+        merged.piece_checkpoints = [d[3][-1] for d in done if d[3]]  # each shard's last piece: its output files
+        return merged
 
     async def fanout(self, change_sets: list[dict[str, str]], labels: list[str] | None = None,
                      fresh_setup: bool = False) -> list[Branch]:

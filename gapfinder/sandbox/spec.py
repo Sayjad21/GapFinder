@@ -42,6 +42,13 @@ class RunStage(Stage):
     output: str = "stdout"
     format: str = "auto"
     timeout: float = 600
+    # A Sandboxes operation runs at most 3600 s, so a longer cell is split (the timeout is per piece):
+    # - shards: a cell made of independent jobs (datasets x horizons, folds, seeds). Each value replaces {shard} in
+    #   the command and runs in its own VM, in parallel; the outputs are joined and parsed as one run.
+    # - segments: training that resumes from files on disk. The command runs `segments` times in sequence, {segment}
+    #   = 1, 2, ..., each from the previous one's checkpoint; the joined outputs are parsed.
+    shards: list[str] = Field(default_factory=list)
+    segments: int = 1
 
 
 class Knob(BaseModel):
@@ -91,7 +98,7 @@ class HarnessSpec(BaseModel):
             if stage is None:
                 continue
             for field in _placeholders(stage.command):
-                if field not in self.knobs:
+                if field not in self.knobs and not (stage_name == "run" and field in RESERVED):
                     raise ValueError(f"{stage_name} command uses unknown knob {{{field}}}")
         return self
 
@@ -129,12 +136,16 @@ class HarnessSpec(BaseModel):
         vals = self.values(changes)
         cmd_vals = {k: _shell_safe(v) for k, v in vals.items() if not self.knobs[k].env}
         env = {k: v for k, v in vals.items() if self.knobs[k].env}
-        cmd = _PLACEHOLDER.sub(lambda m: cmd_vals.get(m.group(1), ""), stage.command)
+        # {shard} and {segment} are filled per piece by the runner (RunStage.shards / .segments)
+        cmd = _PLACEHOLDER.sub(lambda m: m.group(0) if m.group(1) in RESERVED and m.group(1) not in cmd_vals
+                               else cmd_vals.get(m.group(1), ""), stage.command)
         return cmd, env
 
     def changes_for_layers(self, changes: dict[str, str], layers: set[str]) -> dict[str, str]:
         return {k: v for k, v in changes.items() if self.knobs[k].layer in layers}
 
+
+RESERVED = {"shard", "segment"}  # run-command placeholders the runner fills, not knobs
 
 # `{knob}` placeholders; `${VAR}` shell expansions are left alone.
 _PLACEHOLDER = re.compile(r"(?<!\$)\{(\w+)\}")
