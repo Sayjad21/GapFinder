@@ -104,6 +104,9 @@ async def build_assumption_space(router: Router, paper: PaperText, rm: RepoMap, 
     tables = [t for t in hyperparameter_tables(paper.full_text) if t[:120] not in setup]
     if tables:
         setup += "\n\n## Hyperparameter tables found elsewhere in the paper\n" + "\n\n".join(tables)
+    supplement = getattr(paper, "supplement", "")
+    if supplement:  # the same tables from the LaTeX source: symbols and cells exactly as the authors wrote them
+        setup += "\n\n" + supplement[:12_000]
     prompt = ASSUMPTION_PROMPT.format(
         claims="\n".join(f"{c.id}: {c.metric} = {c.reported_value} {c.unit or ''} ({c.figure_or_table}) {c.conditions}" for c in claims),
         setup=setup,

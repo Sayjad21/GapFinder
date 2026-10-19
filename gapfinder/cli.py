@@ -57,6 +57,14 @@ async def cmd_ledger(args) -> int:
 
     out = Path(args.out)
     paper = load_paper(args.paper, figure_dir=out / "figures")
+    if not args.no_source:  # the arXiv LaTeX source: tables with exact symbols, and figure data drawn in it
+        from gapfinder.ingest import arxiv_source
+
+        aid = args.arxiv or arxiv_source.detect_arxiv_id(paper.full_text, Path(args.paper).name)
+        src = arxiv_source.fetch_source(aid, settings().cache_dir / "arxiv") if aid else None
+        paper.supplement = arxiv_source.supplement(src) if src else ""
+        print(f"arXiv source: {aid or 'no id found'}; " + (f"{paper.supplement.count('Table:')} table(s), "
+              f"{paper.supplement.count('Figure data:')} figure(s) with data" if paper.supplement else "none used"))
     repo_root = clone_or_path(args.repo, settings().cache_dir / "repos")
     rm = build_repo_map(repo_root)
     _write(out / "repo_map.json", rm.to_dict())
@@ -373,6 +381,8 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--repo", required=True)
     pl.add_argument("--out", default="runs/ledger")
     pl.add_argument("--no-cache", action="store_true")
+    pl.add_argument("--arxiv", help="the paper's arXiv id, for its LaTeX source (default: detected from the PDF)")
+    pl.add_argument("--no-source", action="store_true", help="don't fetch the arXiv LaTeX source")
 
     pr = sub.add_parser("repomap", help="print the repo map (no LLM)")
     pr.add_argument("path")

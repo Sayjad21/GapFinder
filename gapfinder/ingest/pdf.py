@@ -30,10 +30,13 @@ class PaperText:
     path: Path
     pages: list[Page]
     figures: list[FigureCrop] = field(default_factory=list)
+    # tables and figure data from the arXiv LaTeX source (gapfinder/ingest/arxiv_source.py), appended to the text
+    supplement: str = ""
 
     @property
     def full_text(self) -> str:
-        return "\n".join(f"[[page {p.number}]]\n{p.text}" for p in self.pages)
+        text = "\n".join(f"[[page {p.number}]]\n{p.text}" for p in self.pages)
+        return text + (f"\n[[source]]\n{self.supplement}" if self.supplement else "")
 
     def section(self, heading_regex: str, max_chars: int = 30000) -> str:
         """Text from the first heading matching `heading_regex` onward, capped."""
