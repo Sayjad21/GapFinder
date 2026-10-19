@@ -247,6 +247,7 @@ def _file_leads(path: Path, rel: str, flags: set[str], root: Path) -> list[Lead]
                              "or budget)"))
                 out.append(Lead("selection_in_code", rel, n.lineno, src(n), detail, 3 if on_test else 2,
                                 name="@if" if on_test else "", value="True" if on_test else ""))
+    out += _leakage_leads(tree, rel, src)
     # settings read from files: string literals naming a setting file
     seen = set()
     for m in _SETTING_FILE_RE.finditer(text):
@@ -323,6 +324,74 @@ def _outermost_label_edits(leads: list[Lead], root: Path) -> list[Lead]:
     def inside(x: Lead) -> bool:
         return any(a < x.line <= b for a, b in spans.get(x.file, []))
     return [x for x in leads if not (x.family == "label_in_prediction" and inside(x))]
+
+
+# preprocessing that learns from data (fit / fit_transform): fitting it on test data, or on all the data before the
+# train/test split, leaks the test set into the model (Yang et al., "Data Leakage in Notebooks: Static Detection and
+# Better Processes", ASE 2022: preprocessing leakage)
+_LEARNED_PREPROC = {"StandardScaler", "MinMaxScaler", "MaxAbsScaler", "RobustScaler", "Normalizer", "QuantileTransformer",
+                    "PowerTransformer", "SimpleImputer", "KNNImputer", "IterativeImputer", "PCA", "TruncatedSVD",
+                    "KernelPCA", "TfidfVectorizer", "CountVectorizer", "HashingVectorizer", "OneHotEncoder",
+                    "OrdinalEncoder", "LabelEncoder", "SelectKBest", "SelectPercentile", "VarianceThreshold", "RFE",
+                    "KBinsDiscretizer", "PolynomialFeatures", "Word2Vec", "TfidfTransformer"}
+_SPLITTERS = {"train_test_split", "split", "random_split", "KFold", "StratifiedKFold"}
+
+
+def _names_in(node) -> set[str]:
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+
+def _leakage_leads(tree, rel: str, src) -> list[Lead]:
+    """Preprocessing leakage, by a data-flow pass over each scope in source order:
+    - an object built from a learned preprocessing class is fitted on a name that holds test data (named like test,
+      or a test output of a train/test split); or
+    - it is fitted on a name that is split into train and test *after* the fit (the fit saw the test part)."""
+    out: list[Lead] = []
+    scopes = [tree] + [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    for scope in scopes:
+        body = [n for n in ast.walk(scope) if not (n is not scope and isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))]
+        prep: set[str] = set()   # names bound to a learned preprocessing object
+        test: set[str] = set()   # names holding test data
+        fits: list[tuple[int, str, ast.AST]] = []  # (line, data name, node) of each fit on a plain name
+        splits: list[tuple[int, set[str]]] = []    # (line, names that are split there)
+        for n in sorted((x for x in body if hasattr(x, "lineno")), key=lambda x: (x.lineno, x.col_offset)):
+            if isinstance(n, ast.Assign):
+                call = n.value if isinstance(n.value, ast.Call) else None
+                cname = _call_name(call) if call is not None else ""
+                if cname in _LEARNED_PREPROC:
+                    prep |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+                if cname in _SPLITTERS and call is not None:
+                    splits.append((n.lineno, set().union(*(_names_in(a) for a in call.args)) if call.args else set()))
+                    tgt = n.targets[0]
+                    if cname == "train_test_split" and isinstance(tgt, (ast.Tuple, ast.List)):
+                        elts = [e.id for e in tgt.elts if isinstance(e, ast.Name)]
+                        test |= {e for i, e in enumerate(elts) if i % 2 == 1}  # X_tr, X_te, y_tr, y_te
+                for t in n.targets:
+                    for e in (t.elts if isinstance(t, (ast.Tuple, ast.List)) else [t]):
+                        if isinstance(e, ast.Name) and "test" in e.id.lower():
+                            test.add(e.id)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in ("fit", "fit_transform"):
+                obj = n.func.value
+                is_prep = (isinstance(obj, ast.Name) and obj.id in prep) or (
+                    isinstance(obj, ast.Call) and _call_name(obj) in _LEARNED_PREPROC)
+                if is_prep and n.args and isinstance(n.args[0], ast.Name):
+                    fits.append((n.lineno, n.args[0].id, n))
+        for line, name, node in fits:
+            if name in test:
+                out.append(Lead("preprocessing_leakage", rel, line, src(node),
+                                f"a learned preprocessing step is fitted on test data (`{name}`): the test set shapes "
+                                "the features the model sees (Yang et al., ASE 2022)", 3))
+            elif any(sl > line and name in names for sl, names in splits):
+                at = next(sl for sl, names in splits if sl > line and name in names)
+                out.append(Lead("preprocessing_leakage", rel, line, src(node),
+                                f"a learned preprocessing step is fitted on `{name}` before it is split into train and "
+                                f"test (line {at}): the fit saw the test part (Yang et al., ASE 2022)", 3))
+    seen, uniq = set(), []
+    for x in out:
+        if (x.file, x.line) not in seen:
+            seen.add((x.file, x.line))
+            uniq.append(x)
+    return uniq
 
 
 def code_checks(root: str | Path, flags: set[str] | None = None, limit: int = 12) -> list[Lead]:

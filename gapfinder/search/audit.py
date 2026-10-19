@@ -85,7 +85,7 @@ def audit(search, results) -> dict:
             leads = []
         for x in leads:
             if ((x.family == "selection_in_code" and "TEST data" in x.detail)
-                    or x.family in ("label_in_prediction", "eval_switch")) \
+                    or x.family in ("label_in_prediction", "eval_switch", "preprocessing_leakage")) \
                     and (x.file, x.line) not in tested:
                 out["leakage"].append({"file": x.file, "line": x.line, "code": x.code, "detail": x.detail})
 

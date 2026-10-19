@@ -100,3 +100,28 @@ def test_a_switch_patch_value_is_its_opposite_and_an_if_patch_replaces_the_condi
     ns: dict = {}
     exec(out, ns)
     assert ns["best"] == 2  # the last value, not the best
+
+
+def test_preprocessing_fitted_on_test_data_or_before_the_split_is_leakage(tmp_path):
+    """Yang et al. (ASE 2022), preprocessing leakage, in its two common forms; a clean pipeline has none."""
+    from gapfinder.ingest.code_checks import code_checks
+
+    (tmp_path / "leaky.py").write_text(
+        "from sklearn.preprocessing import StandardScaler\n"
+        "from sklearn.model_selection import train_test_split\n"
+        "def run(X, y):\n"
+        "    scaler = StandardScaler()\n"
+        "    X = scaler.fit_transform(X)\n"
+        "    X_tr, X_te, y_tr, y_te = train_test_split(X, y)\n"
+        "    sc2 = StandardScaler()\n"
+        "    sc2.fit(X_te)\n"
+        "    return X_tr, X_te\n", encoding="utf-8")
+    (tmp_path / "clean.py").write_text(
+        "from sklearn.preprocessing import StandardScaler\n"
+        "from sklearn.model_selection import train_test_split\n"
+        "def run(X, y):\n"
+        "    X_tr, X_te, y_tr, y_te = train_test_split(X, y)\n"
+        "    scaler = StandardScaler().fit(X_tr)\n"
+        "    return scaler.transform(X_tr), scaler.transform(X_te)\n", encoding="utf-8")
+    leaks = [(x.file, x.line) for x in code_checks(tmp_path, limit=50) if x.family == "preprocessing_leakage"]
+    assert leaks == [("leaky.py", 5), ("leaky.py", 8)]

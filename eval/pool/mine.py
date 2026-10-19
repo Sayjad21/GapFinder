@@ -105,22 +105,55 @@ def cause_type(st: dict) -> str:
 _ARXIV = re.compile(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})(?:v\d+)?", re.I)
 
 
-def mine() -> None:
+def _readme_arxiv(repo: str, ref: str) -> str | None:
+    for name in ("README.md", "readme.md", "README.rst", "README"):
+        raw = _get(f"https://raw.githubusercontent.com/{repo}/{ref}/{name}")
+        if raw:
+            m = _ARXIV.search(raw.decode("utf-8", "replace"))
+            return m.group(1) if m else None
+    return None
+
+
+def mine(per_query: int = 100) -> None:
+    """Cheapest checks first: the search result (single parent, not a fork, repo not seen), then the README at the
+    parent for an arXiv link (raw.githubusercontent.com), and only then the diff (github.com throttles diffs)."""
     SEALED.mkdir(parents=True, exist_ok=True)
-    seen, public = set(), []
+    public = json.loads(PUBLIC.read_text(encoding="utf-8")) if PUBLIC.exists() else []
+    seen = {json.loads(p.read_text(encoding="utf-8"))["fix_commit"] for p in SEALED.glob("*/meta.json")}
     per_repo: dict[str, int] = {}
-    counts = {"hits": 0, "merge_or_dup": 0, "diff_missing": 0, "not_code_or_too_big": 0, "no_arxiv": 0, "kept": 0}
+    for c in public:
+        r = c["repo"].removeprefix("https://github.com/")
+        per_repo[r] = per_repo.get(r, 0) + 1
+    known = {c["id"] for c in public}
+    for mp in sorted(SEALED.glob("*/meta.json")):  # sealed before a public entry was written (an interrupted run)
+        cid = mp.parent.name
+        if cid not in known:
+            meta = json.loads(mp.read_text(encoding="utf-8"))
+            arxiv = _readme_arxiv(meta["repo"], meta["parent"])
+            if arxiv:
+                public.append({"id": cid, "repo": f"https://github.com/{meta['repo']}", "commit": meta["parent"],
+                               "arxiv": arxiv})
+                per_repo[meta["repo"]] = per_repo.get(meta["repo"], 0) + 1
+    PUBLIC.write_text(json.dumps(public, indent=1), encoding="utf-8")
+    no_arxiv: set[str] = set()
+    counts = {"hits": 0, "skipped": 0, "no_arxiv": 0, "diff_missing": 0, "not_code_or_too_big": 0, "kept": 0}
     for q in QUERIES:
-        for it in search(q):
+        for it in search(q)[:per_query]:
             counts["hits"] += 1
             repo, sha = it["repository"]["full_name"], it["sha"]
-            if len(it.get("parents") or []) != 1 or sha in seen or per_repo.get(repo, 0) >= 2:
-                counts["merge_or_dup"] += 1
+            if (len(it.get("parents") or []) != 1 or sha in seen or per_repo.get(repo, 0) >= 2
+                    or it["repository"].get("fork") or repo in no_arxiv):
+                counts["skipped"] += 1
                 continue
             seen.add(sha)
             parent = it["parents"][0]["sha"]
+            arxiv = _readme_arxiv(repo, parent)
+            if not arxiv:
+                no_arxiv.add(repo)
+                counts["no_arxiv"] += 1
+                continue
             raw = _get(f"https://github.com/{repo}/commit/{sha}.diff")
-            time.sleep(1)
+            time.sleep(2)
             if raw is None:
                 counts["diff_missing"] += 1
                 continue
@@ -130,15 +163,6 @@ def mine() -> None:
             if not code_files or st["changed"] > MAX_CHANGED_LINES or st["changed"] == 0:
                 counts["not_code_or_too_big"] += 1
                 continue
-            readme = None
-            for name in ("README.md", "readme.md", "README.rst", "README"):
-                readme = _get(f"https://raw.githubusercontent.com/{repo}/{parent}/{name}")
-                if readme:
-                    break
-            m = _ARXIV.search(readme.decode("utf-8", "replace")) if readme else None
-            if not m:
-                counts["no_arxiv"] += 1
-                continue
             cid = "p" + hashlib.sha1(sha.encode()).hexdigest()[:8]
             d = SEALED / cid
             d.mkdir(exist_ok=True)
@@ -147,16 +171,18 @@ def mine() -> None:
                 "repo": repo, "fix_commit": sha, "parent": parent, "message": it["commit"]["message"],
                 "query": q, "cause_type": cause_type(st), "changed_lines": st["changed"], "files": st["files"]},
                 indent=1), encoding="utf-8")
-            public.append({"id": cid, "repo": f"https://github.com/{repo}", "commit": parent, "arxiv": m.group(1)})
+            if not any(c["id"] == cid for c in public):
+                public.append({"id": cid, "repo": f"https://github.com/{repo}", "commit": parent, "arxiv": arxiv})
             per_repo[repo] = per_repo.get(repo, 0) + 1
             counts["kept"] += 1
-        PUBLIC.write_text(json.dumps(public, indent=1), encoding="utf-8")  # after every query: resumable output
+            PUBLIC.write_text(json.dumps(public, indent=1), encoding="utf-8")
         print(f"after {q!r}: " + ", ".join(f"{k} {v}" for k, v in counts.items()), flush=True)
     types: dict[str, int] = {}
     for p in SEALED.glob("*/meta.json"):
         t = json.loads(p.read_text(encoding="utf-8"))["cause_type"]
         types[t] = types.get(t, 0) + 1
-    print(f"\n{counts['kept']} candidates (public list: {PUBLIC}); sealed cause types: {types}")
+    print(f"
+{len(public)} candidates (public list: {PUBLIC}); sealed cause types: {types}")
 
 
 def main() -> None:
