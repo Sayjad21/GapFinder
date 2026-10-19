@@ -268,7 +268,50 @@ None of the fixes listed above is measured on a fresh paper yet.
 
 ---
 
-## 7. Where things are
+## 7. Next work (agreed 2026-10-19; status kept up to date here)
+
+From the owner's 10-bottleneck plan, after a web check. Each item names its bottleneck (section 6) and why it is
+allowed under the no-patching rule: a recurring class, a published method, or plumbing/measurement.
+
+### 7.1 To do
+
+| # | Item | Bottleneck | Allowed as | Status |
+|---|---|---|---|---|
+| 1 | **A pool of 20+ cases mined from fix commits.** GitHub search for "match the paper", "fix default", "wrong hyperparameter", "reproduce table". The parent commit is the blind input and the fix diff is the sealed answer, written by the script; the runner never reads it. A case is kept only if the numbers differ beyond noise between the parent and the fix. Each case is tagged by cause type, and rates are reported per type. | 6.1 | measurement (commit mining is an established method, e.g. BugHunter) | |
+| 2 | **Read the arXiv `.tex` source** when available (about 93% of arXiv papers): symbols and tables as plain text; pgfplots coordinates and bundled csv files as figure data | 6.6, 6.4 | recurring class (symbols: RippleNet; tables: GraphMAE) | |
+| 3 | **Command picker:** match the claim's dataset and model names against the arguments of README and shell commands; propose a script when one claim needs several commands | 6.2 | plumbing | |
+| 4 | **Run the repo's download scripts** in env-build (`download*.sh`, `get_data*`), and record sizes and checksums | 6.2 | plumbing | |
+| 5 | **Metric binder.** Prefers test over val and final over best; refuses when ambiguous; keeps alternatives as extra metrics | 6.2 | plumbing | |
+| 6 | **Fixed shrink rule:** shards and segments first; shrink only if a run won't fit; record a discrepancy allowance | 6.2, 6.5 | plumbing | |
+| 7 | **Loader caches** for common datasets (PyG, torchvision, sklearn; they check hashes). Not a generic `/data` symlink | 6.2 | plumbing | |
+| 8 | **Built-in CPU shim** (`cuda.is_available` False, `torch.load` to CPU) and allocator and thread settings in every run; `num_workers=0` only after an out-of-memory failure | 6.5 | recurring class (hand-built for Anomaly Transformer and SparseTSF) | |
+| 9 | **Static GPU/size filter** before spending on a ledger | 6.5, 6.10 | plumbing | |
+| 10 | **Static leakage analysis** after Yang et al. (ASE 2022): test data reaching fitting or preprocessing; feeds the audit and the protocol tests | 6.7 | published method | |
+| 11 | **Label "Paper's stated value refuted; unique fit"** when all hold: the stated value was run and fails; every claim fits (at least 2); the counterfactual holds; one island; every knob screened. Must not fire on GraphMAE-like cases; regression-checked | 6.8 | recurring class (cautious labels on right answers) | |
+| 12 | **Conservative significance:** the larger of the baseline and candidate spread | 6.9 | recurring class (config-dependent noise) | |
+| 13 | **Split variance in calibration,** only through the repo's own split or fold flag | 6.9 | published (Bouthillier et al.) | |
+| 14 | **Claims at fixed knob values** (sensitivity-plot points); each candidate is also run at those values | 6.4 | recurring class (identifiability) | |
+| 15 | **Learning-curve points as claims,** only when the paper reports the curve and the code logs test metrics per epoch | 6.4 | recurring class | |
+| 16 | **Super for claim extraction, Ultra only for assumptions;** section slicing as an option, measured for recall | 6.10 | budget | |
+| 17 | **Grounded preprocessing and operation swaps,** only when the paper states the other choice (through the contrast step or the matcher) | 6.3 | grounded extension of the patch round | |
+| 18 | **"As in [X]":** the cited paper's arXiv source, its setup section | 6.6 | published (AutoReproduce's paper lineage) | |
+| 19 | **Paper-year dependency environment** as one knob | 6.3 | documented class (dependency drift) | |
+
+### 7.2 Discarded, and why
+
+| Idea | Why |
+|---|---|
+| Generic preprocessing knobs (normalisation, clipping, split type) | Untargeted changes manufacture fits that look like answers (the secant step's measured harm) |
+| Canary half-test (for now) | Its preconditions fail on most repos (exact determinism, a data hook, weight access); item 10 covers the main cases |
+| Best-of-N as a reported flaw | It can't tell a best seed from a real cause; at most a note when nothing else fits |
+| Merging the ledger calls into one | Brings back the appendix miss (SA-Bench; GraphMAE) |
+| Symlinking datasets everywhere | A wrong-format copy silently creates a new gap |
+| Patching `train_test_split` for split noise | It changes the experiment being measured |
+| A penalty on configurations whose spread grows | Measured harmful: the true cause often raises the spread too |
+| Curve extraction from vector PDFs (for now) | No validated accuracy; arXiv source covers about 93% of papers |
+| Reproducibility-challenge reports as the main source | Measured near-zero yield; secondary only |
+
+## 8. Where things are
 
 | What | Where |
 |---|---|
