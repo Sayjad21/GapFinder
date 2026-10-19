@@ -60,18 +60,24 @@ def islands(configs: list[dict]) -> list[list[dict]]:
 
 
 def implausibilities(runs: dict[tuple, list[dict]], claims: list[tuple[str, str, float]], *,
-                     paper_n: float = 1.0, disc: float = 0.05) -> list[dict]:
-    """claims: (claim_id, metric, paper_value). runs: frozen config -> parsed metrics per successful run."""
+                     paper_n: float = 1.0, disc: float = 0.05, optional: set[str] | frozenset = frozenset(),
+                     sd_alias: dict[str, str] | None = None) -> list[dict]:
+    """claims: (claim_id, metric, paper_value). runs: frozen config -> parsed metrics per successful run.
+    `optional`: claims a configuration may lack (a claim at fixed knob values is measured only for some
+    configurations); a row without one has no I for it. `sd_alias`: metric -> the metric whose naive SD it uses."""
     naive = runs.get((), [])
     sd = {}
     for _, metric, _ in claims:
-        vals = [m[metric] for m in naive if metric in m]
+        src = (sd_alias or {}).get(metric, metric)
+        vals = [m[src] for m in naive if src in m]
         sd[metric] = statistics.stdev(vals) if len(vals) >= 2 else 0.0
     rows = []
     for key, ms in runs.items():
         row = {"config": dict(key), "n": len(ms), "I": {}}
         for cid, metric, z in claims:
             vals = [m[metric] for m in ms if metric in m]
+            if not vals and cid in optional:
+                continue
             if not vals:
                 break
             s = sd[metric]
@@ -83,13 +89,15 @@ def implausibilities(runs: dict[tuple, list[dict]], claims: list[tuple[str, str,
 
 
 def diagnose(runs: dict[tuple, list[dict]], claims: list[tuple[str, str, float]], target_id: str, *,
-             paper_n: float = 1.0, disc: float = 0.05, cutoff: float = 3.0) -> Diagnosis:
+             paper_n: float = 1.0, disc: float = 0.05, cutoff: float = 3.0, optional: set[str] | frozenset = frozenset(),
+             sd_alias: dict[str, str] | None = None) -> Diagnosis:
     params = {"paper_n": paper_n, "disc": disc, "cutoff": cutoff}
-    rows = implausibilities(runs, claims, paper_n=paper_n, disc=disc)
+    rows = implausibilities(runs, claims, paper_n=paper_n, disc=disc, optional=optional, sd_alias=sd_alias)
     if not any(r["config"] == {} for r in rows):
         return Diagnosis("insufficient", "no naive measurement of every claim; history matching skipped", params=params)
-    ids = [c for c, _, _ in claims]
-    per = {c: sorted(({"config": r["config"], "I": r["I"]} for r in rows if r["I"][c] <= cutoff),
+    # an optional claim measured nowhere says nothing either way
+    ids = [c for c, _, _ in claims if c not in optional or any(c in r["I"] for r in rows)]
+    per = {c: sorted(({"config": r["config"], "I": r["I"]} for r in rows if c in r["I"] and r["I"][c] <= cutoff),
                      key=lambda r: r["I"][c]) for c in ids}
     joint = sorted(({"config": r["config"], "I": r["I"]} for r in rows if max(r["I"].values()) <= cutoff),
                    key=lambda r: max(r["I"].values()))

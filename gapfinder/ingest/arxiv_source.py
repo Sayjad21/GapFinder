@@ -169,3 +169,124 @@ def supplement(src: Path) -> str:
     if not parts:
         return ""
     return "## From the LaTeX source (tables and figure data, symbols as written)\n\n" + "\n\n".join(parts)
+
+
+# ------------------------------------------------------------------ "as in [X]" (plan item 18)
+
+# a sentence that defers part of the setup to a cited paper: "we follow the setting of \cite{x}", "the same split
+# as \citet{x}", "as in \cite{x}"; the sentence must name what is deferred (a setting, split, protocol, ...)
+_DEFER = re.compile(r"(?i)\b(follow(?:s|ed|ing)?|as (?:done |described |used )?in|same\b[^.]{0,40}?\bas|identical to|"
+                    r"adopt(?:s|ed|ing)?|consistent with|taken from|borrow(?:s|ed)? from)\b[^.]{0,100}?"
+                    r"\\cite[tp]?\*?(?:\[[^\]]*\])?\{([^}]+)\}")
+_DEFERRED = re.compile(r"(?i)setting|setup|set-up|protocol|split|hyper-?param|configuration|preprocess|evaluat|"
+                       r"experimental|procedure|implementation|training|architecture|baseline")
+_SECTION = re.compile(r"\\(section|subsection)\*?\{([^}]*)\}")
+_SETUP_TITLE = re.compile(r"(?i)experiment|setup|setting|implementation|training|hyper|evaluation|protocol|dataset|detail")
+
+
+def deferred_citations(doc: str) -> list[tuple[str, str]]:
+    """(cite key, the sentence) for each sentence that defers part of the setup to a cited paper."""
+    out, seen = [], set()
+    for m in _DEFER.finditer(doc):
+        s = doc.rfind(".", 0, m.start()) + 1
+        e = doc.find(".", m.end())
+        sentence = " ".join(doc[s: e + 1 if e > 0 else m.end()].split())
+        if not _DEFERRED.search(sentence):
+            continue
+        for key in (k.strip() for k in m.group(2).split(",")):
+            if key and key not in seen:
+                seen.add(key)
+                out.append((key, sentence[:400]))
+    return out
+
+
+def bib_entries(src: Path) -> dict[str, dict]:
+    """cite key -> {"arxiv": id or None, "title": ...}, from the .bbl (what was compiled) or the .bib files."""
+    out: dict[str, dict] = {}
+    for bbl in src.rglob("*.bbl"):
+        text = bbl.read_text("utf-8", "replace")
+        for m in re.finditer(r"\\bibitem(?:\[[^\]]*\])?\{([^}]+)\}(.*?)(?=\\bibitem|\\end\{thebibliography\})", text, re.S):
+            body = m.group(2)
+            aid = (_ARXIV_ID.search(body) or _ARXIV_URL.search(body)
+                   or re.search(r"(?i)arxiv[^0-9]{0,20}(\d{4}\.\d{4,5})", body))
+            blocks = [b.strip(" .{}\n") for b in re.split(r"\\newblock", body)]
+            out[m.group(1).strip()] = {"arxiv": aid.group(1) if aid else None,
+                                       "title": re.sub(r"[{}\\]", "", blocks[1] if len(blocks) > 1 else "")[:200]}
+    for bib in src.rglob("*.bib"):
+        text = bib.read_text("utf-8", "replace")
+        for m in re.finditer(r"@\w+\s*\{\s*([^,\s]+)\s*,(.*?)(?=\n@|\Z)", text, re.S):
+            key, body = m.group(1), m.group(2)
+            if key in out and out[key]["arxiv"]:
+                continue
+            title = re.search(r"(?i)\btitle\s*=\s*[{\"](.+?)[}\"]\s*,?\s*\n", body)
+            aid = (re.search(r"(?i)\beprint\s*=\s*[{\"]?(\d{4}\.\d{4,5})", body) or _ARXIV_ID.search(body)
+                   or _ARXIV_URL.search(body))
+            out[key] = {"arxiv": aid.group(1) if aid else None,
+                        "title": re.sub(r"[{}\\]", "", title.group(1)) if title else ""}
+    return out
+
+
+def arxiv_by_title(title: str, timeout: float = 30) -> str | None:
+    """The arXiv id of the paper with exactly this title (arXiv's search API), else None."""
+    import urllib.parse
+
+    norm = lambda s: re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()  # noqa: E731
+    if len(norm(title)) < 12:
+        return None
+    q = urllib.parse.quote(f'ti:"{title}"')
+    try:
+        xml = urllib.request.urlopen(f"http://export.arxiv.org/api/query?search_query={q}&max_results=5",
+                                     timeout=timeout).read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    for entry in re.findall(r"<entry>(.*?)</entry>", xml, re.S):
+        t = re.search(r"<title>(.*?)</title>", entry, re.S)
+        i = re.search(r"<id>https?://arxiv\.org/abs/(\d{4}\.\d{4,5})", entry)
+        if t and i and norm(t.group(1)) == norm(title):
+            return i.group(1)
+    return None
+
+
+def setup_sections(doc: str, limit: int = 5000) -> str:
+    """The cited paper's experimental-setup text: sections and subsections titled experiments, setup,
+    implementation, training, hyperparameters, evaluation, datasets, details."""
+    heads = list(_SECTION.finditer(doc))
+    out = []
+    for i, h in enumerate(heads):
+        if not _SETUP_TITLE.search(h.group(2)):
+            continue
+        level = h.group(1)
+        end = next((x.start() for x in heads[i + 1:] if level == "subsection" or x.group(1) == "section"), len(doc))
+        body = re.sub(r"\\(begin|end)\{[^}]*\}|\\label\{[^}]*\}|\\cite[tp]?\{[^}]*\}", "", doc[h.end(): end])
+        out.append(f"### {h.group(2)}\n" + " ".join(body.split()))
+        if sum(len(x) for x in out) >= limit:
+            break
+    return "\n\n".join(out)[:limit]
+
+
+def cited_setups(src: Path, cache_dir: Path, max_papers: int = 2, title_search: bool = True) -> str:
+    """For the citations the paper defers its setup to, the cited paper's setup sections from its arXiv source
+    (AutoReproduce's paper lineage: a missing detail is often in the paper whose setting is followed)."""
+    main = main_tex(src)
+    if main is None:
+        return ""
+    doc = flatten(main, main.parent)
+    refs = deferred_citations(doc)
+    if not refs:
+        return ""
+    bib = bib_entries(src)
+    parts = []
+    for key, sentence in refs:
+        e = bib.get(key) or {}
+        aid = e.get("arxiv") or (arxiv_by_title(e["title"]) if title_search and e.get("title") else None)
+        if not aid:
+            continue
+        csrc = fetch_source(aid, cache_dir)
+        cmain = main_tex(csrc) if csrc else None
+        text = setup_sections(flatten(cmain, cmain.parent)) if cmain else ""
+        if text:
+            parts.append(f"## Setup of the cited paper arXiv:{aid} ({e.get('title') or key})\n"
+                         f"The paper defers to it: \"{sentence}\"\n\n{text}")
+        if len(parts) >= max_papers:
+            break
+    return "\n\n".join(parts)

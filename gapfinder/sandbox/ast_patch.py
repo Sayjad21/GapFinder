@@ -82,8 +82,24 @@ class _Swap(ast.NodeTransformer):
             self.done += 1
         return node
 
+    def _op(self, node):
+        # NAME "@call.OLD", VALUE NEW: every call or attribute reference named OLD becomes NEW (line 0: the whole
+        # file), e.g. F.relu -> F.elu, nn.ReLU() -> nn.ELU(): an operation the paper names instead (op_swaps.py)
+        return (self.name.startswith("@call.") and (self.line == 0 or node.lineno == self.line)
+                and self.raw.isidentifier())
+
+    def visit_Attribute(self, node):
+        self.generic_visit(node)
+        if self._op(node) and node.attr == self.name[6:] and isinstance(node.ctx, ast.Load):
+            node.attr = self.raw
+            self.done += 1
+        return node
+
     def visit_Call(self, node):
         self.generic_visit(node)
+        if self._op(node) and isinstance(node.func, ast.Name) and node.func.id == self.name[6:]:
+            node.func.id = self.raw
+            self.done += 1
         if node.lineno == self.line:
             for kw in node.keywords:
                 if kw.arg == self.name and _is_literal(kw.value):

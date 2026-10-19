@@ -257,8 +257,9 @@ def build_text(root: Path, limit: int = 2500) -> str:
     return "\n".join(out) or "(none)"
 
 
-def fetch(repo: str, commit: str) -> str:
-    """A shell command that downloads the repo at `commit` from GitHub into /work (inside the VM)."""
+def fetch(repo: str, commit: str, root: Path | None = None) -> str:
+    """A shell command that downloads the repo at `commit` from GitHub into /work (inside the VM). With the local
+    checkout `root`, its git submodules too, each at its pinned commit."""
     owner_repo = repo.rstrip("/").removeprefix("https://github.com/").removesuffix(".git")
     name = owner_repo.split("/")[-1]
     # Python 2 and 3 alike (a 2016 repo runs on python:2.7-slim, which has no python3 and no curl)
@@ -266,7 +267,45 @@ def fetch(repo: str, commit: str) -> str:
             "try:\n    from urllib.request import urlopen\nexcept ImportError:\n    from urllib2 import urlopen\n"
             f"d = urlopen('https://codeload.github.com/{owner_repo}/tar.gz/{commit}', timeout=300).read()\n"
             "tarfile.open(fileobj=io.BytesIO(d)).extractall('/tmp/src'); print('fetched %d' % len(d))\" "
-            f"&& cp -r /tmp/src/{name}-{commit}/. /work/ && rm -rf /tmp/src && ls /work")
+            f"&& cp -r /tmp/src/{name}-{commit}/. /work/ && rm -rf /tmp/src && ls /work"
+            + ((" && " + sub) if root is not None and (sub := submodule_fetch(repo, commit, root)) else ""))
+
+
+def submodule_fetch(repo: str, commit: str, root: Path, timeout: float = 30) -> str:
+    """Shell steps that put each git submodule at its pinned commit into /work (a tarball has none: pool case
+    pf2f5437a's env-build gave up on "not a git repository, submodule update cannot initialize"). The pinned
+    commit comes from GitHub's contents API at `commit`; GitHub-hosted submodules only. '' when there are none."""
+    import urllib.request
+
+    gm = Path(root) / ".gitmodules"
+    if not gm.is_file():
+        return ""
+    owner_repo = repo.rstrip("/").removeprefix("https://github.com/").removesuffix(".git")
+    steps = []
+    for block in re.split(r"(?m)^\s*\[submodule", gm.read_text(encoding="utf-8", errors="replace"))[1:]:
+        path = re.search(r"(?m)^\s*path\s*=\s*(\S+)", block)
+        url = re.search(r"(?m)^\s*url\s*=\s*(\S+)", block)
+        if not path or not url:
+            continue
+        sub = re.search(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$", url.group(1))
+        if not sub:
+            continue
+        try:
+            meta = json.loads(urllib.request.urlopen(urllib.request.Request(
+                f"https://api.github.com/repos/{owner_repo}/contents/{path.group(1)}?ref={commit}",
+                headers={"User-Agent": "gapfinder", "Accept": "application/vnd.github+json"}), timeout=timeout).read())
+        except Exception:  # noqa: BLE001 (rate limit, a private submodule): the model sees the failure as before
+            continue
+        sha = meta.get("sha") if isinstance(meta, dict) and meta.get("type") == "submodule" else None
+        if not sha:
+            continue
+        name, dest = sub.group(1).split("/")[-1], path.group(1)
+        steps.append("python -c \"import io, tarfile\ntry:\n    from urllib.request import urlopen\nexcept ImportError:\n"
+                     "    from urllib2 import urlopen\n"
+                     f"d = urlopen('https://codeload.github.com/{sub.group(1)}/tar.gz/{sha}', timeout=300).read()\n"
+                     "tarfile.open(fileobj=io.BytesIO(d)).extractall('/tmp/sub')\" "
+                     f"&& mkdir -p /work/{dest} && cp -r /tmp/sub/{name}-{sha}/. /work/{dest}/ && rm -rf /tmp/sub")
+    return " && ".join(steps)
 
 
 def commit_date(root: Path) -> str:
@@ -365,11 +404,12 @@ async def _start(backend, root: Path, image: str, fetch: str | None) -> tuple[st
 
 async def build_env(router, backend, root: str | Path, *, fetch: str | None = None, image: str | None = None,
                     date: str | None = None, max_steps: int = 12, goal: str | None = None,
-                    goal_timeout: float = 1800) -> EnvResult:
+                    goal_timeout: float = 1800, goal_files: dict[str, bytes] | None = None) -> EnvResult:
     """`root`: a local checkout (read for imports and build files). `fetch`: a shell command that puts the repo
     at /work in the VM (None: the backend's base is the checkout itself, as on the local backend). `goal`: a
     command that must also exit 0 once the imports load (e.g. a short run of the experiment), so system tools
-    and data steps it needs are installed in the same rollback loop.
+    and data steps it needs are installed in the same rollback loop. `goal_files`: uploaded for the goal run only
+    (the CPU shim's hook, so a `.cuda()` call doesn't fail the goal on a VM without a GPU).
 
     The model may ask for another base image when the first can't work (VGAE and GAT in the first env bench:
     TensorFlow 1 has no wheels for the Python it picked, and the loop could only give up). The VM restarts from a
@@ -396,7 +436,7 @@ async def build_env(router, backend, root: str | Path, *, fetch: str | None = No
         out = _tail((c.stdout or "") + (c.stderr or ""))
         if c.exit_code == 0 and goal:
             # imports load; the run's own command must work too (PatchTST's smoke needed `free`, a system tool)
-            g = await _run(backend, ckpt, goal, timeout=goal_timeout, disposable=True)
+            g = await _run(backend, ckpt, goal, timeout=goal_timeout, disposable=True, files=goal_files)
             if g.exit_code != 0:
                 c = g
                 out = "the imports load, but the goal command failed (exit %d):\n%s" % (

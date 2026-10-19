@@ -7,6 +7,7 @@
     gapfinder spec-draft <repo> --out spec.yaml [--paper-ledger runs/ledger] [--compare hand.yaml]
                      [--missing-sentence --paper paper.pdf]
     gapfinder missing-sentence <run_dir> --paper paper.pdf
+    gapfinder harness <github url> --commit <sha> --local <checkout> --ledger <dir> --target C7 --out <dir>
 """
 
 from __future__ import annotations
@@ -65,12 +66,17 @@ async def cmd_ledger(args) -> int:
         paper.supplement = arxiv_source.supplement(src) if src else ""
         print(f"arXiv source: {aid or 'no id found'}; " + (f"{paper.supplement.count('Table:')} table(s), "
               f"{paper.supplement.count('Figure data:')} figure(s) with data" if paper.supplement else "none used"))
+        # "we follow the setting of [X]": the cited paper's setup sections, from its own source (plan item 18)
+        cited = arxiv_source.cited_setups(src, settings().cache_dir / "arxiv") if src else ""
+        if cited:
+            paper.supplement = (paper.supplement + "\n\n" + cited).strip()
+            print(f"cited setups: {cited.count('## Setup of the cited paper')} paper(s) the setup is deferred to")
     repo_root = clone_or_path(args.repo, settings().cache_dir / "repos")
     rm = build_repo_map(repo_root)
     _write(out / "repo_map.json", rm.to_dict())
     router = Router(use_cache=not args.no_cache)
 
-    claims = await extract_claims(router, paper)
+    claims = await extract_claims(router, paper, tier=args.claims_tier)
     _write(out / "raw" / "claims.json", [c.model_dump() for c in claims])  # pre-grounding, for offline re-grounding
     crep = ground_claims(paper, claims)
     results, not_results = await filter_claims(router, paper, crep.kept)
@@ -363,13 +369,39 @@ async def cmd_env_build(args) -> int:
         cmd = readme_command(Path(args.local))
         goal = short_run_goal(cmd) if cmd else None
         print(f"goal: {'the README command `' + cmd + '` runs for 5 minutes' if cmd else 'imports only (no README command)'}")
-    res = await build_env(Router(), ContreeBackend(), args.local, fetch=fetch(args.repo, args.commit), image=args.image,
+    res = await build_env(Router(), ContreeBackend(), args.local, fetch=fetch(args.repo, args.commit, Path(args.local)), image=args.image,
                           date=args.date, max_steps=args.max_steps, goal=goal)
     out = write_result(res, args.out)
     print(f"{'ok' if res.ok else 'FAILED'}: image {res.image}, checkpoint {res.checkpoint}, {len(res.recipe)} of "
           f"{len(res.steps)} commands kept, ${res.cost_usd:.4f}" + (f"; {res.reason}" if res.reason else ""))
     print(f"result: {out}")
     return 0 if res.ok else 1
+
+
+async def cmd_harness(args) -> int:
+    """The automatic harness: claims, command, environment, data, smoke run, metrics, fit; spec + HARNESS.md."""
+    from gapfinder.env_year import paper_date
+    from gapfinder.harness_build import build_harness
+    from gapfinder.sandbox.backend import ContreeBackend
+
+    ledger_dir = Path(args.ledger)
+    ledger = json.loads((ledger_dir / "claim_ledger.json" if ledger_dir.is_dir() else ledger_dir).read_text(
+        encoding="utf-8"))
+    router = None
+    if args.env_checkpoint is None:
+        from gapfinder.models.router import Router
+
+        router = Router()
+    r = await build_harness(router, ContreeBackend(), repo=args.repo, commit=args.commit, local=args.local,
+                            ledger=ledger, target=args.target, out=args.out, repeats=args.repeats,
+                            smoke_timeout=args.smoke_timeout, max_steps=args.max_steps, image=args.image,
+                            force=args.force, env_checkpoint=args.env_checkpoint,
+                            paper_date=paper_date(args.arxiv, args.paper_date) if (args.arxiv or args.paper_date) else None)
+    print(f"{'ready for approval' if r.ok else 'stopped at ' + r.stage}" + (f": {r.reason[:300]}" if r.reason else ""))
+    print(f"wrote {Path(args.out) / 'HARNESS.md'}" + (f", {Path(args.out) / 'spec.yaml'}, "
+                                                       f"{Path(args.out) / 'targets.json'}" if r.ok else ""))
+    print(f"model spend ${r.cost_usd:.4f}")
+    return 0 if r.ok else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -383,6 +415,8 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--no-cache", action="store_true")
     pl.add_argument("--arxiv", help="the paper's arXiv id, for its LaTeX source (default: detected from the PDF)")
     pl.add_argument("--no-source", action="store_true", help="don't fetch the arXiv LaTeX source")
+    pl.add_argument("--claims-tier", default="ultra", choices=["ultra", "super"],
+                    help="model for claim extraction (assumptions always use Ultra); see eval/claims_tier.py")
 
     pr = sub.add_parser("repomap", help="print the repo map (no LLM)")
     pr.add_argument("path")
@@ -490,11 +524,27 @@ def main(argv: list[str] | None = None) -> int:
     pq.add_argument("--concurrency", type=int, default=settings().max_concurrency)
     pq.add_argument("--out", required=True)
 
+    ph = sub.add_parser("harness", help="the automatic harness: from a repo and a ledger to a spec a person approves")
+    ph.add_argument("repo", help="GitHub URL of the repository")
+    ph.add_argument("--commit", required=True)
+    ph.add_argument("--local", required=True, help="a local checkout at that commit")
+    ph.add_argument("--ledger", required=True, help="a `gapfinder ledger` output dir (or its claim_ledger.json)")
+    ph.add_argument("--target", required=True, help="the target claim's id; its table row gives the held-outs")
+    ph.add_argument("--repeats", type=int, default=1, help="runs averaged per configuration (the paper's protocol)")
+    ph.add_argument("--smoke-timeout", type=float, default=2400)
+    ph.add_argument("--max-steps", type=int, default=12, help="env-build commands")
+    ph.add_argument("--image", help="base image (default: the model picks)")
+    ph.add_argument("--env-checkpoint", help="an environment already built (an env-build result's checkpoint)")
+    ph.add_argument("--force", action="store_true", help="go on despite static blockers")
+    ph.add_argument("--arxiv", help="the paper's arXiv id: its month dates the paper-year environment knob")
+    ph.add_argument("--paper-date", help="YYYY-MM-DD: the paper-year environment knob without an arXiv id")
+    ph.add_argument("--out", required=True, help="output directory: spec.yaml, targets.json, HARNESS.md")
+
     args = p.parse_args(argv)
     if args.cmd == "repomap":
         return cmd_repomap(args)
     coro = {"ledger": cmd_ledger, "fanout": cmd_fanout, "search": cmd_search, "spec-draft": cmd_spec_draft,
-            "missing-sentence": cmd_missing_sentence, "env-build": cmd_env_build,
+            "missing-sentence": cmd_missing_sentence, "env-build": cmd_env_build, "harness": cmd_harness,
             "diff": cmd_diff}[args.cmd](args)
     return asyncio.run(coro)
 

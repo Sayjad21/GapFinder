@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import uuid as uuidlib
 
 from gapfinder.ledger.schemas import Branch, BranchStatus, Layer
@@ -261,6 +262,14 @@ class Orchestrator:
                 user_cpu_s=sum(x.user_cpu_s for x in stats), system_cpu_s=sum(x.system_cpu_s for x in stats),
                 max_rss_kb=max((x.max_rss_kb for x in stats), default=0), cost_usd=sum(x.cost_usd for x in stats)))
         merged.piece_checkpoints = [d[3][-1] for d in done if d[3]]  # each shard's last piece: its output files
+        if run.shard_mean and run.output == "stdout" and not failed:
+            from gapfinder.sandbox.parse import parse_metrics
+
+            per = [parse_metrics("\n".join(d[1]), run.format) for d in done]
+            names = sorted(set().union(*per))
+            mean = {k: sum(p[k] for p in per if k in p) / sum(k in p for p in per) for k in names}
+            lines = json.dumps(mean) if run.format == "jsonl" else "\n".join(f"{k}={v:.10g}" for k, v in mean.items())
+            merged.stdout += "\n" + lines + "\n"
         return merged
 
     async def fanout(self, change_sets: list[dict[str, str]], labels: list[str] | None = None,

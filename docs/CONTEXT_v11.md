@@ -135,6 +135,12 @@ agent has no say in what the search tests.**
 - **Every harness since devbatch-1 needed a person or agent** for the data, the table-cell command, the parser,
   the claim selection and the scaling. In batch-3 and batch-4 the runner (who knows what kinds of causes are being
   hunted) wrote them. That is the bias risk the design above removes.
+- **`gapfinder harness` (2026-10-20), steps 2-8 automatic.** On RippleNet (batch-4, already revealed), from its
+  built environment and the case's two Table 3 claims, with no model call: the same command, the same 9 knobs at
+  the same defaults, the same exclusions (`--dataset`; `--using_all_hops`, `type=bool`), the dataset switched from
+  movie to book, the preprocessing step found, and the same binding (final-epoch test AUC and ACC). Naive AUC
+  0.64-0.66 against the paper's 0.729, the gap the hand harness measured. 5 runs fit one operation as is (306 s).
+  Not yet run end to end on an unseen repo (env-build included).
 
 ---
 
@@ -277,25 +283,25 @@ allowed under the no-patching rule: a recurring class, a published method, or pl
 
 | # | Item | Bottleneck | Allowed as | Status |
 |---|---|---|---|---|
-| 1 | **A pool of 20+ cases mined from fix commits.** GitHub search for "match the paper", "fix default", "wrong hyperparameter", "reproduce table". The parent commit is the blind input and the fix diff is the sealed answer, written by the script; the runner never reads it. A case is kept only if the numbers differ beyond noise between the parent and the fix. Each case is tagged by cause type, and rates are reported per type. | 6.1 | measurement (commit mining is an established method, e.g. BugHunter) | |
-| 2 | **Read the arXiv `.tex` source** when available (about 93% of arXiv papers): symbols and tables as plain text; pgfplots coordinates and bundled csv files as figure data | 6.6, 6.4 | recurring class (symbols: RippleNet; tables: GraphMAE) | |
-| 3 | **Command picker:** match the claim's dataset and model names against the arguments of README and shell commands; propose a script when one claim needs several commands | 6.2 | plumbing | |
-| 4 | **Run the repo's download scripts** in env-build (`download*.sh`, `get_data*`), and record sizes and checksums | 6.2 | plumbing | |
-| 5 | **Metric binder.** Prefers test over val and final over best; refuses when ambiguous; keeps alternatives as extra metrics | 6.2 | plumbing | |
-| 6 | **Fixed shrink rule:** shards and segments first; shrink only if a run won't fit; record a discrepancy allowance | 6.2, 6.5 | plumbing | |
-| 7 | **Loader caches** for common datasets (PyG, torchvision, sklearn; they check hashes). Not a generic `/data` symlink | 6.2 | plumbing | |
-| 8 | **Built-in CPU shim** (`cuda.is_available` False, `torch.load` to CPU) and allocator and thread settings in every run; `num_workers=0` only after an out-of-memory failure | 6.5 | recurring class (hand-built for Anomaly Transformer and SparseTSF) | |
-| 9 | **Static GPU/size filter** before spending on a ledger | 6.5, 6.10 | plumbing | |
-| 10 | **Static leakage analysis** after Yang et al. (ASE 2022): test data reaching fitting or preprocessing; feeds the audit and the protocol tests | 6.7 | published method | |
-| 11 | **Label "Paper's stated value refuted; unique fit"** when all hold: the stated value was run and fails; every claim fits (at least 2); the counterfactual holds; one island; every knob screened. Must not fire on GraphMAE-like cases; regression-checked | 6.8 | recurring class (cautious labels on right answers) | |
-| 12 | **Conservative significance:** the larger of the baseline and candidate spread | 6.9 | recurring class (config-dependent noise) | |
-| 13 | **Split variance in calibration,** only through the repo's own split or fold flag | 6.9 | published (Bouthillier et al.) | |
-| 14 | **Claims at fixed knob values** (sensitivity-plot points); each candidate is also run at those values | 6.4 | recurring class (identifiability) | |
-| 15 | **Learning-curve points as claims,** only when the paper reports the curve and the code logs test metrics per epoch | 6.4 | recurring class | |
-| 16 | **Super for claim extraction, Ultra only for assumptions;** section slicing as an option, measured for recall | 6.10 | budget | |
-| 17 | **Grounded preprocessing and operation swaps,** only when the paper states the other choice (through the contrast step or the matcher) | 6.3 | grounded extension of the patch round | |
-| 18 | **"As in [X]":** the cited paper's arXiv source, its setup section | 6.6 | published (AutoReproduce's paper lineage) | |
-| 19 | **Paper-year dependency environment** as one knob | 6.3 | documented class (dependency drift) | |
+| 1 | **A pool of 20+ cases mined from fix commits.** GitHub search for "match the paper", "fix default", "wrong hyperparameter", "reproduce table". The parent commit is the blind input and the fix diff is the sealed answer, written by the script; the runner never reads it. A case is kept only if the numbers differ beyond noise between the parent and the fix. Each case is tagged by cause type, and rates are reported per type. | 6.1 | measurement (commit mining is an established method, e.g. BugHunter) | ⏳ miner built (`eval/pool/mine.py`): 33 sealed candidates so far, about 1 in 60 search hits (most repos link no arXiv paper). Gap check by script (`eval/pool/verify.py`: parent vs fix, verdict only) written; not run on the pool yet (env-build costs Super calls) |
+| 2 | **Read the arXiv `.tex` source** when available (about 93% of arXiv papers): symbols and tables as plain text; pgfplots coordinates and bundled csv files as figure data | 6.6, 6.4 | recurring class (symbols: RippleNet; tables: GraphMAE) | ✅ `ingest/arxiv_source.py`; RippleNet's table now reads `$\lambda_1 = 10^{-5}$` |
+| 3 | **Command picker:** match the claim's dataset and model names against the arguments of README and shell commands; propose a script when one claim needs several commands | 6.2 | plumbing | ✅ `harness_auto.pick_commands` (a `cd` line carried down to the commands under it; data-preparation scripts never picked as the experiment); in `gapfinder harness` |
+| 4 | **Run the repo's download scripts** in env-build (`download*.sh`, `get_data*`), and record sizes and checksums | 6.2 | plumbing | ✅ `download_steps` and the preprocessing commands written before the picked one: in env-build's goal, then run again for the base checkpoint |
+| 5 | **Metric binder.** Prefers test over val and final over best; refuses when ambiguous; keeps alternatives as extra metrics | 6.2 | plumbing | ✅ `bind_metrics`; the emitter in the VM (`gf_harness/emit.py`) reads the same labels, alternatives as extra metrics |
+| 6 | **Fixed shrink rule:** shards and segments first; shrink only if a run won't fit; record a discrepancy allowance | 6.2, 6.5 | plumbing | ✅ `shrink_plan`, applied by `gapfinder harness`: in-VM parallel runs, else shards (`run.shard_mean`), else halve the epochs with a 5% allowance |
+| 7 | **Loader caches** for common datasets (PyG, torchvision, sklearn; they check hashes). Not a generic `/data` symlink | 6.2 | plumbing | ✅ in `gapfinder harness`: new files under data directories and loader caches stay in the base checkpoint; outputs, logs and model files are deleted; sizes and sha256 recorded in HARNESS.md |
+| 8 | **Built-in CPU shim** (`cuda.is_available` False, `torch.load` to CPU) and allocator and thread settings in every run; `num_workers=0` only after an out-of-memory failure | 6.5 | recurring class (hand-built for Anomaly Transformer and SparseTSF) | ✅ `sandbox/runtime_shim.py`, every run (and env-build's goal) |
+| 9 | **Static GPU/size filter** before spending on a ledger | 6.5, 6.10 | plumbing | ✅ `compute_blockers`, step 0 of `gapfinder harness` |
+| 10 | **Static leakage analysis** after Yang et al. (ASE 2022): test data reaching fitting or preprocessing; feeds the audit and the protocol tests | 6.7 | published method | ✅ `code_checks._leakage_leads` (family `preprocessing_leakage`), in the audit |
+| 11 | **Label "Paper's stated value refuted; unique fit"** when all hold: the stated value was run and fails; every claim fits (at least 2); the counterfactual holds; one island; every knob screened. Must not fire on GraphMAE-like cases; regression-checked | 6.8 | recurring class (cautious labels on right answers) | ✅ c1268b5. Dev suite run 4000 against 3900: 50/69 against 53/69 cause runs correct (sign test p = 0.73), 0 confidently wrong; the label did not fire there |
+| 12 | **Conservative significance:** the larger of the baseline and candidate spread | 6.9 | recurring class (config-dependent noise) | ✅ c1268b5 (same regression run) |
+| 13 | **Split variance in calibration,** only through the repo's own split or fold flag | 6.9 | published (Bouthillier et al.) | ✅ c1268b5; fixed after run 4000: a bare `--split` (a fraction) was taken for a seed and the split runs became candidates. Now seed or index names only, and the runs are kept out of the candidates |
+| 14 | **Claims at fixed knob values** (sensitivity-plot points); each candidate is also run at those values | 6.4 | recurring class (identifiability) | ✅ `Target.at`: checked in verification like a held-out; optional per configuration in history matching; an answer they rule out is swapped for a tested configuration that fits every claim. `gapfinder harness` finds them in the ledger when the setting's name maps to a knob, and lists the rest for a person |
+| 15 | **Learning-curve points as claims,** only when the paper reports the curve and the code logs test metrics per epoch | 6.4 | recurring class | ✅ an `epoch` condition becomes a per-epoch metric read from the same run (no extra runs), kept only when the smoke log prints that epoch |
+| 16 | **Super for claim extraction, Ultra only for assumptions;** section slicing as an option, measured for recall | 6.10 | budget | ❌ measured (`eval/claims_tier.py`), not adopted: Super found 27 of Ultra's 61 numeric claims on b3a (44%; it dropped whole baseline rows and Table 3 cells) and returned nothing on a longer paper (reasoning used the 32k output limit). Ultra stays; `--claims-tier super` exists. Section slicing not tried |
+| 17 | **Grounded preprocessing and operation swaps,** only when the paper states the other choice (through the contrast step or the matcher) | 6.3 | grounded extension of the patch round | ✅ `search/op_swaps.py`: seven families of drop-in replacements (activations, pooling, 2-D pooling, scalers, optimisers, initialisers, regression losses); a file-wide `@call.` patch or a keyword string; patch round only, the paper's choice only |
+| 18 | **"As in [X]":** the cited paper's arXiv source, its setup section | 6.6 | published (AutoReproduce's paper lineage) | ✅ `arxiv_source.cited_setups`: sentences that defer the setup to a citation; the arXiv id from the .bbl/.bib or an exact-title search; the cited paper's setup sections appended to the supplement |
+| 19 | **Paper-year dependency environment** as one knob | 6.3 | documented class (dependency drift) | ✅ `env_year.py`; `gapfinder harness --arxiv/--paper-date` adds knob `gf_paper_year_env` (imported packages at the paper's month, `pip --target`, no dependencies), dropped if the old set doesn't import |
 
 ### 7.2 Discarded, and why
 
@@ -315,11 +321,13 @@ allowed under the no-patching rule: a recurring class, a published method, or pl
 
 | What | Where |
 |---|---|
-| Engine | `gapfinder/search/engine.py` (search, protocol tests, alternative configs); `search/audit.py`; `search/trace.py`; `search/contrast.py`; `search/matcher.py`; `search/difftrace.py`; `sandbox/ast_patch.py`; `sandbox/runner.py` (shards and segments) |
-| Harness tools | `gapfinder/env_build.py` (`gapfinder env-build`); `gapfinder/spec_draft.py` (`gapfinder spec-draft`); `eval/external/devset/build_case.py`; `eval/env_bench.py` |
+| Engine | `gapfinder/search/engine.py` (search, protocol tests, alternative configs, claims at fixed values `Target.at`, split variance); `search/audit.py`; `search/trace.py`; `search/contrast.py`; `search/matcher.py`; `search/op_swaps.py`; `search/difftrace.py`; `sandbox/ast_patch.py`; `sandbox/runner.py` (shards and segments) |
+| Harness tools | `gapfinder/harness_build.py` (`gapfinder harness`: the automatic harness end to end); `gapfinder/harness_auto.py` (its fixed rules); `gapfinder/env_year.py` (paper-year knob); `gapfinder/ingest/arxiv_source.py` (LaTeX source, cited setups); `gapfinder/env_build.py` (`gapfinder env-build`); `gapfinder/spec_draft.py` (`gapfinder spec-draft`); `eval/external/devset/build_case.py`; `eval/env_bench.py` |
 | Sealed blind cases | `eval/external/blind-1/`, `blind-2/`, `batch3/` (b3a, b3c), `batch4/` (b4a): each has `case.md`, `answer_key.md` after the reveal, HARNESS.md, the run and RESULT.md |
 | Frozen batches | `eval/external/devset/` (devbatch-1 cases; CANDIDATES.md holds answers); `eval/external/devbatch2/` (PROTOCOL.md, RESULTS.md) |
 | Planted causes | `eval/planted/plant.py` (`make`, `search`, `score`); tasks in `eval/planted/tasks/`; answers in `eval/planted/sealed/` |
+| Case pool | `eval/pool/mine.py` (miner; answers sealed in `eval/pool/sealed/`, never opened by the runner); `eval/pool/verify.py` (parent against fix, verdict only); `eval/pool/candidates.json` (public) |
+| Measurements | `eval/claims_tier.py` -> `eval/results/claims_tier.json` (item 16) |
 | Synthetic benchmark | `eval/gapbench/`; dev suite `eval/dev_suite.py`; `eval/compare_suites.py`; `eval/results/dev_suite_run*.json` |
 | Tags | `blind-1`, `blind-2`, `devbatch-1`, `devbatch-2` (`e0117a2`), `planted-1`, `batch-3` (`92b1faa`), `batch-4` (`bae25f4`) |
 | Learning docs | `docs/learn/` (beginner path) |

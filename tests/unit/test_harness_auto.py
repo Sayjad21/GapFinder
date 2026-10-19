@@ -74,3 +74,30 @@ def test_gpu_only_packages_and_huge_files_are_blockers(tmp_path):
     (tmp_path / "model.py").write_text("import torch\n", encoding="utf-8")
     (tmp_path / "requirements.txt").write_text("torch\n", encoding="utf-8")
     assert compute_blockers(tmp_path) == []
+
+
+def test_a_cuda_extension_build_is_a_blocker(tmp_path):
+    from gapfinder.harness_auto import compute_blockers
+
+    (tmp_path / "kernels").mkdir()
+    (tmp_path / "kernels" / "op.cu").write_text("__global__ void k() {}\n", encoding="utf-8")
+    assert compute_blockers(tmp_path) == []  # .cu sources alone: maybe an optional kernel
+    (tmp_path / "setup.py").write_text("from torch.utils.cpp_extension import CUDAExtension\n"
+                                       "ext = CUDAExtension('op', ['kernels/op.cu'])\n", encoding="utf-8")
+    assert compute_blockers(tmp_path) == ["builds a CUDA extension (setup.py; 1 .cu file(s))"]
+
+
+def test_only_imports_that_always_run_from_the_entry_script_block(tmp_path):
+    from gapfinder.harness_auto import compute_blockers
+
+    (tmp_path / "train.py").write_text("import argparse\nimport model\nfrom utils import opt\n"
+                                       "if __name__ == '__main__':\n    pass\n", encoding="utf-8")
+    (tmp_path / "model.py").write_text("try:\n    import apex\nexcept ImportError:\n    apex = None\n"
+                                       "def fast():\n    import flash_attn\n", encoding="utf-8")
+    (tmp_path / "utils").mkdir()
+    (tmp_path / "utils" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "utils" / "opt.py").write_text("import torch\n", encoding="utf-8")
+    (tmp_path / "serve_vllm.py").write_text("import vllm\n", encoding="utf-8")  # nobody imports it
+    assert compute_blockers(tmp_path) == []
+    (tmp_path / "utils" / "opt.py").write_text("import torch\nimport cupy\n", encoding="utf-8")
+    assert compute_blockers(tmp_path) == ["imports cupy (utils/opt.py:2)"]

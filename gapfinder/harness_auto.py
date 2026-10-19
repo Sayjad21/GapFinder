@@ -52,6 +52,18 @@ def _commands_in(path: Path, rel: str) -> list[Command]:
     for m in _PY_CMD.finditer(joined):
         line = joined[: m.start()].count("\n") + 1
         cmd = re.split(r"\s+\((?:or|e\.g\.|note|optional|see)\b", m.group(1), maxsplit=1)[0].strip().rstrip(";")
+        # a `cd dir` line earlier in the same code block or script (RippleNet's README: `$ cd src`, then the commands)
+        if not cmd.startswith("cd "):
+            cd = None
+            for prev in reversed(joined[: m.start()].split("\n")[:-1]):
+                if not rel.endswith(".sh") and re.match(r"^\s*(```|#{1,6}\s)", prev):  # the block's start
+                    break
+                c = re.match(r"^[ \t>$]*cd ([\w./-]+)\s*$", prev)
+                if c:
+                    cd = c.group(1)
+                    break
+            if cd:
+                cmd = f"cd {cd} && {cmd}"
         out.append(Command(cmd, f"{rel}:{line}"))
     return out
 
@@ -131,7 +143,7 @@ def labelled_numbers(log: str, tail_lines: int = 40) -> dict[str, float]:
         for m in _PAIR.finditer(line):
             raw = _PREFIX.sub("", " ".join(m.group(1).split()).strip(" -"))
             quals = [_qual_of(q.group(1)) for q in _QUAL.finditer(line[: m.end(1)]) if q.group(1).lower() != "best"]
-            base = _QUAL.sub("", raw).strip(" -_:")
+            base = " ".join(_QUAL.sub("", raw).split()).strip(" -_:")
             if not base:
                 continue
             key = " ".join(([("best")] if best else []) + ([quals[-1]] if quals else []) + [base])
@@ -228,32 +240,99 @@ GPU_ONLY = {"flash_attn", "triton", "cupy", "apex", "deepspeed", "bitsandbytes",
 MAX_FILE_MB = 500
 
 
+def _unconditional_imports(tree) -> list[tuple[str, int]]:
+    """(top-level package, line) for the module-level import statements: not in a try, an if or a function."""
+    import ast
+
+    out = []
+    for n in tree.body:
+        if isinstance(n, ast.Import):
+            out += [(a.name.split(".")[0], n.lineno) for a in n.names]
+        elif isinstance(n, ast.ImportFrom) and n.module and not n.level:
+            out.append((n.module.split(".")[0], n.lineno))
+    return out
+
+
+def _import_closure(root: Path) -> list[tuple[Path, object]]:
+    """(file, syntax tree) for the entry scripts and the repo files they import unconditionally, transitively;
+    every .py file when no entry script is found."""
+    import ast
+
+    from gapfinder.env_build import entry_scripts
+
+    def parse(p: Path):
+        try:
+            return ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        except (SyntaxError, ValueError, OSError):
+            return None
+
+    def visible(p: Path) -> bool:
+        return not any(x.startswith(".") for x in p.relative_to(root).parts)
+
+    starts = [s.resolve() for s in entry_scripts(root)]
+    if not starts:
+        return [(p, t) for p in sorted(root.rglob("*.py")) if visible(p) and (t := parse(p)) is not None]
+    seen, out, todo = set(), [], list(starts)
+    while todo:
+        p = todo.pop()
+        if p in seen or not p.is_file():
+            continue
+        seen.add(p)
+        tree = parse(p)
+        if tree is None:
+            continue
+        out.append((p, tree))
+        for n in tree.body:
+            mods = []
+            if isinstance(n, ast.Import):
+                mods = [(a.name, 0) for a in n.names]
+            elif isinstance(n, ast.ImportFrom):
+                mods = [((n.module or ""), n.level)] + [(f"{n.module}.{a.name}" if n.module else a.name, n.level)
+                                                        for a in n.names]
+            for mod, level in mods:
+                bases = [p.parent.joinpath(*[".."] * (level - 1))] if level else [p.parent, root]
+                for base in bases:
+                    rel = Path(*mod.split(".")) if mod else Path()
+                    for cand in (base / rel.with_suffix(".py") if mod else None, base / rel / "__init__.py"):
+                        if cand is not None and cand.is_file():
+                            todo.append(cand.resolve())
+                    # a package's __init__ runs on every import from it
+                    parts = mod.split(".")[:-1]
+                    for i in range(1, len(parts) + 1):
+                        init = base.joinpath(*parts[:i]) / "__init__.py"
+                        if init.is_file():
+                            todo.append(init.resolve())
+    return out
+
+
 def compute_blockers(root: str | Path) -> list[str]:
     """Reasons a repo can't run on a CPU-only, 3.9 GB Sandboxes VM, found statically (plan item 9): imports of
     GPU-only packages, GPU-only requirements, and files larger than MAX_FILE_MB. An empty list is no guarantee."""
-    import ast
-
-    root = Path(root)
+    root = Path(root).resolve()
     out = []
-    for p in sorted(root.rglob("*.py")):
-        if any(x.startswith(".") for x in p.relative_to(root).parts):
-            continue
-        try:
-            tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
-        except (SyntaxError, ValueError):
-            continue
-        for n in ast.walk(tree):
-            names = [a.name for a in n.names] if isinstance(n, ast.Import) else (
-                [n.module] if isinstance(n, ast.ImportFrom) and n.module else [])
-            for name in names:
-                top = name.split(".")[0]
-                if top in GPU_ONLY:
-                    out.append(f"imports {top} ({p.relative_to(root).as_posix()}:{n.lineno})")
+    # only imports that always run: module level, outside try/except, if and function bodies (OpenNMT's
+    # `try: import apex` is optional fp16), in the files the entry scripts import (a vllm backend nobody imports
+    # is no blocker). Without an entry script, every file
+    for p, tree in _import_closure(root):
+        for top, line in _unconditional_imports(tree):
+            if top in GPU_ONLY:
+                out.append(f"imports {top} ({p.relative_to(root).as_posix()}:{line})")
     for req in list(root.glob("requirements*.txt")) + list(root.glob("environment*.yml")):
         text = req.read_text(encoding="utf-8", errors="replace").lower()
         for pkg in sorted(GPU_ONLY):
             if re.search(rf"(?m)^\s*-?\s*{re.escape(pkg)}\b", text):
                 out.append(f"requires {pkg} ({req.name})")
+    # a CUDA extension the code builds (torch.utils.cpp_extension.CUDAExtension over .cu sources): nvcc and a GPU
+    cu = [p for p in root.rglob("*.cu") if not any(x.startswith(".") for x in p.relative_to(root).parts)]
+    if cu:
+        for p in [*root.rglob("setup.py"), *root.rglob("*.py")][:400]:
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if "CUDAExtension(" in text:
+                out.append(f"builds a CUDA extension ({p.relative_to(root).as_posix()}; {len(cu)} .cu file(s))")
+                break
     for p in root.rglob("*"):
         if p.is_file() and p.stat().st_size > MAX_FILE_MB * 2**20:
             out.append(f"{p.relative_to(root).as_posix()} is {p.stat().st_size / 2**20:.0f} MB")

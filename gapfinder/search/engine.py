@@ -66,6 +66,10 @@ class Target:
     # relation reverses beyond noise fails like a broken held-out claim; it breaks ties the numbers can't
     relation: dict | None = field(default=None, hash=False, compare=False)
     quote: str | None = None  # e.g. "Figure 6": which experiment's stated settings apply
+    # a number the paper reports with some settings fixed (a sensitivity table's cell: RippleNet's AUC at ripple
+    # set size 8, {"n_memory": "8"}): a held-out claim measured with these values on top of each configuration.
+    # Configurations that fit the target equally well often differ here (plan item 14: identifiability)
+    at: dict | None = field(default=None, hash=False, compare=False)
 
 
 @dataclass
@@ -92,12 +96,19 @@ class SearchConfig:
     # False leaves it out of the first pass and adds it to the fallback round, so it is never dropped for good
     demote_stated: bool = False
     relation_repeats: int = 2  # runs at each end of a relation claim, per candidate checked
+    point_repeats: int = 1  # runs of a claim at fixed knob values (Target.at), per configuration checked
+    max_points: int = 4  # such claims used per search (each costs runs for every configuration checked)
+    point_configs: int = 3  # before history matching: the best joint fits also measured at those claims
     # out of space: one Super call compares the paper with the traced run (gapfinder/search/contrast.py);
     # grounded literal differences are tried first in the patch round, structural ones are reported only
     contrast: bool = True
     # with it, a deterministic matcher ($0, search/matcher.py): a setting the paper states, whose name matches no
     # knob, against the code's named literals with the same core words; a differing literal is a patch lead
     match_constants: bool = True
+    # with them, grounded operation swaps ($0, search/op_swaps.py): the paper names one operation of a family of
+    # drop-in replacements (ELU, mean pooling, min-max scaling, SGD) and the code uses another; tried in the
+    # patch round with the paper's choice only
+    op_swaps: bool = True
     # protocol tests, after the claims (gapfinder/search/audit.py): code that selects its result by the test score,
     # or edits predictions using the ground truth, is run once more with that logic switched off (an @if patch), so
     # "the reported number depends on this protocol" is measured, not only pointed at. devbatch-2: NCF (best epoch
@@ -416,7 +427,9 @@ class GapSearch:
         """`evidence`: optional EvidenceSearch (web) consulted when paper and code don't back a value.
         `claims`: the ledger's claims, so a paper value can be tied to the experiment it belongs to."""
         self.relations = [t for t in targets if t.relation]  # checked under candidates, never explained
-        targets = [t for t in targets if not t.relation]
+        # claims at fixed knob values, checked under candidates like held-outs, never explained
+        self.points = [t for t in targets if t.at and not t.relation][: (cfg or SearchConfig()).max_points]
+        targets = [t for t in targets if not t.relation and not t.at]
         self.orch, self.targets, self.cfg = orch, targets, cfg or SearchConfig()
         self.evidence = evidence
         self.router = router  # optional: Nemotron 3 Super triages failed hypotheses
@@ -616,18 +629,24 @@ class GapSearch:
             await self._split_variance(runs)
 
     async def _split_variance(self, runs: list[Branch]) -> None:
-        """Two naive runs at other values of the harness's split or fold seed knob (by name or traced role): the
-        claims' spread across splits, against their spread across seeds alone."""
+        """Two naive runs at other values of the harness's split or fold seed knob: the claims' spread across
+        splits, against their spread across seeds alone. The name must say it is a seed or an index (data_seed,
+        split_seed, fold_idx): a bare `split` or `fold` is as often a fraction or a mode (dev suite run 4000).
+        The runs are measurements, not candidates: they are kept out of the search's configurations, or a lucky
+        split could be reported as the explanation."""
         knob = next((k for k, kn in self.spec.knobs.items()
-                     if re.search(r"(?i)(split|fold|data|partition)_?(seed|idx|index|id)?$|^fold$|^split$", k)
-                     and _NUM.fullmatch(str(kn.default).strip() or "x")), None)
+                     if re.fullmatch(r"(?i)(split|fold|data|partition|cv|kfold)_?(seed|idx|index|id|num|no)", k)
+                     and re.fullmatch(r"\d+", str(kn.default).strip())), None)
         if knob is None:
             return
-        d = int(float(self.spec.knobs[knob].default))
+        d = int(self.spec.knobs[knob].default)
         others = [{knob: str(d + 1)}, {knob: str(d + 2)}]
+        if self.cfg.max_runs is not None and self.runs_used + len(others) > self.cfg.max_runs:
+            return
         try:
-            extra = [b for c in others for b in await self.measure(c, 1, "noise (split)")]
-        except (RunBudgetExceeded, budget.BudgetExceeded):
+            self.runs_used += len(others)
+            extra = await self.orch.fanout(others, ["noise (split)"] * len(others))
+        except budget.BudgetExceeded:
             return
         self.split_report = {}
         for t in self.targets:
@@ -1042,10 +1061,13 @@ class GapSearch:
         if self.cfg.mde_inconclusive:
             self._mde_check(t, res)
         if self.cfg.history_matching:
+            if self._usable_points():
+                await self._points_for_fits(t, res)
             self._history_match(t, res)
             if self.cfg.patch_knobs and self._wants_patch(res):
                 await self._contrast(res)
                 self._match_constants(res)
+                self._match_ops(res)
                 try:
                     await self._patch_round(t, res)
                 except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
@@ -1058,6 +1080,61 @@ class GapSearch:
                               label=res.attribution.confidence_label if res.attribution else None,
                               changes=res.changes, gap_before=g0, gap_after=res.gap_after)
         return res
+
+    def _point_config(self, p: Target, changes: Changes) -> Changes:
+        """`changes` with the claim's fixed values on top (a value equal to the default is left out)."""
+        c = dict(changes)
+        for k, v in (p.at or {}).items():
+            if _same_value(str(v), self.spec.knobs[k].default):
+                c.pop(k, None)
+            else:
+                c[k] = str(v)
+        return c
+
+    def _usable_points(self) -> list[Target]:
+        return [p for p in self.points if p.metric in self.bands and set(p.at or {}) <= set(self.spec.knobs)]
+
+    async def _measure_points(self, configs: list[Changes], label: str = "point") -> None:
+        """Every usable fixed-value claim under each configuration (and the naive one), point_repeats runs each.
+        Out of budget it measures what it can."""
+        cs = [{}] + [c for c in configs if c]
+        try:
+            await _all(*(self.measure(self._point_config(p, c), self.cfg.point_repeats, f"{label} {p.claim_id}")
+                         for p in self._usable_points() for c in cs))
+        except (RunBudgetExceeded, budget.BudgetExceeded):
+            pass
+
+    def _point_check(self, p: Target, changes: Changes) -> dict:
+        """Like a held-out claim: no worse under the candidate than under the naive configuration, beyond noise."""
+        v0, v = self.value(self._point_config(p, {}), p.metric), self.value(self._point_config(p, changes), p.metric)
+        if v0 is None or v is None:
+            return {"ok": True, "checked": False, "at": dict(p.at), "why": "not measured"}
+        before, after = (v0 - p.paper_value) / abs(p.paper_value), (v - p.paper_value) / abs(p.paper_value)
+        return {"gap_before": before, "gap_after": after, "ok": held_out_ok(before, after, self.band(p)),
+                "checked": True, "at": dict(p.at)}
+
+    def _hm_inputs(self, t: Target) -> tuple[dict, list, dict]:
+        """History matching's runs and claims: the target, its held-outs, and the claims at fixed knob values
+        (each read from the runs at the configuration with its values on top; optional per configuration)."""
+        claims = [(t.claim_id, t.metric, t.paper_value)] + [
+            (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out
+            and not h.tuned_separately and h.metric != t.metric]
+        runs = {tuple(sorted(k)): [b.parsed_metrics for b in v if b.status == BranchStatus.succeeded]
+                for k, v in self._runs.items()}
+        runs = {k: v for k, v in runs.items() if v}
+        pts = self._usable_points()
+        if not pts:
+            return runs, claims, {}
+        aug = {}
+        for key, ms in runs.items():
+            extra = []
+            for p in pts:
+                pk = tuple(sorted(self._point_config(p, dict(key)).items()))
+                extra += [{f"{p.metric}@{p.claim_id}": m[p.metric]} for m in runs.get(pk, []) if p.metric in m]
+            aug[key] = ms + extra
+        claims += [(p.claim_id, f"{p.metric}@{p.claim_id}", p.paper_value) for p in pts]
+        return aug, claims, {"optional": {p.claim_id for p in pts},
+                             "sd_alias": {f"{p.metric}@{p.claim_id}": p.metric for p in pts}}
 
     def _relation_configs(self, rel: Target, changes: Changes) -> tuple[Changes, Changes]:
         knob = rel.relation["knob"]
@@ -1180,6 +1257,20 @@ class GapSearch:
             self.orch.events.emit("note", msg=f"constant matcher: {len(found)} literal(s) differ from the paper: "
                                               + "; ".join(f"{x['name']} {x['value']} -> {x['paper_value']}"
                                                           f" ({x['file']}:{x['line']})" for x in found[:6]))
+
+    def _match_ops(self, res: ClaimResult) -> None:
+        """Operations the paper names against the ones the code calls (no model call): swap leads."""
+        root = self.spec.code_root()
+        if not self.cfg.op_swaps or root is None or not self.paper_text:
+            return
+        from gapfinder.search.op_swaps import op_swap_leads
+
+        found = op_swap_leads(root, self.paper_text)
+        res.diagnosis["swap_leads"] = found
+        if found:
+            self.orch.events.emit("note", msg=f"operation swaps: {len(found)} the paper grounds: " + "; ".join(
+                f"{x['value']} -> {x['paper_value']} ({x['file']}{':' + str(x['line']) if x['line'] else ''})"
+                for x in found[:6]))
 
     async def _secant_step(self, t: Target, hyps: list[Hypothesis], tried: set[frozenset]) -> list[Hypothesis]:
         """Secant iteration on each numeric knob the paper's number is bracketed on: interpolate the crossing,
@@ -1547,6 +1638,11 @@ class GapSearch:
         # 5b'. relations the paper states over a setting must not reverse under the candidate
         for rel in self.relations if self.cfg.verify else ():
             r.relations[rel.claim_id] = await self._check_relation(rel, changes)
+        # 5b''. claims at fixed knob values: held-outs measured with those values on top of the candidate
+        if self.cfg.verify and self._usable_points():
+            await self._measure_points([changes], "point check")
+            for p in self._usable_points():
+                r.held_out[p.claim_id] = self._point_check(p, changes)
         # 5c. plausibility: the value needs evidence, not just a good fit
         for knob, value in changes.items() if self.cfg.verify else ():
             if not self.cfg.evidence_gate:
@@ -1686,13 +1782,8 @@ class GapSearch:
         from gapfinder.sandbox import ast_patch
         from gapfinder.search.history import diagnose
 
-        claims = [(t.claim_id, t.metric, t.paper_value)] + [
-            (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out
-            and not h.tuned_separately and h.metric != t.metric]
-        runs = {tuple(sorted(k)): [b.parsed_metrics for b in v if b.status == BranchStatus.succeeded]
-                for k, v in self._runs.items()}
-        d = diagnose({k: v for k, v in runs.items() if v}, claims, t.claim_id,
-                     paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc)
+        runs, claims, extra = self._hm_inputs(t)
+        d = diagnose(runs, claims, t.claim_id, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc, **extra)
         if not d.kind.startswith("out_of_space"):
             return
         leads = [x for x in code_checks(root, set(self.spec.knobs)) if x.family == "unexposed_setting" and x.value
@@ -1717,6 +1808,7 @@ class GapSearch:
         contrasted = [x for x in (res.diagnosis or {}).get("contrast_leads") or []]
         have = {(c["file"], c["line"]) for c in contrasted}  # the model's reading first, then the matcher's
         contrasted += [x for x in (res.diagnosis or {}).get("matcher_leads") or [] if (x["file"], x["line"]) not in have]
+        contrasted += list((res.diagnosis or {}).get("swap_leads") or [])  # operations the paper names
         if self.trace_report is not None:  # literals seen reaching a sink at runtime come first
             traced = [{"file": x.file, "line": x.line, "name": x.name, "value": x.literal, "family": "unexposed_setting",
                        "source": "trace", "sink": x.sink} for x in self.trace_report.leads]
@@ -1750,6 +1842,8 @@ class GapSearch:
             pv = x.get("paper_value")  # a contrast lead: the paper's own number first
             if pv and not _same_value(str(pv), str(x["value"])):
                 vals = [str(pv)] + [v for v in vals if not _same_value(v, str(pv))]
+            if x.get("source") == "swap":  # an operation swap: the paper's choice and nothing else
+                vals = [str(pv)]
             vals = vals[: self.cfg.patch_values]
             with_base.append([{**base, k: v} for v in vals] if base else [])
             alone.append([{k: v} for v in vals])
@@ -1758,7 +1852,7 @@ class GapSearch:
             return [g[i] for i in range(max((len(g) for g in groups), default=0)) for g in groups if i < len(g)]
         configs = rr(with_base) + rr(alone)
         stated = {ast_patch.knob_name(x["file"], x["line"], x["name"]): str(x["paper_value"]) for x in leads
-                  if x.get("paper_value") and x.get("source") in ("contrast", "matcher")}
+                  if x.get("paper_value") and x.get("source") in ("contrast", "matcher", "swap")}
         if len(stated) > 1:  # every difference the paper states, at the paper's values, together (VGAE: test and val %)
             configs = [stated] + ([{**base, **stated}] if base else []) + [c for c in configs if c != stated]
         if self._patch_reserve:  # leave room for the confirmation repeats
@@ -1769,13 +1863,8 @@ class GapSearch:
         await _all(*(self.measure(c, 1, "patch screen") for c in configs))
 
         def rediagnose():
-            claims = [(t.claim_id, t.metric, t.paper_value)] + [
-                (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out
-            and not h.tuned_separately and h.metric != t.metric]
-            runs = {tuple(sorted(k)): [b.parsed_metrics for b in v if b.status == BranchStatus.succeeded]
-                    for k, v in self._runs.items()}
-            return diagnose({k: v for k, v in runs.items() if v}, claims, t.claim_id,
-                            paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc)
+            runs, claims, extra = self._hm_inputs(t)
+            return diagnose(runs, claims, t.claim_id, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc, **extra)
 
         d = rediagnose()
         joint = [r for r in d.joint if any(ast_patch.is_patch(k) for k in r["config"])]
@@ -1827,17 +1916,76 @@ class GapSearch:
                          f"{n} runs per configuration at 80% power): even a setting that closed it couldn't have "
                          "been confirmed, so 'nothing explains it' can't be claimed either")
 
+    async def _points_for_fits(self, t: Target, res: ClaimResult) -> None:
+        """The configurations that fit every claim so far (and the answer), measured at the claims with fixed knob
+        values too, so history matching can tell them apart there."""
+        from gapfinder.search.history import diagnose
+
+        runs, claims, extra = self._hm_inputs(t)
+        d = diagnose(runs, claims, t.claim_id, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc, **extra)
+        configs = ([dict(res.changes)] if res.changes else []) + [r["config"] for r in d.joint if r["config"]]
+        seen, pick = set(), []
+        for c in configs:
+            if frozenset(c.items()) not in seen:
+                seen.add(frozenset(c.items()))
+                pick.append(c)
+        if pick:
+            await self._measure_points(pick[: self.cfg.point_configs + 1], "point (history matching)")
+        await self._points_swap(t, res)
+
+    async def _points_swap(self, t: Target, res: ClaimResult) -> None:
+        """History matching's rule for the answer: it must fit every claim. When the answer is ruled out by a claim
+        at fixed knob values (I > 3 there) and another tested configuration closes the target and fits every claim,
+        those included, that one is confirmed and verified, and taken if its label is no worse."""
+        from gapfinder.search.history import implausibilities
+
+        if not res.changes or res.status == "partial":
+            return
+        runs, claims, extra = self._hm_inputs(t)
+        pids = extra.get("optional") or set()
+        rows = implausibilities(runs, claims, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc, **extra)
+        me = next((r for r in rows if r["config"] == dict(res.changes)), None)
+        bad = sorted(c for c in pids if me is not None and me["I"].get(c, 0) > 3)
+        if not bad:
+            return
+        # consistent with the paper as in _order_candidates: closes, or an implausibility of at most 2; a row made to
+        # measure a fixed-value claim (its knobs at that claim's values) is a measurement, not a candidate
+        at_rows = lambda c: any(all(_same_value(str(c.get(k, "")), str(v)) for k, v in p.at.items())  # noqa: E731
+                                for p in self._usable_points())
+        alts = sorted((r for r in rows if r["config"] and r["config"] != dict(res.changes) and not at_rows(r["config"])
+                       and pids <= set(r["I"]) and max(r["I"].values()) <= 3
+                       and (self.closes(t, r["config"]) or r["I"][t.claim_id] <= 2)),
+                      key=lambda r: (max(r["I"].values()), len(r["config"])))
+        old = dict(res.changes)
+        if not alts:
+            res.notes.append(f"{old} doesn't fit {', '.join(bad)} (claims at fixed settings); no other tested "
+                             "configuration fits every claim")
+            return
+        c = alts[0]["config"]
+        try:
+            await self.measure(c, self.confirm_repeats(t), "point confirm")
+            i = self.implausibility(t, c)
+            if not (self.closes(t, c) or (i is not None and i <= 2)):
+                return
+            trial = await self._verify(t, c, res)
+        except (RunBudgetExceeded, budget.BudgetExceeded):
+            return
+        if _rank(trial) > _rank(res):
+            res.notes.append(f"{old} doesn't fit {', '.join(bad)} (claims at fixed settings); {c} fits every claim "
+                             f"but verified worse ({trial.attribution.confidence_label})")
+            return
+        for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay", "relations"):
+            setattr(res, f, getattr(trial, f))
+        res.notes.extend(trial.notes)
+        res.notes.append(f"{old} fit the target but not {', '.join(bad)} (claims at fixed settings, I > 3); {c} fits "
+                         "every claim, those included, so it is the answer (history matching)")
+
     def _history_match(self, t: Target, res: ClaimResult) -> None:
         """Score every measured configuration against the target and its held-out claims together."""
         from gapfinder.search.history import diagnose
 
-        claims = [(t.claim_id, t.metric, t.paper_value)] + [
-            (h.claim_id, h.metric, h.paper_value) for h in self.targets if h.held_out
-            and not h.tuned_separately and h.metric != t.metric]
-        runs = {tuple(sorted(k)): [b.parsed_metrics for b in v if b.status == BranchStatus.succeeded]
-                for k, v in self._runs.items()}
-        runs = {k: v for k, v in runs.items() if v}
-        d = diagnose(runs, claims, t.claim_id, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc)
+        runs, claims, extra = self._hm_inputs(t)
+        d = diagnose(runs, claims, t.claim_id, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc, **extra)
         res.diagnosis = d.to_dict()
         root = self.spec.code_root()
         if (d.kind.startswith("out_of_space") or self._unsupported(res)) and root is not None:

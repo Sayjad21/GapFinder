@@ -65,3 +65,34 @@ def test_the_arxiv_id_comes_from_the_stamp_or_the_file_name():
     assert detect_arxiv_id("... arXiv:1803.03467v4 [cs.IR] 25 Aug 2018 ...") == "1803.03467v4"
     assert detect_arxiv_id("no stamp here", "2405.00946v1.pdf") == "2405.00946v1"
     assert detect_arxiv_id("nothing", "paper.pdf") is None
+
+
+CITING = (r"\documentclass{article}\begin{document}" "\n"
+          r"\section{Experiments} We follow the experimental setting of \citet{kipf2017} for all datasets." "\n"
+          r"Our model is related to \cite{other}." "\n"
+          r"\bibliography{refs}\end{document}" "\n")
+BIB = ("@inproceedings{kipf2017,\n  title={Semi-Supervised Classification with Graph Convolutional Networks},\n"
+       "  eprint={1609.02907},\n  year={2017}\n}\n@article{other,\n  title={Something Else},\n  year={2019}\n}\n")
+CITED = (r"\documentclass{article}\begin{document}\section{Introduction} Graphs." "\n"
+         r"\section{Experiments}\subsection{Experimental set-up} We train for 200 epochs with Adam, learning rate"
+         r" 0.01, dropout 0.5, L2 5e-4, and stop early with a window of 10 epochs. \label{sec:setup}" "\n"
+         r"\section{Related work} Others." "\n" r"\end{document}" "\n")
+
+
+def test_a_deferred_setup_is_read_from_the_cited_paper(tmp_path, monkeypatch):
+    from gapfinder.ingest import arxiv_source as a
+
+    src = tmp_path / "paper"
+    src.mkdir()
+    (src / "main.tex").write_text(CITING, encoding="utf-8")
+    (src / "refs.bib").write_text(BIB, encoding="utf-8")
+    assert [k for k, _ in a.deferred_citations(CITING)] == ["kipf2017"]  # "related to \cite{other}" defers nothing
+    assert a.bib_entries(src)["kipf2017"]["arxiv"] == "1609.02907"
+    cited = tmp_path / "cache" / "1609.02907"
+    cited.mkdir(parents=True)
+    (cited / "main.tex").write_text(CITED, encoding="utf-8")
+    monkeypatch.setattr(a, "arxiv_by_title", lambda *_a, **_k: None)  # no network
+    text = a.cited_setups(src, tmp_path / "cache")
+    assert "arXiv:1609.02907" in text and "learning rate 0.01, dropout 0.5" in text
+    assert "Graphs." not in text and "Others." not in text  # only the setup sections
+    assert "We follow the experimental setting" in text

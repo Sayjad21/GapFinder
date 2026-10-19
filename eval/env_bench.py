@@ -33,7 +33,7 @@ async def one(case: str, local: Path, max_steps: int) -> dict:
     c = json.loads((DEVSET / case / "case.json").read_text(encoding="utf-8"))
     metrics = yaml.safe_load((DEVSET / case / f"{case}.yaml").read_text(encoding="utf-8")).get("metrics") or []
     b = ContreeBackend()
-    res = await build_env(Router(), b, local, fetch=fetch(c["repo"], c["commit"]), max_steps=max_steps)
+    res = await build_env(Router(), b, local, fetch=fetch(c["repo"], c["commit"], local), max_steps=max_steps)
     row = {"case": case, "env_ok": res.ok, "image": res.image, "hand_image": c["image"], "steps": len(res.steps),
            "kept": len(res.recipe), "recipe": res.recipe, "reason": res.reason, "llm_usd": round(res.cost_usd, 4),
            "smoke_ok": False}

@@ -202,6 +202,12 @@ class GapReport:
         if not r.counterfactual:
             checks.append({"kind": "reversal", "ok": None, "text": "no reversal test recorded"})
         for cid, v in r.held_out.items():
+            at = (" at " + ", ".join(f"{k}={x}" for k, x in v["at"].items())) if v.get("at") else ""
+            if v.get("checked") is False:  # a claim at fixed knob values the budget didn't reach
+                checks.append({"kind": "held_out", "ok": None, "text": f"{cid}{at}: {v.get('why', 'not checked')}"})
+                continue
+            if at:
+                cid = f"{cid}{at}"
             if v.get("tuned_separately"):
                 checks.append({"kind": "held_out_separate", "ok": None,
                                "text": f"{cid}: {_pct(v['gap_before'])} to {_pct(v['gap_after'])}"

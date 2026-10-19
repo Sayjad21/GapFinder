@@ -23,7 +23,7 @@ BENCH = textwrap.dedent('''\
     ''')
 
 
-def _search(tmp_path, **cfg):
+def _search(tmp_path, knob="split_seed", **cfg):
     art = tmp_path / "art"
     art.mkdir(parents=True)
     (art / "main.py").write_text(BENCH, encoding="utf-8")
@@ -32,13 +32,13 @@ def _search(tmp_path, **cfg):
         name: split-toy
         base: "local:{art.as_posix()}"
         run:
-          command: '"${{PYTHON:-python3}}" main.py --lr {{lr}} --split_seed {{split_seed}}'
+          command: '"${{PYTHON:-python3}}" main.py --lr {{lr}} --split_seed {{{knob}}}'
           output: out/run.log
           format: kv
           timeout: 30
         knobs:
           lr: {{layer: config, default: "0.01"}}
-          split_seed: {{layer: config, default: "0"}}
+          {knob}: {{layer: config, default: "0"}}
         allowed_paths: ["out/"]
         metrics: [acc]
         """), encoding="utf-8")
@@ -54,6 +54,14 @@ async def test_split_variance_is_reported_and_used_only_when_asked(tmp_path):
     r = s.split_report["C1"]
     assert r["seed_and_split_band"] > 3 * r["seed_band"]
     assert s.bands["acc"].band == r["seed_band"]  # reported only
+    # measurements, not candidates: a lucky split must never become the explanation
+    assert not any(dict(k).get("split_seed") not in (None, "0") for k in s._runs)
     s2 = _search(tmp_path / "b", split_noise=True)
     await s2.calibrate()
     assert s2.bands["acc"].band == s2.split_report["C1"]["seed_and_split_band"]
+
+
+async def test_a_bare_split_knob_is_not_a_seed(tmp_path):
+    s = _search(tmp_path / "c", knob="split")  # `--split 0`: a fraction or a mode as often as a seed
+    await s.calibrate()
+    assert s.split_report == {}

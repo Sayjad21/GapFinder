@@ -49,6 +49,9 @@ class RunStage(Stage):
     #   = 1, 2, ..., each from the previous one's checkpoint; the joined outputs are parsed.
     shards: list[str] = Field(default_factory=list)
     segments: int = 1
+    # shards that are repeats of one cell (seeds): each shard's metrics are parsed alone and averaged, instead of
+    # the joined output's last value of each metric (output "stdout" only)
+    shard_mean: bool = False
 
 
 class Knob(BaseModel):

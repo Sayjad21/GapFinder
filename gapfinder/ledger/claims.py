@@ -99,9 +99,12 @@ async def filter_claims(router: Router, paper: PaperText, claims: list[Claim]) -
     return kept, dropped
 
 
-async def extract_claims(router: Router, paper: PaperText, *, max_chars: int = 180_000) -> list[Claim]:
+async def extract_claims(router: Router, paper: PaperText, *, max_chars: int = 180_000,
+                         tier: str = "ultra") -> list[Claim]:
+    """`tier`: "ultra", or "super" at about a third of the price (plan item 16; recall measured in
+    eval/claims_tier.py before it becomes the default)."""
     text = paper.full_text[:max_chars]
-    out = await router.structured("ultra", [{"role": "user", "content": CLAIM_PROMPT.format(paper=text)}], _Claims)
+    out = await router.structured(tier, [{"role": "user", "content": CLAIM_PROMPT.format(paper=text)}], _Claims)
     return out.claims
 
 
