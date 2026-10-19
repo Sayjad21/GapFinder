@@ -133,6 +133,10 @@ class SearchConfig:
     # saved go to later rounds (test-v11-05: 14 survivors x ~5 runs used a third of the budget)
     racing: bool = True
     race_keep: int = 4
+    # at most this share of max_runs goes to the race's first stage (2 runs per survivor); above it, only the
+    # strongest survivors race (0 = no cap)
+    race_budget_frac: float = 0.25
+    race_min: int = 8
     # forward step in the combine round: the best confirmed singles (anchors) are paired with every
     # screened value of the other top knobs, not just those values that scored well alone. An
     # interaction partner can move the metric the wrong way on its own (test-v11-05: epochs=75 alone moved
@@ -653,6 +657,42 @@ class GapSearch:
             self.orch.events.emit("note", msg=f"audit: skipped ({type(exc).__name__}: {str(exc)[:160]})")
         return results
 
+    def _alternative_configs(self, max_configs: int = 3) -> list[Changes]:
+        """Settings the repo declares a second time with other values, as whole configurations: a flag block that
+        sits again elsewhere in the code (batch-4 RippleNet: a commented-out argparse block "default settings for
+        Book-Crossing" in src/main.py, with lr 1e-3 and l2_weight 1e-5, while the active defaults are MovieLens').
+        One block is one configuration: its settings may only work together (l2_weight alone did nothing there)."""
+        if getattr(self, "_alt_configs", None) is not None:
+            return self._alt_configs
+        self._alt_configs = []
+        flags = getattr(self._artifact_flags, "flags", None) or []
+        blocks: dict[tuple[str, int], dict[str, str]] = {}
+        where: dict[tuple[str, int], str] = {}
+        for f in flags:
+            k = map_knob_name(f.name, self.spec.knobs)
+            if k is None or f.default in (None, "None") or ast_patch_is_patch(k):
+                continue
+            if _same_value(str(f.default), self.spec.knobs[k].default):
+                continue  # the declaration the harness runs (or one that agrees with it)
+            others = [g for g in flags if g.name == f.name and g.file == f.file and g.line != f.line]
+            if not others:
+                continue  # declared once: the spec's default comes from elsewhere, not an alternative block
+            key = (f.file, f.line // 40)  # declarations within a few dozen lines form one block
+            blocks.setdefault(key, {})[k] = str(f.default)
+            where.setdefault(key, f"{f.file}:{f.line}")
+        for key, c in sorted(blocks.items(), key=lambda kv: -len(kv[1]))[:max_configs]:
+            self._alt_configs.append(c)
+            self.orch.events.emit("note", msg=f"alternative settings declared in the repo at {where[key]}: "
+                                              + ", ".join(f"{k}={v}" for k, v in sorted(c.items()))
+                                              + " (tested together in the combine round)")
+        return self._alt_configs
+
+    def _race_cap(self, extra: int) -> int:
+        """How many screen survivors the confirmation race can take without crowding out the combine round."""
+        if not self.cfg.race_budget_frac or not self.cfg.max_runs:
+            return 0
+        return max(self.cfg.race_min, int(self.cfg.max_runs * self.cfg.race_budget_frac / (2 + extra)))
+
     def _stated_value_notes(self, res: ClaimResult) -> None:
         """When the answer changes a knob whose value the paper states, and the stated value itself was run and
         doesn't fit, say so: the paper's stated value is likely not the one behind its numbers (batch-3 b3a: the
@@ -1171,6 +1211,22 @@ class GapSearch:
         # strict: the confirmation runs come on top of the screening run(s) that selected the hypothesis
         extra = self.cfg.screen_repeats if self.cfg.strict_confirm else 0
         racers = survivors
+        cap = self._race_cap(extra)
+        if self.cfg.racing and cap and len(survivors) > cap:
+            # successive halving's first cut (Hyperband): a model that reacts to every knob passes dozens of screen
+            # values, and two confirmation runs each used the whole budget before any pair was tried (batch-4
+            # RippleNet: 96 of 150 runs on confirmation, 0 on combine, so lr + l2_weight never ran). The strongest
+            # value of each knob first, round robin over knobs, then strong ledger leads; the rest stay screened
+            # (the combine round still pairs every screened value).
+            by_knob: dict[str, list[Hypothesis]] = {}
+            for h in sorted(survivors, key=lambda h: -score[h]):
+                by_knob.setdefault(h.knob, []).append(h)
+            first = [hs[i] for i in range(max(map(len, by_knob.values()))) for hs in by_knob.values() if i < len(hs)]
+            keep = first[:cap] + [h for h in first[cap:] if self._strong_lead(h)]
+            self.orch.events.emit("note", msg=f"{t.claim_id}: {len(survivors)} screen survivors; the {len(keep)} strongest "
+                                              f"(by knob) go on to confirmation, to keep runs for the combine round")
+            survivors = keep
+            racers = survivors
         if self.cfg.racing and len(survivors) > self.cfg.race_keep and reps > 2:
             await _all(*(self.measure(h.changes, 2 + extra, "confirm (race)") for h in survivors))
             ll = {h: self.loglik(t, h.changes) for h in survivors}
@@ -1201,7 +1257,7 @@ class GapSearch:
         for h in sorted(best_value.values(), key=lambda h: (-prior[h.knob], h.knob))[: self.cfg.combine_prior_top]:
             if h not in top:
                 top.append(h)
-        combos: list[Changes] = []
+        combos: list[Changes] = [c for c in self._alternative_configs()]  # the repo's own alternatives, as wholes
         conf_knobs = {}
         for h in sorted(confirmed, key=lambda h: -self.units(t, h.changes)):
             conf_knobs.setdefault(h.knob, h.value)

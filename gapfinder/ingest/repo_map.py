@@ -56,6 +56,12 @@ class Flag:
     def ref(self) -> str:
         return f"{self.file}:{self.line}"
 
+    @property
+    def help(self) -> str:
+        """The declaration's help text, when it is on the declaring line (`help='weight of the l2 ...'`)."""
+        m = re.search(r"""\bhelp\s*=\s*(['"])(.*?)\1""", self.text or "")
+        return m.group(2).strip()[:120] if m else ""
+
 
 _KIND_RANK = {"gflags": 0, "absl": 0, "usage": 0, "option_field": 1, "cmake": 1, "make": 2, "argparse": 3, "env": 4}
 
@@ -84,7 +90,10 @@ class RepoMap:
         lines += ["## Flags and defaults (name = default  @ file:line)"]
         # choices are kept out of this text on purpose: it is part of the model prompts, and changing
         # it would invalidate every cached answer (the search reads choices from Flag.choices instead)
-        lines += [f"{f.name} = {f.default}  @ {f.ref}  [{f.kind}]" for f in self.flags[:max_flags]]
+        # the help text says what a flag means: a paper's table in symbols (RippleNet: "lambda1 = 1e-5") is matched to
+        # the flag through it ("weight of the l2 regularization term")
+        lines += [f"{f.name} = {f.default}  @ {f.ref}  [{f.kind}]" + (f"  -- {f.help}" if f.help else "")
+                  for f in self.flags[:max_flags]]
         lines += ["## File tree (truncated)"] + self.files[:max_files]
         if self.readme:
             lines += ["## README (first 4000 chars)", self.readme[:4000]]

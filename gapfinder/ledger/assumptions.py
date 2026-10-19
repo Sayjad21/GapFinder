@@ -31,6 +31,10 @@ numbers WITHOUT editing the algorithm. Go through every family:
   bandwidth, OS settings). Include the paper's stated hardware as an
   environment assumption, since a reproduction's machine almost always differs.
 Read the whole flag list in the repo map, not only the first entries.
+Papers often give hyperparameters as symbols in a table ("lambda_1 = 10^-5, eta = 0.001" per dataset). Match each
+symbol to the flag it means, using the paper's definition of the symbol and the flag's help text in the repo map
+(e.g. lambda_1 "the L2 regularization weight" is the flag whose help says "weight of the l2 regularization term"), and
+give that flag the value the paper states for the claims' dataset.
 
 For each knob:
 - `knob`: the exact flag / option / env var name as it appears in the code.
