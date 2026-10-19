@@ -38,6 +38,7 @@ def comparable(a: str, b: str) -> bool:
 
 def audit(search, results) -> dict:
     out: dict = {"held_out": [], "comparisons": [], "leakage": [], "stated_untestable": [],
+                 "paper_comparisons": paper_comparisons(search),
                  "protocol_tests": list(getattr(search, "protocol_results", []) or [])}
     tested = {(x["file"], x["line"]) for x in out["protocol_tests"]}
     targets = [t for t in search.targets if not getattr(t, "relation", None) and not math.isnan(t.paper_value)]
@@ -103,6 +104,59 @@ def audit(search, results) -> dict:
     return out
 
 
+_STOP = {"ours", "our", "the", "a", "an", "of", "and", "et", "al", "model", "method", "best", "baseline", "proposed",
+         "variant", "with", "without", "on", "for", "in", "by"}
+
+
+def _words(text: str) -> set[str]:
+    import re
+
+    return {w for w in re.findall(r"[a-z][a-z0-9]*", str(text).lower()) if w not in _STOP and len(w) >= 2}
+
+
+def paper_comparisons(search) -> list[dict]:
+    """The paper's comparison claims ("we improve upon GCN by 1.5% on Cora": a ledger ratio claim with the method,
+    the baseline and the dataset in its conditions), each matched to the two measured claims it compares (the
+    metrics that name the method and the baseline and agree on everything else), and checked: does the measured
+    margin have the paper's sign, and is it within noise of the paper's margin? (devbatch-2 PyG: the paper's GAT
+    over GCN on Citeseer, +1.6, measured -0.3.)"""
+    claims = getattr(search, "claims", None) or {}
+    targets = [t for t in search.targets if not getattr(t, "relation", None) and t.metric in search.naive]
+    out = []
+    for c in claims.values():
+        if str(getattr(c.type, "value", c.type)) != "ratio" or c.reported_value is None:
+            continue
+        cond = {k.lower(): v for k, v in (c.conditions or {}).items()}
+        base = next((v for k, v in cond.items() if "baseline" in k or k in ("compared_to", "versus", "vs")), None)
+        ours = next((v for k, v in cond.items() if k in ("our_method", "method", "model", "ours", "proposed")), None)
+        if not base or not ours:
+            continue
+        rest = set().union(*(_words(v) for k, v in cond.items() if v not in (base, ours))) if cond else set()
+        bw, ow = _words(base) - _words(ours), _words(ours) - _words(base)
+        pairs = []
+        for a in targets:
+            for b in targets:
+                ta, tb = set(a.metric.lower().split("_")), set(b.metric.lower().split("_"))
+                if a is b or not comparable(a.metric, b.metric) or not (ta & ow) or not (tb & bw):
+                    continue
+                if rest and not (ta & tb & rest):
+                    continue  # the dataset (or another condition) must be the same one the claim names
+                pairs.append((a, b))
+        if len(pairs) != 1:
+            continue  # none, or ambiguous: not reported
+        a, b = pairs[0]
+        m = search.naive[a.metric] - search.naive[b.metric]
+        noise = math.hypot(search.bands[a.metric].band, search.bands[b.metric].band) if (
+            a.metric in search.bands and b.metric in search.bands) else 0.0
+        r = float(c.reported_value)
+        sign_ok = (m > 0) == (r > 0) or abs(m) <= noise
+        out.append({"claim": c.id, "quote": (c.quote or "")[:200], "page": c.page, "a": a.metric, "b": b.metric,
+                    "paper_margin": r, "measured_margin": m, "noise": noise,
+                    "holds": sign_ok and abs(m - r) <= max(noise, 0.25 * abs(r)),
+                    "reversed": not sign_ok})
+    return out
+
+
 def _settable(name: str, knobs) -> bool:
     """Some knob's name holds every core word of `name` plus at most one more (`lr` ~ `gat_lr`, `dropout` ~
     `gcn_dropout`): the setting is variable in this harness under another name."""
@@ -139,6 +193,13 @@ def audit_markdown(a: dict | None) -> list[str]:
         out.append("- **Comparisons the runs reverse** (the paper's ordering doesn't hold, beyond noise):")
         out += [f"  - paper: {x['paper_says']}; measured: {x['measured']} (margin {x['margin']:.3g}, noise "
                 f"{x['noise']:.3g})" for x in a["comparisons"][:6]]
+    pc = a.get("paper_comparisons") or []
+    if pc:
+        out.append("- **The paper's own comparisons, as measured:**")
+        out += [f"  - {x['claim']} (p.{x['page']}): \"{x['quote'][:140]}\"; {x['a']} minus {x['b']}: paper "
+                f"{x['paper_margin']:+.3g}, measured {x['measured_margin']:+.3g} (noise {x['noise']:.2g}): "
+                + ("**reversed**" if x["reversed"] else "holds" if x["holds"] else "**smaller than claimed**")
+                for x in pc[:8]]
     if a["held_out"]:
         out.append("- **Held-out claims outside noise:**")
         out += [f"  - {x['claim']} (`{x['metric']}`): paper {x['paper']:g}, measured {x['measured']:.4g} "

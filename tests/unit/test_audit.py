@@ -76,3 +76,23 @@ def test_one_flag_split_into_several_knobs_is_a_family():
     assert knob_family("lr", {"gat_lr": 1, "gcn_lr": 1}) == ["gat_lr", "gcn_lr"]
     assert knob_family("lr", {"lr": 1, "gat_lr": 1, "gcn_lr": 1}) == []  # the flag itself is a knob
     assert knob_family("tune", knobs) == []  # one match only is not a family
+
+
+def test_the_papers_comparison_claims_are_checked_against_the_runs(tmp_path):
+    from gapfinder.ledger.schemas import Claim
+    from gapfinder.search.audit import paper_comparisons
+
+    targets = [Target("T", "newnet_d1_acc", 83.0), Target("H1", "oldnet_d1_acc", 81.5, held_out=True),
+               Target("H2", "newnet_d2_acc", 72.5, held_out=True), Target("H3", "oldnet_d2_acc", 70.3, held_out=True)]
+    naive = {"newnet_d1_acc": 83.0, "oldnet_d1_acc": 81.3, "newnet_d2_acc": 70.8, "oldnet_d2_acc": 71.1}
+    s = _search(tmp_path, naive, {m: 0.15 for m in naive}, targets)
+    q = "NewNet improves upon OldNet (Smith et al.) by 1.5% and 1.6% on D1 and D2"
+    s.claims = {"C1": Claim(id="C1", figure_or_table=None, metric="accuracy gain", reported_value=1.5, type="ratio",
+                            conditions={"dataset": "D1", "baseline": "OldNet (Smith et al.)", "our_method": "NewNet"},
+                            quote=q, page=8),
+                "C2": Claim(id="C2", figure_or_table=None, metric="accuracy gain", reported_value=1.6, type="ratio",
+                            conditions={"dataset": "D2", "baseline": "OldNet (Smith et al.)", "our_method": "NewNet"},
+                            quote=q, page=8)}
+    got = {x["claim"]: (x["a"], x["b"], x["holds"], x["reversed"]) for x in paper_comparisons(s)}
+    assert got == {"C1": ("newnet_d1_acc", "oldnet_d1_acc", True, False),
+                   "C2": ("newnet_d2_acc", "oldnet_d2_acc", False, True)}
