@@ -181,8 +181,7 @@ def mine(per_query: int = 100) -> None:
     for p in SEALED.glob("*/meta.json"):
         t = json.loads(p.read_text(encoding="utf-8"))["cause_type"]
         types[t] = types.get(t, 0) + 1
-    print(f"
-{len(public)} candidates (public list: {PUBLIC}); sealed cause types: {types}")
+    print(f"\n{len(public)} candidates (public list: {PUBLIC}); sealed cause types: {types}")
 
 
 def main() -> None:
