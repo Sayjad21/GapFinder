@@ -83,7 +83,8 @@ def audit(search, results) -> dict:
         except Exception:  # an aid: unreadable code leaves the audit without this part
             leads = []
         for x in leads:
-            if ((x.family == "selection_in_code" and "TEST data" in x.detail) or x.family == "label_in_prediction") \
+            if ((x.family == "selection_in_code" and "TEST data" in x.detail)
+                    or x.family in ("label_in_prediction", "eval_switch")) \
                     and (x.file, x.line) not in tested:
                 out["leakage"].append({"file": x.file, "line": x.line, "code": x.code, "detail": x.detail})
 
@@ -120,6 +121,10 @@ def audit_markdown(a: dict | None) -> list[str]:
            "What a matching number doesn't show. The protocol tests below were run; the rest is static."]
     for x in a.get("protocol_tests") or []:
         moved = [c for c in x["claims"] if c["depends"]]
+        if not x["runs"]:
+            out.append(f"- **Found, but the test failed**: `{x['file']}:{x['line']}` {x['detail']}; with it switched "
+                       f"off the program didn't finish ({x.get('failure', '')[:160]}). The code may assume it.")
+            continue
         what = ("**Measured: the reported numbers depend on this code**" if moved else
                 "Tested: switching this code off moved no claim beyond noise")
         out.append(f"- {what}: `{x['file']}:{x['line']}` {x['detail']}; switched off ({x['runs']} runs):")
@@ -127,7 +132,8 @@ def audit_markdown(a: dict | None) -> list[str]:
                 f"{c['without']:.4g}" + (f" (difference 95% CI [{c['ci'][0]:+.3g}, {c['ci'][1]:+.3g}])" if c["ci"] else "")
                 for c in (moved or x["claims"])[:6]]
     if a["leakage"]:
-        out.append("- **The code selects its result by the test score** (the reported number is then optimistic):")
+        out.append("- **How the code computes the reported number** (test-score selection, label-based edits, "
+                   "switches fixed for evaluation):")
         out += [f"  - `{x['file']}:{x['line']}`: {x['detail']}" for x in a["leakage"][:6]]
     if a["comparisons"]:
         out.append("- **Comparisons the runs reverse** (the paper's ordering doesn't hold, beyond noise):")

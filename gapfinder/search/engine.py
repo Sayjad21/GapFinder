@@ -371,6 +371,16 @@ def paper_mentions(text: str, knob: str, limit: int = 5) -> list[str]:
     return out
 
 
+def knob_family(name: str, knobs) -> list[str]:
+    """The knobs one program flag was split into: every knob named `<prefix>_<flag>` (`kmeans_synthetic_lmbda`,
+    `gat_lr`), when there are at least two and the flag itself is not a knob."""
+    flag = _norm_knob(re.sub(r"^(?:[A-Za-z_]\w*\.)+", "", re.sub(r"\s*\(.*$", "", name.strip())).replace(" ", "_"))
+    if not flag or flag in {_norm_knob(k) for k in knobs}:
+        return []
+    fam = [k for k in knobs if _norm_knob(k).endswith("_" + flag)]
+    return sorted(fam) if len(fam) >= 2 else []
+
+
 def map_knob_name(name: str, knobs) -> str | None:
     """The spec knob an assumption's name refers to: an exact match, else the one knob with the same
     core words. None when nothing or several knobs match (a guess there could test the wrong knob)."""
@@ -425,6 +435,13 @@ class GapSearch:
         self._unmapped_assumptions: list[Assumption] = []
         for a in sorted(assumptions, key=lambda a: -a.prior_score):
             k = map_knob_name(a.knob, self.spec.knobs)
+            if k is None and (family := knob_family(a.knob, self.spec.knobs)):
+                # one program flag run as several knobs (batch-3 b3a: `--lmbda` as kmeans_synthetic_lmbda, ...; PyG:
+                # `--lr` as gat_lr and gcn_lr): the paper's reading of the flag applies to each of them
+                for k2 in family:
+                    self.renamed.setdefault(a.knob, ", ".join(family))
+                    self.all_for.setdefault(k2, []).append(a.model_copy(update={"knob": k2}))
+                continue
             if k is None:
                 self.unmapped.append(a.knob)
                 self._unmapped_assumptions.append(a)
@@ -636,6 +653,26 @@ class GapSearch:
             self.orch.events.emit("note", msg=f"audit: skipped ({type(exc).__name__}: {str(exc)[:160]})")
         return results
 
+    def _stated_value_notes(self, res: ClaimResult) -> None:
+        """When the answer changes a knob whose value the paper states, and the stated value itself was run and
+        doesn't fit, say so: the paper's stated value is likely not the one behind its numbers (batch-3 b3a: the
+        paper says lambda = 10 for Synthetic; the code's 10 gives balance 0.5, and 100 gives the paper's 1.00)."""
+        for k, v in (res.changes or {}).items():
+            a = self.assumptions.get(k)
+            if a is None or str(a.paper_value).strip().lower().startswith("unstated"):
+                continue
+            stated = next((x for x in self._stated_values(k) if not _same_value(x, v)), None)
+            if stated is None:
+                continue
+            at = {} if _same_value(stated, self.spec.knobs[k].default) else {k: stated}
+            g = self.gap(res.target, at)
+            if g is None or abs(g) <= self.band_at(res.target, at):
+                continue  # the stated value wasn't measured, or it fits too
+            q = next((e.quote for e in a.evidence if e.kind == "paper" and e.quote), "")
+            res.notes.append(f"the paper states {k} = {stated}" + (f' ("{q[:140]}")' if q else "")
+                             + f", but {stated} leaves the gap at {g:+.1%} (beyond noise); {v} closes it: the stated "
+                             "value is likely not the one behind the paper's numbers")
+
     async def _protocol_tests(self) -> None:
         """Each code lead that selects by the test score or edits predictions with the labels, switched off and
         measured: every claim's naive value against its value without that logic, with a bootstrap interval."""
@@ -647,11 +684,12 @@ class GapSearch:
         from gapfinder.sandbox.spec import Knob
 
         leads = [x for x in code_checks(root, set(self.spec.knobs), limit=80)
-                 if x.family in ("selection_in_code", "label_in_prediction") and x.name == "@if"
+                 if ((x.family in ("selection_in_code", "label_in_prediction") and x.name == "@if")
+                     or (x.family == "eval_switch" and x.name and x.value))
                  and (not ast_patch.entry_script(root / x.file) or ast_patch.direct_entry(self.spec.run.command, x.file))]
         leads = leads[: self.cfg.protocol_tests_max]
         for x in leads:
-            k = ast_patch.knob_name(x.file, x.line, "@if")
+            k = ast_patch.knob_name(x.file, x.line, x.name)
             self.spec.knobs.setdefault(k, Knob(layer="environment", default="as written", env=True))
             try:
                 await self.measure({k: x.value}, self.cfg.protocol_repeats, "protocol test")
@@ -673,7 +711,8 @@ class GapSearch:
                                "ci": list(ci) if ci else None, "held_out": t.held_out,
                                "depends": bool(ci and (ci[0] > 0 or ci[1] < 0))})
             runs = self.measure_ok({k: x.value})
-            self.protocol_results.append({"family": x.family, "file": x.file, "line": x.line, "code": x.code,
+            failed = [b for b in self._runs.get(frozenset({k: x.value}.items()), []) if b.status != BranchStatus.succeeded]
+            self.protocol_results.append({"failed": len(failed), "failure": (failed[0].note or "")[-300:] if failed else "","family": x.family, "file": x.file, "line": x.line, "code": x.code,
                                           "detail": x.detail, "knob": k, "value": x.value, "runs": len(runs),
                                           "claims": claims})
             moved = [c for c in claims if c["depends"]]
@@ -880,6 +919,7 @@ class GapSearch:
                     res.notes.append(f"patch round stopped early: {exc}")
         if res.attribution is not None:
             res.attribution.hypotheses_tested = len(tried)
+        self._stated_value_notes(res)
         self.orch.events.emit("attribution", claim=t.claim_id, status=res.status,
                               label=res.attribution.confidence_label if res.attribution else None,
                               changes=res.changes, gap_before=g0, gap_after=res.gap_after)

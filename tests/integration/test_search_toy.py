@@ -537,3 +537,16 @@ async def test_a_pair_that_fits_is_confirmed_as_soon_as_it_appears(tmp_path):
     assert early and all(b["knob_changes"] == {"gamma": "2.0", "CACHE": "on"} for b in early)
     s2, [r2] = await search(tmp_path, {"gamma": "2.0", "CACHE": "on"}, assumptions=no_alpha, early_confirm=False)
     assert r2.changes == r.changes  # the same answer either way on this task
+
+
+async def test_a_stated_value_that_does_not_fit_is_said_in_the_notes(tmp_path):
+    """batch-3 class: the paper states a value (here alpha = 1.0, the code default), the stated value leaves the gap
+    open, and another value closes it. The report says the stated value is likely not the one behind the numbers."""
+    from gapfinder.ledger.schemas import Evidence
+
+    stated = Assumption(id="A1", knob="alpha", layer="config", paper_value="1.0", candidate_values=["2.0"],
+                        prior_score=0.9, status="stated_matches",
+                        evidence=[Evidence(kind="paper", ref="p.3", quote="we set alpha = 1.0 in all experiments")])
+    s, [r] = await search(tmp_path, {"alpha": "2.0"}, assumptions=[stated] + [a for a in ALL if a.knob == "beta"])
+    assert r.changes.get("alpha") == "2.0"
+    assert any("the paper states alpha = 1.0" in n and "likely not the one behind" in n for n in r.notes), r.notes

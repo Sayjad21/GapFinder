@@ -39,6 +39,35 @@ _HOW_TO_RUN = {"verbose", "inplace", "pin_memory", "non_blocking", "exist_ok", "
 # names that hold ground truth (a prediction edited under a test on these uses the labels)
 _LABEL_NAMES = {"gt", "label", "labels", "y_true", "ytrue", "target", "targets", "truth", "ground_truth", "test_labels"}
 _PRED_NAMES = ("pred", "y_pred", "prediction", "predict", "yhat", "y_hat", "output", "detect")
+# what well-known library switches do to an evaluation (library semantics, not one paper's): shown with the lead
+SWITCH_EFFECT = {
+    "drop_last": "drops the last incomplete batch, so part of the evaluation data is never scored and the "
+                 "metric depends on the batch size",
+}
+# switches whose value doesn't change an aggregate evaluation metric (left out of the protocol tests)
+_EVAL_NEUTRAL = {"shuffle", "pin_memory", "persistent_workers", "non_blocking"}
+
+
+def _in_eval_branch(node, parents) -> bool:
+    """Inside the body (not the else) of `if flag == 'test':`, or of an if testing a test/eval name."""
+    child, p = node, parents.get(node)
+    while p is not None:
+        if isinstance(p, ast.If) and any(child is b or _contains(b, child) for b in p.body):
+            for x in ast.walk(p.test):
+                if isinstance(x, ast.Constant) and isinstance(x.value, str) and x.value.lower() in ("test", "eval", "evaluation"):
+                    return True
+                if isinstance(x, ast.Name) and any(w in x.id.lower() for w in ("test", "eval")):
+                    return True
+        child, p = p, parents.get(p)
+    return False
+
+
+def _contains(tree, node) -> bool:
+    return any(x is node for x in ast.walk(tree))
+
+
+def _neutral(name: str) -> bool:
+    return any(w in name.lower() for w in _EVAL_NEUTRAL)
 _SKIP_PREFIX = ("best_", "n_split", "num_split", "split_num")
 _SETTING_FILE_RE = re.compile(r"""['"]([\w./-]*?(\w+)\.(?:txt|json|ya?ml|cfg|ini))['"]""")
 
@@ -124,6 +153,12 @@ def _file_leads(path: Path, rel: str, flags: set[str], root: Path) -> list[Lead]
             out.append(Lead("unexposed_setting", rel, n.lineno, src(n),
                             f"`{n.targets[0].id} = {n.value.value}` is a switch passed on to a call; no flag sets it",
                             1, name=n.targets[0].id, value=str(n.value.value)))
+            if _in_eval_branch(n, parents) and not _neutral(n.targets[0].id):  # a protocol, tested like one
+                name = n.targets[0].id
+                effect = SWITCH_EFFECT.get(name.lower(), "changes how the evaluation is computed")
+                out.append(Lead("eval_switch", rel, n.lineno, src(n),
+                                f"`{name} = {n.value.value}` is fixed in the evaluation branch: it {effect}", 3,
+                                name=name, value=str(not n.value.value)))
         # name = <number>
         if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
             name, v = n.targets[0].id, _number(n.value)
@@ -152,6 +187,12 @@ def _file_leads(path: Path, rel: str, flags: set[str], root: Path) -> list[Lead]
                     out.append(Lead("unexposed_setting", rel, n.lineno, src(n),
                                     f"`{cname}(..., {kw.arg}={kw.value.value})`: a switch fixed in the call; no flag "
                                     "sets it", 1, name=kw.arg, value=str(kw.value.value)))
+                    if not _neutral(kw.arg) and (
+                            _in_eval_branch(n, parents) or _mentions_test(ast.Tuple(elts=list(n.args), ctx=ast.Load()))):
+                        effect = SWITCH_EFFECT.get(kw.arg.lower(), "changes how the evaluation is computed")
+                        out.append(Lead("eval_switch", rel, n.lineno, src(n),
+                                        f"`{cname}(..., {kw.arg}={kw.value.value})` on evaluation data: it {effect}", 3,
+                                        name=kw.arg, value=str(not kw.value.value)))
             # np.random.seed(1), torch.manual_seed(0), random_state=42
             if cname in ("seed", "manual_seed", "set_seed") and n.args and _number(n.args[0]) is not None:
                 out.append(Lead("fixed_seed", rel, n.lineno, src(n), f"random seed fixed to {_number(n.args[0]):g}"))

@@ -48,7 +48,7 @@ def test_held_out_misses_reversed_comparisons_leakage_and_stated_settings(tmp_pa
     assert a["leakage"] and a["leakage"][0]["file"] == "train.py"
     assert [x["setting"] for x in a["stated_untestable"]] == ["evaluation convention"]
     md = "\n".join(audit_markdown(a))
-    assert "## Audit of the reproduction" in md and "selects its result by the test score" in md
+    assert "## Audit of the reproduction" in md and "How the code computes the reported number" in md
     assert "Comparisons the runs reverse" in md and "We adopt the adjustment" in md
 
 
@@ -64,3 +64,15 @@ def test_a_paper_setting_a_prefixed_knob_covers_is_not_listed_as_untestable(tmp_
 
     assert _settable("lr", {"gat_lr": 1, "gcn_lr": 1}) and _settable("dropout", {"gcn_dropout": 1})
     assert not _settable("adjustment_strategy", {"gat_lr": 1, "anormly_ratio": 1})
+
+
+def test_one_flag_split_into_several_knobs_is_a_family():
+    from gapfinder.search.engine import knob_family
+
+    knobs = {"kmeans_synthetic_lmbda": 1, "kmeans_unequal_lmbda": 1, "kmedian_synthetic_lmbda": 1, "lmbda_tune": 1}
+    assert knob_family("lmbda", knobs) == ["kmeans_synthetic_lmbda", "kmeans_unequal_lmbda", "kmedian_synthetic_lmbda"]
+    assert knob_family("--lmbda (fairness weight)", knobs) == ["kmeans_synthetic_lmbda", "kmeans_unequal_lmbda",
+                                                               "kmedian_synthetic_lmbda"]
+    assert knob_family("lr", {"gat_lr": 1, "gcn_lr": 1}) == ["gat_lr", "gcn_lr"]
+    assert knob_family("lr", {"lr": 1, "gat_lr": 1, "gcn_lr": 1}) == []  # the flag itself is a knob
+    assert knob_family("tune", knobs) == []  # one match only is not a family
