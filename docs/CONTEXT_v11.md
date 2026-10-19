@@ -481,6 +481,30 @@ Done after the batch (`b2fe1bd`, `ba82204`; 293 tests). None of it was judged on
 Next: a fresh batch. The dev-set candidates are used up, except two weak ones (DKT, unverified; DP-SGD, low
 priority). So new papers have to come from a sealer, as in blind-1 and blind-2.
 
+### 7.6 batch-3 (sealed by an independent sealer; frozen at tag `batch-3` = `92b1faa`; `eval/external/batch3/`)
+
+Before it (`92b1faa`):
+- protocol tests: code that selects by the test score, or edits predictions under a test on the labels, is
+  re-run with that logic switched off (`@if` patches), and the effect is measured;
+- true/false switches are patch leads;
+- the "can't vary" list no longer names knobs it covers under a longer name.
+
+Results (`RESULT.md`); the keys matched their sealed hashes, and the runs were committed first:
+- **b3a, Variational Fair Clustering: CORRECT.** The paper states λ = 10, but the authors' corrected value is
+  100. GapFinder named `kmeans_synthetic_lmbda = 100`, and all four K-means claims match exactly.
+  - It is labelled "Fits but unsupported": the paper's λ didn't map to the per-dataset knob names.
+  - **This is the first sealed blind real paper where GapFinder named the documented cause.**
+- **b3c, SparseTSF: missed** (Reproduced). The cause, `drop_last = True` in the test loader, was never tested,
+  because the target reproduced.
+- b3b: the sealer stalled; it never sealed a third paper.
+
+Fixed after it (`bae25f4`, tag `batch-4`; 300 tests):
+- switches fixed in the evaluation branch are protocol-tested and named with what they do;
+- one flag split into several knobs maps as a family;
+- a stated value that was run and doesn't fit is said in the notes.
+
+Next: a sealed batch-4 on that code.
+
 ## 8. Where things are
 
 | What | Where |
