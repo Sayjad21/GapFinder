@@ -85,3 +85,32 @@ def test_the_hooks_run_the_environments_own_sitecustomize_too(tmp_path):
                                   "GF_TRACE_DIR": str(tmp_path / "tr")},
                              capture_output=True, text=True, timeout=60)
         assert out.stdout.split() == ["ran", name], (name, out.stdout, out.stderr)
+
+
+def test_the_runtime_shim_runs_gpu_written_code_on_the_cpu(tmp_path):
+    """Anomaly Transformer (Tensor.cuda) and SparseTSF (torch.load(map_location="cuda:0")) needed this by hand."""
+    import os
+    import subprocess
+    import sys
+
+    from gapfinder.sandbox import runtime_shim
+
+    fake = tmp_path / "lib" / "torch"
+    (fake / "nn").mkdir(parents=True)
+    (fake / "__init__.py").write_text(
+        "from torch import nn\n"
+        "class _Cuda:\n    @staticmethod\n    def is_available():\n        return False\n"
+        "cuda = _Cuda()\n"
+        "class Tensor:\n    def cuda(self):\n        raise RuntimeError('Found no NVIDIA driver')\n"
+        "def load(path, map_location=None):\n    return map_location\n", encoding="utf-8")
+    (fake / "nn" / "__init__.py").write_text(
+        "class Module:\n    def cuda(self):\n        raise RuntimeError('Found no NVIDIA driver')\n", encoding="utf-8")
+    hook = tmp_path / runtime_shim.HOOK_DIR
+    hook.mkdir()
+    (hook / "sitecustomize.py").write_text(runtime_shim.HOOK_SOURCE, encoding="utf-8")
+    prog = ("import torch\nt = torch.Tensor()\nassert t.cuda() is t\nm = torch.nn.Module()\nassert m.cuda() is m\n"
+            "print(torch.load('ckpt.pth', map_location='cuda:0'))\n")
+    out = subprocess.run([sys.executable, "-c", prog], capture_output=True, text=True, timeout=60,
+                         env={**os.environ, "PYTHONPATH": os.pathsep.join([str(hook), str(tmp_path / "lib")])})
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "cpu"

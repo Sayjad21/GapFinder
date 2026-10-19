@@ -83,6 +83,9 @@ class HarnessSpec(BaseModel):
     load: Stage | None = None
     run: RunStage
     knobs: dict[str, Knob] = Field(default_factory=dict)
+    # the CPU shim and allocator settings on every run (gapfinder/sandbox/runtime_shim.py); off only for a harness
+    # that must see the program exactly as it fails without them
+    runtime_shim: bool = True
     allowed_paths: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
     # history matching's model-discrepancy allowance, as a fraction of the paper's value: how far a correct

@@ -142,6 +142,7 @@ class Orchestrator:
             env = {k: v for k, v in env.items() if not ast_patch.is_patch(k)} | penv
             cmd = ast_patch.wrap_command(cmd, ast_patch.patched_files(changes))  # entry scripts via the runner
             cmd, files = prefix + cmd, {**(files or {}), **pfiles}
+        cmd, env, files = self._with_runtime_shim(cmd, env, files)
         branch = Branch(id=bid, parent_checkpoint=parent, knob_changes=changes, command=cmd, run_tag=run_tag,
                         status=BranchStatus.running, note=label)
         self.events.emit("branch_created", branch=branch.model_dump())
@@ -196,6 +197,7 @@ class Orchestrator:
         parent = await self.stage("loaded", {})
         cmd, env = self.spec.render(self.spec.run, {})
         tenv, tfiles, prefix, suffix = trace_hook.run_parts(steps, seconds)
+        cmd, env, tfiles = self._with_runtime_shim(cmd, env, tfiles)
         try:
             res = await self._exec(parent, prefix + cmd + suffix, {**env, **tenv, "RUN_TAG": "gf-trace"},
                                    min(self.spec.run.timeout, seconds + 300), disposable=True, files=tfiles)
@@ -204,6 +206,22 @@ class Orchestrator:
             return []
         self.cost.add_run(res.resources.cost_usd)
         return trace_hook.parse_output(res.stdout)
+
+    def _with_runtime_shim(self, cmd: str, env: dict, files: dict | None) -> tuple[str, dict, dict | None]:
+        """The CPU shim and allocator settings (gapfinder/sandbox/runtime_shim.py), unless the spec turns them off."""
+        if not getattr(self.spec, "runtime_shim", True):
+            return cmd, env, files
+        from gapfinder.sandbox import runtime_shim
+
+        senv, sfiles, sprefix = runtime_shim.run_parts()
+        hooks = [k for k in (files or {}) if k.endswith("/sitecustomize.py")]
+        if hooks:  # a patch or trace hook is already the run's sitecustomize: the shim goes into the same file (one
+            # directory on PYTHONPATH; a path list's separator differs between the local backend and Linux)
+            merged = dict(files)
+            for k in hooks:
+                merged[k] = runtime_shim.HOOK_BODY.encode() + b"\n" + merged[k]  # that file already chains
+            return cmd, {**senv, **env}, merged
+        return sprefix + cmd, {**senv, **env}, {**(files or {}), **sfiles}
 
     async def _run_cell(self, parent: str, cmd: str, env: dict, files: dict | None) -> RunResult:
         """One cell, as one operation or split into pieces (RunStage.shards in parallel, .segments in sequence):

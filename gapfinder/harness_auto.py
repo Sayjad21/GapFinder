@@ -219,3 +219,42 @@ def shrink_plan(estimated_s: float, independent_jobs: int = 1, resumable: bool =
         factor /= 2
     return ShrinkPlan("shrink", factor=factor, discrepancy=0.05,
                       note=f"halved to {factor:g} of the work to fit; history matching allows 5% model discrepancy")
+
+
+# ------------------------------------------------------------------------ before spending on a ledger
+
+GPU_ONLY = {"flash_attn", "triton", "cupy", "apex", "deepspeed", "bitsandbytes", "xformers", "tensorrt", "pycuda",
+            "megatron", "vllm"}
+MAX_FILE_MB = 500
+
+
+def compute_blockers(root: str | Path) -> list[str]:
+    """Reasons a repo can't run on a CPU-only, 3.9 GB Sandboxes VM, found statically (plan item 9): imports of
+    GPU-only packages, GPU-only requirements, and files larger than MAX_FILE_MB. An empty list is no guarantee."""
+    import ast
+
+    root = Path(root)
+    out = []
+    for p in sorted(root.rglob("*.py")):
+        if any(x.startswith(".") for x in p.relative_to(root).parts):
+            continue
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        except (SyntaxError, ValueError):
+            continue
+        for n in ast.walk(tree):
+            names = [a.name for a in n.names] if isinstance(n, ast.Import) else (
+                [n.module] if isinstance(n, ast.ImportFrom) and n.module else [])
+            for name in names:
+                top = name.split(".")[0]
+                if top in GPU_ONLY:
+                    out.append(f"imports {top} ({p.relative_to(root).as_posix()}:{n.lineno})")
+    for req in list(root.glob("requirements*.txt")) + list(root.glob("environment*.yml")):
+        text = req.read_text(encoding="utf-8", errors="replace").lower()
+        for pkg in sorted(GPU_ONLY):
+            if re.search(rf"(?m)^\s*-?\s*{re.escape(pkg)}\b", text):
+                out.append(f"requires {pkg} ({req.name})")
+    for p in root.rglob("*"):
+        if p.is_file() and p.stat().st_size > MAX_FILE_MB * 2**20:
+            out.append(f"{p.relative_to(root).as_posix()} is {p.stat().st_size / 2**20:.0f} MB")
+    return sorted(set(out))

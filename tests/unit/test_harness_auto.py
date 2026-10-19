@@ -62,3 +62,15 @@ def test_the_shrink_rule_splits_before_it_shrinks():
     assert shrink_plan(7000, resumable=True).action == "segments"
     p = shrink_plan(10000)
     assert p.action == "shrink" and p.factor == 0.25 and p.discrepancy == 0.05
+
+
+def test_gpu_only_packages_and_huge_files_are_blockers(tmp_path):
+    from gapfinder.harness_auto import compute_blockers
+
+    (tmp_path / "model.py").write_text("import torch\nfrom flash_attn import flash_attn_func\n", encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text("torch\nbitsandbytes==0.41\n", encoding="utf-8")
+    got = compute_blockers(tmp_path)
+    assert got == ["imports flash_attn (model.py:2)", "requires bitsandbytes (requirements.txt)"]
+    (tmp_path / "model.py").write_text("import torch\n", encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text("torch\n", encoding="utf-8")
+    assert compute_blockers(tmp_path) == []
