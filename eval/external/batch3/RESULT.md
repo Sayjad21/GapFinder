@@ -5,7 +5,8 @@ were opened. Both keys match their sealed hashes:
 - b3a: `9d95d74b...6269`
 - b3c: `d8f08214...ecc3`
 
-The keys are copied next to the cases (`b3a/answer_key.md`, `b3c/answer_key.md`). b3b is still with the sealer.
+The keys are copied next to the cases (`b3a/answer_key.md`, `b3c/answer_key.md`). b3b was dropped: the sealer
+stalled for many hours without sealing a third paper, and was stopped.
 
 | Case | Documented cause | GapFinder | Score (the key's pre-registered rule) |
 |---|---|---|---|
