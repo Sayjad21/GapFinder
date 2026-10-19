@@ -216,10 +216,23 @@ def readme_command(root: Path) -> str | None:
     for name in ("README.md", "README.rst", "README.txt", "README"):
         p = Path(root) / name
         if p.is_file():
-            m = _README_CMD.search(p.read_text(encoding="utf-8", errors="replace"))
+            text = p.read_text(encoding="utf-8", errors="replace")
+            m = _README_CMD.search(text)
             if m:
-                return m.group(1).strip()
+                cmd = _plain_command(m.group(1))
+                # `$ cd src` on the line just before (RippleNet's README): the command runs from there
+                before = text[: m.start()].rstrip("\n").rsplit("\n", 1)[-1]
+                cd = re.match(r"^[ \t>$]*cd ([\w./-]+)\s*$", before)
+                if cd and not cmd.startswith("cd "):
+                    cmd = f"cd {cd.group(1)} && {cmd}"
+                return cmd
     return None
+
+
+def _plain_command(cmd: str) -> str:
+    """Drop prose after the command: `python main.py --dataset movie (or --dataset book)`, `... # note`."""
+    cmd = re.split(r"\s+\((?:or|e\.g\.|note|optional|see)\b|\s+#\s", cmd, maxsplit=1)[0]
+    return cmd.strip().rstrip(";")
 
 
 def short_run_goal(command: str, seconds: int = 300) -> str:

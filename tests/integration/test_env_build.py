@@ -107,3 +107,13 @@ def test_the_readme_command_becomes_a_short_run_goal(tmp_path):
     assert readme_command(tmp_path) == "bash ./scripts/SMD.sh"
     goal = short_run_goal("python a.py --name 'x y'", seconds=60)
     assert goal.startswith("cd /work && timeout 60 bash -c ") and "[ $rc -eq 124 ]" in goal
+
+
+def test_readme_prose_after_a_command_is_dropped_and_a_cd_line_kept(tmp_path):
+    from gapfinder.env_build import readme_command
+
+    (tmp_path / "README.md").write_text("### Running the code\n```\n$ cd src\n$ python preprocess.py --dataset movie "
+                                        "(or --dataset book)\n$ python main.py --dataset movie\n```\n", encoding="utf-8")
+    assert readme_command(tmp_path) == "cd src && python preprocess.py --dataset movie"
+    (tmp_path / "README.md").write_text("Run:\n\n    python run.py --lr 0.1  # the default\n", encoding="utf-8")
+    assert readme_command(tmp_path) == "python run.py --lr 0.1"
