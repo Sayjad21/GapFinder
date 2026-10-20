@@ -409,8 +409,28 @@ running); PIPer 2025.
 | D6.6 | Binding by quote | when the binder ties, Super chooses with a quoted paper sentence ("we choose distribution Z"); no quote, no binding (never by closeness to the paper's number) | a toy with Z/Q lines and a paper sentence | |
 | D6.7 | Literals as knobs | when a script exposes few flags, the named literals the run executes (trace roles: epochs, rate, size, weight, count) become patch knobs in the spec | a toy whose settings are module constants | |
 
-**Order:** D6.1-D6.3 (small), D1.1-D1.2, D2.4 with D5.1-D5.4, D1.3-D1.6, D2.1-D2.3, D3, D4, D6.4-D6.7; then the dev
-suite, the planted benchmark and a fresh sealed batch.
+**Order:** D6.1-D6.3 and D7.5 (small); D1.1-D1.2 with D7.1; D2.4 with D5.1-D5.4; D1.3-D1.6 with D7.2; D2.1-D2.3 with
+D7.3; D7.4 (the acceptance suite); D3; D4; D6.4-D6.7; D7.7; D7.6. Then the dev suite, the planted suite and a fresh
+sealed batch.
+
+#### D7. Additions of 2026-10-20 (owner's review, assessed)
+
+| ID | Item | Design | Acceptance | Status |
+|---|---|---|---|---|
+| D7.1 | Calibration gate | the zero-run probes (D1.2 reporting, D2.4 scale on the measured curve) run right after the naive calibration; a hypothesis that fits the target and every held-out is verified and the settings search is skipped | a slow toy whose paper number is its best epoch: no settings search runs | |
+| D7.2 | The repository's own package and its paper-era commit | the paper-year knob includes the repo's own package when it is on PyPI (from setup.py/pyproject); a second knob runs the repo at its last commit before the paper's date (only history before the given commit is read) | a toy library whose release changed a default; a toy repo whose later commit changed the code | |
+| D7.3 | Paper-discussed knobs as a prior | in ties (D2.2), a knob the paper states or varies gets a higher prior than an unmentioned ladder value; a weight, never a veto (unstated settings are the commonest real cause) | equifinal toys both ways (the truth mentioned; the truth unmentioned) | |
+| D7.4 | Planted archetypes in real repos | plant scale conventions (x2, x100), best-epoch reporting, library drift and code defects into working dev containers (pygcn, GAT, VGAE, GraphMAE, SDCN, BOND...), several cells each, as the acceptance suite of D1, D2 and D5 (development only: known to the builder, not blind evidence) | the suite runs end to end for $0 of model calls | |
+| D7.5 | pip without a cache in env-build | `PIP_NO_CACHE_DIR=1` on every env-build command | test | |
+| D7.6 | Miner pre-filter | the GitHub tree API before any download: total data size, large files, GPU-only requirements; a ranking by CPU-friendly ecosystems | the pool's free check agrees with the pre-filter | |
+| D7.7 | Multi-fidelity screening | for runs over 10 minutes that print per-epoch metrics: screening runs cut at a fraction of the naive run's time leave their per-epoch log; a candidate behind the naive run's curve at the same epoch by more than 2 bands is dropped (successive halving, Hyperband/ASHA); one bracket keeps full-length runs so late effects (schedules, regularisers) are not lost | a toy whose true cause helps only late, and a slow toy where the screen's time halves | |
+
+Not adopted as proposed: a hard rule against unmentioned knobs in ties (D7.3 instead); "Explained" from one target matched at a
+multiple of the stated value (D2.4 requires the same factor on every swept point); `--resume` on the batch-5 cases as
+validation (a smoke test only: a fix is never judged on the case that revealed it); a global `OMP_NUM_THREADS=2` (it
+slows every run). Two owner decisions are pending: the cap ($45 proposed), and exempting zero-run log checks from the
+two-paper rule when they label only on a fit to every claim and pass the dev suite with 0 confidently wrong.
+
 
 
 ## 8. Where things are
