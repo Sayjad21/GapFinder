@@ -286,6 +286,38 @@ def _find_bash() -> str:
 
 # ===================================================================== contree
 
+POLL_RETRIES = 12  # status polls retried on a server or transport error, about 6 minutes in all
+
+
+def _retry_status_polls(sdk) -> None:
+    """Retry a failed status poll instead of failing the operation. The SDK polls an operation's status in a loop
+    whose exit cancels the operation, so one transient 500 on a poll (2026-10-20: every run longer than a few
+    minutes, while 60 s runs passed) killed a healthy run and cancelled it remotely."""
+    import asyncio
+
+    from contree_sdk.sdk.exceptions import ApiTimeoutError, ContreeTransportError
+    from contree_sdk.sdk.exceptions.api import ApiStatusCodeError, NotFoundError
+
+    api = getattr(sdk, "_api", None)
+    if api is None or getattr(api, "_gf_poll_retry", False) or not hasattr(api, "get_operation_status"):
+        return
+    poll = api.get_operation_status
+
+    async def status(*a, **k):
+        for i in range(POLL_RETRIES):
+            try:
+                return await poll(*a, **k)
+            except NotFoundError:
+                raise  # the SDK counts these itself
+            except (ApiStatusCodeError, ApiTimeoutError, ContreeTransportError) as exc:
+                code = getattr(exc, "status", None)
+                if i == POLL_RETRIES - 1 or (code is not None and code < 500):
+                    raise
+                await asyncio.sleep(min(60, 5 * (i + 1)))
+
+    api.get_operation_status = status
+    api._gf_poll_retry = True
+
 
 class ContreeBackend(SandboxBackend):
     """Token Factory Sandboxes via contree-sdk (auth: NEBIUS_API_KEY + NEBIUS_PROJECT_ID)."""
@@ -298,6 +330,7 @@ class ContreeBackend(SandboxBackend):
 
         self.sdk = client or Contree()
         self.truncate_output_at = truncate_output_at
+        _retry_status_polls(self.sdk)
 
     async def base(self, ref: str) -> str:
         from contree_sdk.sdk.exceptions import ContreeError
