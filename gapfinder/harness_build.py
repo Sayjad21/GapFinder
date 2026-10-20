@@ -123,6 +123,73 @@ def extra_claims(ledger: dict | list, target_id: str, knobs: dict, limit: int = 
     return thin(points), thin(sorted(curves, key=lambda x: x["epoch"])), unmapped
 
 
+def condition_points(ledger: dict | list, target_id: str, t: "Templated", root: str | Path,
+                     limit: int = 3) -> tuple[list[dict], list[dict]]:
+    """Plan D2.1: the target's cell on other datasets (the same metric family, model and other conditions), as
+    claims at a fixed dataset. `at` holds the dataset flag's value there and the settings the README's command for
+    that dataset passes (what the authors ran there). A dataset with no README command of the same script, or whose
+    name maps to no single value, is listed instead: its settings would be guesses. Returns (points, not used)."""
+
+    if t.dataset is None:
+        return [], []
+    claims = ledger["claims"] if isinstance(ledger, dict) else ledger
+    t0 = next(c for c in claims if c["id"] == target_id)
+    tc = {k: str(v) for k, v in (t0.get("conditions") or {}).items()}
+    key = next((k for k in tc if k.lower() in ("dataset", "data", "benchmark")), None)
+    if key is None:
+        return [], []
+    fam = _family(t0["metric"])
+    points, skipped, seen = [], [], set()
+    for c in claims:
+        if c["id"] == target_id or c.get("reported_value") is None or _family(c["metric"]) != fam:
+            continue
+        cond = {k: str(v) for k, v in (c.get("conditions") or {}).items()}
+        if set(cond) != set(tc) or cond[key] == tc[key] or any(cond[k] != tc[k] for k in tc if k != key):
+            continue
+        row = {"claim_id": c["id"], "metric": c["metric"], "paper_value": float(c["reported_value"]),
+               "conditions": cond, "figure": c.get("figure_or_table"), "held_out": True}
+        words = claim_words({"conditions": {key: cond[key]}})
+        mine = []
+        for x in pick_commands(root, [{"metric": c["metric"], "conditions": {key: cond[key]}}], limit=12):
+            cd, argv = _split_command(x.cmd)
+            i = next((j for j, a in enumerate(argv) if a.endswith(".py")), None)
+            if i is None or ((Path(cd) / argv[i]) if cd else Path(argv[i])).as_posix() != t.script:
+                continue  # another script
+            passed = {k.lstrip("-").replace("-", "_"): v for k, v in _parse_args(argv[i + 1:])}
+            v = passed.get(t.dataset["name"])
+            if v is not None and _matches(v, words):
+                mine.append((x, passed, v))
+        values = sorted({v for _, _, v in mine})
+        if len(values) != 1:
+            skipped.append({**row, "setting": key, "value": cond[key],
+                            "why": ("no README command of the same script runs it: its settings would be guesses"
+                                    if not values else f"several values match it: {values}")})
+            continue
+        x, passed, v = mine[0]
+        if v in seen:
+            continue
+        seen.add(v)
+        at = {t.dataset["name"]: v}
+        for k, val in passed.items():
+            if k in t.knobs and val is not None and str(val) != str(t.knobs[k]["default"]):
+                at[k] = str(val)  # the README's own setting for this dataset
+        points.append({**row, "at": at, "condition": v, "source": x.source})
+        if len(points) >= limit:
+            break
+    return points, skipped
+
+
+def make_condition_knob(t: "Templated") -> None:
+    """The dataset flag as a condition knob: its value in the command becomes a placeholder (plan D2.1)."""
+    d = t.dataset
+    lit = f"{d['option']} {_q(d['value'])}"
+    if lit not in t.command or d["name"] in t.knobs:
+        return
+    t.command = t.command.replace(lit, f"{d['option']} {{{d['name']}}}", 1)
+    t.knobs[d["name"]] = {"layer": "config", "default": d["value"], "line": d.get("line", 0), "condition": True}
+    t.fixed.pop(d["name"], None)
+
+
 # ------------------------------------------------------------------------ the command's script and its flags
 
 
@@ -228,6 +295,7 @@ class Templated:
     epochs_knob: str | None = None
     repeats_flag: str | None = None
     note: str = ""
+    dataset: dict | None = None  # the dataset flag: {"name", "option", "value", "values"} (plan D2.1)
 
 
 def _split_command(cmd: str) -> tuple[str | None, list[str]]:
@@ -342,6 +410,7 @@ def template_command(root: str | Path, cmd: str, claims: list[dict]) -> Template
             if value is not None:
                 parts.append(f"{opt} {_q(value)}")
                 naive.append(f"{opt} {_q(value)}")
+                t.dataset = {"name": name, "option": opt, "value": str(value), "values": vals, "line": f.line if f else 0}
             t.fixed[name] = "dataset: defines the claim"
             continue
         if (value is not None and not re.fullmatch(r"(?i)[-+]?\d*\.?\d+(e[-+]?\d+)?|true|false|none", str(value))
@@ -732,7 +801,8 @@ def run_command(t: Templated, repeats: int, shards: bool, parallel: int = PARALL
 def spec_dict(name: str, base: str, source: str, t: Templated, claims: list[dict], bound: dict[str, Binding],
               repeats: int, plan: ShrinkPlan, per_run_s: float | None, curves: list[dict] = (),
               parallel: int = PARALLEL, trajectories: dict[str, dict] | None = None) -> dict:
-    knobs = {k: {kk: vv for kk, vv in v.items() if kk in ("layer", "default", "choices")} for k, v in t.knobs.items()}
+    knobs = {k: {kk: vv for kk, vv in v.items() if kk in ("layer", "default", "choices", "condition")}
+             for k, v in t.knobs.items()}
     shards = plan.action == "shards" or (plan.action == "shrink" and repeats > 1)
     if plan.action == "shrink" and t.epochs_knob:
         d = int(knobs[t.epochs_knob]["default"])
@@ -856,13 +926,15 @@ def harness_markdown(r: HarnessResult) -> str:
               "Cells with the target's setup and one other setting. A claim at a fixed knob value is run with that "
               "value on top of each candidate; a learning-curve point is read from the same run's per-epoch log.", ""]
         L += [f"- {p['claim_id']}: {p['metric']} {p['paper_value']:g} at "
-              + ", ".join(f"`{k}={v}`" for k, v in p["at"].items()) for p in r.points]
+              + ", ".join(f"`{k}={v}`" for k, v in p["at"].items())
+              + (f" (another dataset; its settings from the README command at {p['source']})" if p.get("condition") else "")
+              for p in r.points]
         L += [f"- {c['claim_id']}: {c['metric']} {c['paper_value']:g} at epoch {c['epoch']}" + (f" (`{c['name']}`)" if c.get("name") else " (not bound yet)")
               for c in r.curves]
         if r.unmapped:
             L += ["", "Not used (the setting's name maps to no knob; add `at` in targets.json by hand if it is one):"]
             L += [f"- {u['claim_id']}: {u['metric']} {u['paper_value']:g} at {u['setting']} = {u['value']}"
-                  for u in r.unmapped[:12]]
+                  + (f" ({u['why']})" if u.get("why") else "") for u in r.unmapped[:12]]
         L.append("")
     if r.commands:
         L += ["## Command", "", "Picked by the claims' words in the command's arguments (README and shell scripts):", ""]
@@ -1028,7 +1100,15 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
         except ValueError as e:
             return finish("template", str(e))
         r.points, r.curves, r.unmapped = extra_claims(ledger, target, t.knobs)
+        conds, not_used = condition_points(ledger, target, t, root)
+        r.unmapped += not_used
         r.downloads, r.prep = download_steps(root), prep_commands(root, cmds[0], r.claims)
+        if conds:  # other datasets: the dataset flag becomes a condition knob, and their data is prepared too
+            make_condition_knob(t)
+            r.points += conds
+            for p in conds:
+                r.prep += [x for x in prep_commands(root, cmds[0], [{"metric": p["metric"], "conditions": p["conditions"]}])
+                           if x not in r.prep]
         data_steps = [d.replace("cd /work && ", "").replace("cd /work/", "cd ") for d in r.downloads] + r.prep
         data_sh = " && ".join(f"({d})" for d in data_steps)
         senv, sfiles, sprefix = runtime_shim.run_parts()

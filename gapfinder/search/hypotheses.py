@@ -226,6 +226,8 @@ def assumptions_from_spec(spec: HarnessSpec) -> tuple[list[Assumption], list[str
     """(assumptions, knobs left out for lack of candidate values), in the spec's knob order."""
     out, skipped = [], []
     for knob, k in spec.knobs.items():
+        if k.condition:  # a reported condition, set by the claims at fixed values (plan D2.1), never a cause
+            continue
         values = knob_candidates(spec, knob)
         if not values:
             skipped.append(knob)

@@ -95,13 +95,19 @@ async def test_harness_end_to_end(tmp_path):
     assert b["C1"].label == "test acc" and b["C1"].scale == 100.0 and b["C2"].label == "test f1"
     assert r.smoke["seeds_vary"] is True and r.plan.action == "as is"
     spec_d = yaml.safe_load((out / "spec.yaml").read_text(encoding="utf-8"))
-    assert set(spec_d["knobs"]) == {"lr", "epochs"} and spec_d["knobs"]["lr"]["default"] == "0.1"
+    assert set(spec_d["knobs"]) == {"lr", "epochs", "dataset"} and spec_d["knobs"]["lr"]["default"] == "0.1"
+    # plan D2.1: the Alpha row (C3) is the target's cell on another dataset whose README command is known, so the
+    # dataset flag is a condition knob (never searched) and C3 a claim at dataset=alpha
+    assert spec_d["knobs"]["dataset"] == {"layer": "config", "default": "beta", "condition": True}
+    assert "--dataset {dataset}" in spec_d["run"]["command"]
+    assert any("preprocess.py --dataset alpha" in p for p in r.prep)
     assert r.paper_year["pins"] == {}  # the toy imports no third-party package: no paper-year knob
-    assert [p["claim_id"] for p in r.points] == ["C5"] and r.points[0]["at"] == {"epochs": "5"}
+    assert [p["claim_id"] for p in r.points] == ["C5", "C3"] and r.points[0]["at"] == {"epochs": "5"}
+    assert r.points[1]["at"] == {"dataset": "alpha"} and r.points[1]["condition"] == "alpha"
     assert [c["name"] for c in r.curves] == ["c1_acc_e2"] and [u["claim_id"] for u in r.unmapped] == ["C6"]
     targets = json.loads((out / "targets.json").read_text(encoding="utf-8"))
-    assert [t["metric"] for t in targets] == ["c1_acc", "c2_f1", "c1_acc", "c1_acc_e2"] and targets[1]["held_out"]
-    assert targets[2]["at"] == {"epochs": "5"}
+    assert [t["metric"] for t in targets] == ["c1_acc", "c2_f1", "c1_acc", "c1_acc", "c1_acc_e2"] and targets[1]["held_out"]
+    assert targets[2]["at"] == {"epochs": "5"} and targets[3]["at"] == {"dataset": "alpha"}
 
     # the written spec runs: the base checkpoint has the data, so the naive run parses both claims
     spec = HarnessSpec.load_yaml(out / "spec.yaml")
@@ -112,6 +118,8 @@ async def test_harness_end_to_end(tmp_path):
     assert abs(branch.parsed_metrics["c1_acc"] - 70.0) < 2.0
     assert abs(branch.parsed_metrics["c2_f1"] - 65.0) < 2.0
     assert abs(branch.parsed_metrics["c1_acc_e2"] - 60.0) < 2.0  # the paper's epoch 2 is the log's epoch 1
+    other = await orch.run_branch({"dataset": "alpha"})  # the condition knob: the other dataset's data is there too
+    assert other.status.value == "succeeded" and "c1_acc" in other.parsed_metrics, other.note
 
 
 async def test_shard_mean_averages_repeats_run_as_shards(tmp_path):

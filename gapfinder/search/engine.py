@@ -126,6 +126,15 @@ class SearchConfig:
     library_probe: bool = True
     library_budget_frac: float = 0.25
     library_z: float = 3.0
+    # plan D2.2: when configurations fit the target equally well, runs at the paper's other reported conditions
+    # (claims at fixed values, other datasets) chosen by expected information per run (gapfinder/diagnose/
+    # discriminate.py), in batches, until one holds discriminate_stop of the posterior; within
+    # discriminate_budget_frac of the run budget
+    discriminate: bool = True
+    discriminate_rounds: int = 4
+    discriminate_batch: int = 4
+    discriminate_stop: float = 0.9
+    discriminate_budget_frac: float = 0.15
     max_points: int = 4  # such claims used per search (each costs runs for every configuration checked)
     point_configs: int = 3  # before history matching: the best joint fits also measured at those claims
     # out of space: one Super call compares the paper with the traced run (gapfinder/search/contrast.py);
@@ -295,6 +304,7 @@ class ClaimResult:
     differential: dict | None = None
     reporting: dict | None = None  # the reporting rule that explains the claims, when one does
     library: dict | None = None  # the library probe: culprit packages, change points, API leads (plan D1.3-D1.5)
+    discrimination: dict | None = None  # equally good fits told apart at other conditions (plan D2.2)
 
 
 def _norm_knob(k: str) -> str:
@@ -463,6 +473,9 @@ class GapSearch:
         self.relations = [t for t in targets if t.relation]  # checked under candidates, never explained
         # claims at fixed knob values, checked under candidates like held-outs, never explained
         self.points = [t for t in targets if t.at and not t.relation][: (cfg or SearchConfig()).max_points]
+        conditions = {k for k, kn in orch.spec.knobs.items() if kn.condition}
+        if conditions:  # the dataset or a sweep's axis is set by the claims at fixed values, never searched (D2.1)
+            assumptions = [a for a in assumptions if a.knob not in conditions]
         targets = [t for t in targets if not t.relation and not t.at]
         self.orch, self.targets, self.cfg = orch, targets, cfg or SearchConfig()
         self.evidence = evidence
@@ -1117,6 +1130,10 @@ class GapSearch:
         if self.cfg.history_matching:
             if self._usable_points():
                 await self._points_for_fits(t, res)
+                try:
+                    await self._discriminate(t, res)
+                except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
+                    res.notes.append(f"discrimination stopped early: {exc}")
             self._history_match(t, res)
             if self._usable_points():
                 await self._scale_probe(t, res)
@@ -2735,23 +2752,28 @@ class GapSearch:
                              "configuration fits every claim")
             return
         c = alts[0]["config"]
+        await self._swap_to(t, res, c, f"{old} doesn't fit {', '.join(bad)} (claims at fixed settings); {c} fits every claim",
+                            f"{old} fit the target but not {', '.join(bad)} (claims at fixed settings, I > 3); {c} fits "
+                            "every claim, those included, so it is the answer (history matching)")
+
+    async def _swap_to(self, t: Target, res: ClaimResult, c: Changes, tried: str, taken: str) -> bool:
+        """Take `c` as the answer when, confirmed and verified, its label is no worse than the current one."""
         try:
             await self.measure(c, self.confirm_repeats(t), "point confirm")
             i = self.implausibility(t, c)
             if not (self.closes(t, c) or (i is not None and i <= 2)):
-                return
+                return False
             trial = await self._verify(t, c, res)
         except (RunBudgetExceeded, budget.BudgetExceeded):
-            return
+            return False
         if _rank(trial) > _rank(res):
-            res.notes.append(f"{old} doesn't fit {', '.join(bad)} (claims at fixed settings); {c} fits every claim "
-                             f"but verified worse ({trial.attribution.confidence_label})")
-            return
+            res.notes.append(f"{tried} but verified worse ({trial.attribution.confidence_label})")
+            return False
         for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay", "relations"):
             setattr(res, f, getattr(trial, f))
         res.notes.extend(trial.notes)
-        res.notes.append(f"{old} fit the target but not {', '.join(bad)} (claims at fixed settings, I > 3); {c} fits "
-                         "every claim, those included, so it is the answer (history matching)")
+        res.notes.append(taken)
+        return True
 
     def _history_match(self, t: Target, res: ClaimResult) -> None:
         """Score every measured configuration against the target and its held-out claims together."""
@@ -2823,12 +2845,18 @@ class GapSearch:
             return sorted(candidates, key=lambda c: (tier(c), not self._supported(c), abs(self.gap(t, c)), len(c),
                                                      sorted(c.items())))
         ll = {frozenset(c.items()): self.loglik(t, c) for c in candidates}
-        top = max((v for v in ll.values() if v is not None), default=None)
+        # plan D2.3: ties on the target are judged with the model-discrepancy floor, so a candidate that hits the
+        # target exactly by chance doesn't beat one within the discrepancy; the tie goes to the other claims (the
+        # held-outs and the claims at other conditions), then to the prior (D7.3: what the paper states or
+        # mentions, round numbers), then to the fewest and smallest changes
+        lld = {frozenset(c.items()): self.loglik(t, c, discrepancy=True) for c in candidates}
+        top = max((v for v in lld.values() if v is not None), default=None)
 
         def tied(c: Changes) -> int:
-            v = ll[frozenset(c.items())]
+            v = lld[frozenset(c.items())]
             return 0 if top is not None and v is not None and v >= top - LL_EQUIVALENT else 1
-        return sorted(candidates, key=lambda c: (tier(c), not self._supported(c), tied(c), len(c), self._change_size(c),
+        return sorted(candidates, key=lambda c: (tier(c), not self._supported(c), tied(c), self._others_misfit(t, c),
+                                                 -self._cand_prior(c), len(c), self._change_size(c),
                                                  -(ll[frozenset(c.items())] or float("-inf")), sorted(c.items())))
 
     def _movement(self, t: Target, changes: Changes) -> float:
@@ -2864,15 +2892,145 @@ class GapSearch:
         x = self._var(t, changes)
         return None if x is None else abs(x[0] - t.paper_value) / math.sqrt(x[1])
 
-    def loglik(self, t: Target, changes: Changes) -> float | None:
+    def loglik(self, t: Target, changes: Changes, discrepancy: bool = False) -> float | None:
         """Gaussian log-likelihood of the paper's number under the configuration: a noisy configuration
         spreads its probability, so a precise one equally close is likelier (the honest form of 'prefer
-        the precise fit')."""
+        the precise fit'). `discrepancy`: with history matching's model-discrepancy term too (plan D2.3)."""
         x = self._var(t, changes)
         if x is None:
             return None
         m, v = x
+        if discrepancy:
+            v += (self.cfg.hm_disc * t.paper_value) ** 2
         return -0.5 * (t.paper_value - m) ** 2 / v - 0.5 * math.log(2 * math.pi * v)
+
+    def _others_misfit(self, t: Target, changes: Changes) -> int:
+        """1 when a held-out claim or a claim at another condition, measured under the configuration, is implausible
+        there (I > 3, history matching's cutoff), else 0: the held-outs break ties on the target (plan D2.3)."""
+        from gapfinder.search.history import implausibilities
+
+        runs, claims, extra = self._hm_inputs(t)
+        key = dict(changes)
+        rows = implausibilities(runs, claims, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc, **extra)
+        me = next((r for r in rows if r["config"] == key), None)
+        if me is None:
+            return 0
+        return int(any(i > 3 for cid, i in me["I"].items() if cid != t.claim_id))
+
+    def _cand_prior(self, changes: Changes) -> float:
+        """Plan D7.3: a configuration's prior from what the paper states or mentions (a weight, never a veto)."""
+        from gapfinder.diagnose.discriminate import config_prior
+
+        stated: dict[str, set[str]] = {}
+        mentioned = {k for p in self._usable_points() for k in p.at}  # knobs the paper sweeps
+        documented: dict[str, set[str]] = {}
+        for k, v in changes.items():
+            a = self.assumptions.get(k)
+            if a is None:
+                continue
+            vals = self._stated_values(k) if hasattr(self, "all_for") else []
+            if vals or not a.paper_value.strip().lower().startswith("unstated"):
+                mentioned.add(k)
+                if any(_same_value(x, v) for x in vals):
+                    stated[k] = {v}
+            if any(e.kind == "paper" for e in a.evidence):
+                mentioned.add(k)
+            pl = plausible(a, v, self.spec.knobs[k].default if k in self.spec.knobs else None)
+            if pl.supported and pl.source == "docs":
+                documented[k] = {v}
+        return config_prior(changes, stated, mentioned, documented)
+
+    def _claim_loglik(self, c: Target, changes: Changes) -> float | None:
+        """Log-likelihood of one claim's paper number at a configuration (its runs; the naive ones for {}), with the
+        discrepancy floor."""
+        vals = [b.parsed_metrics[c.metric] for b in self.measure_ok(changes) if c.metric in b.parsed_metrics]
+        if not vals:
+            return None
+        sd = self._claim_sd(c)
+        v = sd * sd / len(vals) + sd * sd / self.cfg.hm_paper_n + (self.cfg.hm_disc * c.paper_value) ** 2
+        m = statistics.fmean(vals)
+        return -0.5 * (c.paper_value - m) ** 2 / v - 0.5 * math.log(2 * math.pi * v)
+
+    async def _discriminate(self, t: Target, res: ClaimResult) -> None:
+        """Plan D2.2: configurations the target can't tell apart, run where the paper's other reported conditions
+        tell them apart best (gapfinder/diagnose/discriminate.py), until one holds discriminate_stop of the
+        posterior; that one is then confirmed and verified like any answer."""
+        from gapfinder.diagnose import discriminate as D
+
+        if not self.cfg.discriminate or len(res.equivalent) < 2 or res.status == "partial":
+            return
+        pts = {p.claim_id: p for p in self._usable_points()}
+        if not pts:
+            return
+        cfgs = [dict(e["config"]) for e in res.equivalent][:8]
+        await self._measure_points([], "point (as run)")
+        conds = []
+        for p in pts.values():
+            nv = [b.parsed_metrics[p.metric] for b in self.measure_ok(self._point_config(p, {})) if p.metric in b.parsed_metrics]
+            if not nv:
+                continue
+            sd = max(statistics.stdev(nv) if len(nv) >= 2 else 0.0,
+                     self.bands[p.metric].band / 2 if p.metric in self.bands else 0.0,
+                     self.cfg.noise_floor_frac * abs(p.paper_value), 1e-12)
+            conds.append(D.Condition(p.claim_id, p.paper_value, statistics.fmean(nv), sd,
+                                     sd * sd / self.cfg.hm_paper_n + (self.cfg.hm_disc * p.paper_value) ** 2, p.metric))
+        if not conds:
+            return
+        held = self._diag_claims(t)
+        metrics = {c.metric for c in conds} | {t.metric}
+
+        def cand(c: Changes) -> "D.Candidate":
+            meas = {}
+            for p in pts.values():
+                vals = [b.parsed_metrics[p.metric] for b in self.measure_ok(self._point_config(p, c)) if p.metric in b.parsed_metrics]
+                if vals:
+                    meas[p.claim_id] = (statistics.fmean(vals), len(vals))
+            eff = {m: (self.value(c, m) - self.naive[m]) for m in metrics
+                   if self.value(c, m) is not None and self.naive.get(m) is not None}
+            return D.Candidate(frozenset(c.items()), c, self._cand_prior(c), meas, eff.get(t.metric, 0.0), eff)
+
+        base = {}
+        for c in cfgs:
+            lls = [self._claim_loglik(h, c) for h in held]
+            base[frozenset(c.items())] = sum(x for x in lls if x is not None)
+        start, cap = self.runs_used, int((self.cfg.max_runs or 10 ** 6) * self.cfg.discriminate_budget_frac)
+        target_naive = self.naive.get(t.metric) or 0.0
+        tests = []
+        for _ in range(self.cfg.discriminate_rounds):
+            cands = [cand(c) for c in cfgs]
+            w = D.posterior(cands, conds, target_naive, base)
+            if max(w.values()) >= self.cfg.discriminate_stop:
+                break
+            picks = D.choose(cands, conds, target_naive, self.cfg.discriminate_batch, 0.05, base)
+            if not picks or self.runs_used - start + len(picks) * self.cfg.point_repeats > cap:
+                break
+            tests += [{"config": x.config, "condition": p.id, "bits": round(g, 3)} for x, p, g in picks]
+            await _all(*(self.measure(self._point_config(pts[p.id], x.config), self.cfg.point_repeats,
+                                      f"discriminate {p.id}") for x, p, g in picks))
+        cands = [cand(c) for c in cfgs]
+        w = D.posterior(cands, conds, target_naive, base)
+        ranked = sorted(cands, key=lambda x: -w[x.key])
+        res.discrimination = {"posterior": [{"config": x.config, "posterior": round(w[x.key], 4), "prior": round(x.prior, 3)}
+                                            for x in ranked], "tests": tests, "runs": self.runs_used - start,
+                              "conditions": [p.id for p in conds]}
+        lead = ranked[0]
+        desc = lambda c: ", ".join(f"{k}={v}" for k, v in sorted(c.items())) or "as run"  # noqa: E731
+        if w[lead.key] < self.cfg.discriminate_stop:
+            res.notes.append(f"discrimination: the paper's other conditions ({', '.join(p.id for p in conds)}) don't yet "
+                             "tell the equally good fits apart: " + "; ".join(
+                                 f"{desc(x.config)} {w[x.key]:.0%}" for x in ranked[:3]))
+            return
+        res.notes.append(f"discrimination: the paper's other conditions favour {desc(lead.config)} "
+                         f"(posterior {w[lead.key]:.0%} after {len(tests)} run(s) chosen by expected information)")
+        if lead.config != dict(res.changes):
+            old = dict(res.changes)
+            await self._swap_to(t, res, lead.config,
+                                f"discrimination favours {desc(lead.config)} over {desc(old)}",
+                                f"{desc(old)} and {desc(lead.config)} fit the target equally well; the paper's other "
+                                f"conditions favour {desc(lead.config)} (posterior {w[lead.key]:.0%}), so it is the "
+                                "answer")
+        order = {frozenset(x.config.items()): i for i, x in enumerate(ranked)}
+        res.equivalent.sort(key=lambda e: (e["config"] != dict(res.changes), order.get(frozenset(e["config"].items()), 99)))
 
     def equivalent_configs(self, t: Target, answer: Changes, candidates: list[Changes]) -> list[dict]:
         """The answer and every candidate the target can't tell apart from it: likelihood within

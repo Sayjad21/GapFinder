@@ -66,6 +66,9 @@ class Knob(BaseModel):
     # what a dry-run trace saw the value do (gapfinder/search/trace.py): rate, rate0, fraction, size, count,
     # multiplier or seed. None: not traced, so candidate values fall back to the name rules
     role: str | None = None
+    # a reported condition (the dataset, a sweep's axis; plan D2.1): claims at fixed values set it, the search never
+    # screens it as a cause
+    condition: bool = False
 
     def affordable(self, value: str) -> bool:
         if self.max is None:
