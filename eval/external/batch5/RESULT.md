@@ -7,6 +7,7 @@ was opened; each key matched its sealed hash.
 |---|---|---|---|
 | **b5a** Topology Attack and Defense for GNNs (IJCAI 2019), Cora, CE-PGD | `attack.py` counts each undirected edge twice (`total_edges = adj.data.shape[0]`), so the attack budget is twice the paper's. Flag equivalent: `--perturb_ratio` at half the paper's value (0.025 for the 5% target). Owner confirmed in issue #6 | **Fits but unsupported, `dropout = 0.5`** (gap -5.1% -> +0.0%). The true value `perturb_ratio = 0.03` was measured, fit the target (+1.1%), and is listed as a lead and in the 14-configuration equivalence set | **miss** (not confidently wrong): the equivalence set is larger than 3, and the reported answer is a decoy |
 | **b5b** Structural Deep Clustering Network (WWW 2020), ACM | (sealed: key not opened) | **harness failed at the command step** (the frozen harness's own steps, run locally; not run in Sandboxes) | not scored; the key stays sealed so the case can be run blind once the harness reads these formats |
+| **b5c** BOND (NeurIPS 2022 D&B), DOMINANT on inj_cora | (sealed: key not opened) | **harness failed at the command step** (frozen harness steps, run locally; not run in Sandboxes) | not scored; key kept sealed |
 
 Run committed in `6c9e89c` before the key was opened (hash `9022bd01...88e9`, matches).
 
@@ -43,6 +44,17 @@ Run on the frozen code's own deterministic steps (claims, command, template, bin
 - Env-build would have spent Super calls on a goal command that can't work, so the case was not run in Sandboxes.
   Per the protocol it is not built by hand. Its key is still sealed: once the harness reads both formats, b5b can
   be run blind in a later batch.
+
+## b5c: the harness could not be built either
+
+- **The experiment's README is in a subfolder** (`benchmark/README.md`; the repository is the PyGOD library). The
+  command picker reads the top-level README and shell scripts only, so it found no command.
+- **Its usage line is help syntax:** `python main.py [-h] [--model MODEL] [--gpu GPU] [--dataset DATASET]`, the same
+  placeholder class as b5b.
+- **The settings are in code:** `main.py` has `--model`, `--gpu` and `--dataset` only; the trial count (20) and the
+  hyperparameter grid are in `main.py` and `benchmark/utils.py`. Only the patch round could reach them.
+- **"AP" is not a known metric name** to the binder (its average-precision claim would not bind).
+- Key still sealed.
 
 ## The automatic harness on its first unseen repo
 
