@@ -56,6 +56,27 @@ Run on the frozen code's own deterministic steps (claims, command, template, bin
 - **"AP" is not a known metric name** to the binder (its average-precision claim would not bind).
 - Key still sealed.
 
+## batch-5b (harness fixes, engine unchanged): b5b and b5c again
+
+- **A setting of mine, not the harness, killed the first attempts.** The Sandboxes backend puts a 300-second
+  CPU-time limit (`ulimit -t`, `GF_SANDBOX_CPU_LIMIT_S`) on every process unless it is raised; earlier batches
+  raised it (6000-60000), batch-5 did not. SDCN's 4-thread training was killed (SIGKILL, exit 137) at epoch 45
+  after 95 s with 3.4 GB free; env-build's model then blamed `.cuda()` (its own test step runs without the CPU
+  shim; under the shim the code runs) and gave up. b5c's "out of memory" report was probably the same kill. b5a's
+  runs used less than 300 CPU-seconds and are unaffected. Re-run with `GF_SANDBOX_CPU_LIMIT_S=20000` (an
+  infrastructure setting; allowed by the protocol).
+- **b5b:** the harness was built (8 claims bound with `--bind`, case.md's Z/Q mapping; 10 repeats; one cell about
+  40 minutes). Naive SDCN ACC about 88.8 against the paper's 90.45. Ledger $0.29. Search: see below.
+- **b5c:** env-build passed; the smoke run's Sandboxes operation then failed twice at the same point with HTTP 500.
+  Out of memory is suspected (env-build's model reported it even with 2 GB of swap) but not shown: the harness
+  crashed on the API error without writing HARNESS.md, so that environment was lost. **Harness failed at smoke;**
+  not run further, no ledger spent, key kept sealed.
+
+Harness bugs found on the way (fixed after the batch): env-build's own test steps run without the CPU shim; on
+failure env-build reports its starting checkpoint instead of the last good one; an infrastructure error in the
+smoke run crashes the harness without writing HARNESS.md; the default CPU-time limit (300 s) should follow the
+run's timeout instead.
+
 ## The automatic harness on its first unseen repo
 
 - It got to a spec with one recorded change: `--repeats 5` (the paper's 5 splits) ran 4 copies in parallel and
