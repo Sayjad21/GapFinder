@@ -157,7 +157,9 @@ class LocalBackend(SandboxBackend):
             p = dest / rel.removeprefix(WORK_DIR + "/").lstrip("/")
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(data)
-        full_env = {**os.environ, **env, "WORK": str(dest), "PYTHON": Path(sys.executable).as_posix()}
+        # GF_PATHSEP: the separator the local interpreter splits PYTHONPATH on (";" on Windows); a VM's is ":"
+        full_env = {**os.environ, **env, "WORK": str(dest), "PYTHON": Path(sys.executable).as_posix(),
+                    "GF_PATHSEP": os.pathsep}
         argv, container = [self.shell, "-c", shell], None
         if self.docker_image:
             container = f"gf-{cid}"

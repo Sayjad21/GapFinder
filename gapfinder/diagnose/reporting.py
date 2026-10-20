@@ -87,7 +87,9 @@ def reporting_hypotheses(branches, claims: list[tuple[str, str, bool]], sd_floor
                     preds[cid] = Prediction.from_values(vals, sd_floor.get(cid, 0.0))
                     used[cid] = key
                     break
-        if not preds:
+        if len(preds) < len(claims):
+            # a rule the runs can't read on every claim isn't proposed: scored on fewer claims it would look likelier
+            # than the rules that can (and take their share of the posterior)
             continue
         h = Hypothesis(f"reporting:{rule}", "reporting", title, prior, preds,
                        detail={"rule": rule, "flaw": flaw, "statistics": used},

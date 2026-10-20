@@ -1255,8 +1255,9 @@ class GapSearch:
         fitting = [h for h in hyps if h.max_I <= STRICT_I and len(h.predictions) == len(diff.claims)]
         mass = sum(h.posterior for h in fitting)
         # the comparison decides (the rules against the numbers as printed, in the posterior); the as-printed numbers
-        # fitting every claim would leave nothing to explain
-        if len(diff.claims) < 2 or not fitting or as_run.fits_all or mass < self.cfg.gate_posterior:
+        # fitting every claim as strictly as a rule must (STRICT_I) would leave nothing to explain. Within FIT_I but
+        # beyond STRICT_I (a 2.4-sigma miss under the noise floor) is left to the posterior, like any rival
+        if len(diff.claims) < 2 or not fitting or as_run.max_I <= STRICT_I or mass < self.cfg.gate_posterior:
             return None
         top = max(fitting, key=lambda h: h.posterior)
         pred = top.per_claim[t.claim_id]["pred"]

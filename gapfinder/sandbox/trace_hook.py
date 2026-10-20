@@ -441,7 +441,7 @@ def run_parts(steps: int = 30, seconds: float = 900) -> tuple[dict[str, str], di
     files = {f"{HOOK_DIR}/sitecustomize.py": HOOK_SOURCE.encode()}
     prefix = (f'export GF_TRACE_ROOT="${{WORK:-$PWD}}" GF_TRACE_DIR="${{WORK:-$PWD}}/{OUT_DIR}"; '
               f'mkdir -p "$GF_TRACE_DIR"; '
-              f'export PYTHONPATH="${{WORK:-$PWD}}/{HOOK_DIR}${{PYTHONPATH:+:$PYTHONPATH}}"; ')
+              f'export PYTHONPATH="${{WORK:-$PWD}}/{HOOK_DIR}${{PYTHONPATH:+${{GF_PATHSEP:-:}}$PYTHONPATH}}"; ')
     suffix = f'; for f in "${{WORK:-$PWD}}"/{OUT_DIR}/*.json; do [ -f "$f" ] && printf "{MARKER}%s\\n" "$(cat "$f")"; done; true'
     return env, files, prefix, suffix
 

@@ -111,5 +111,5 @@ HOOK_SOURCE = HOOK_BODY + CHAIN_SOURCE  # alone on PYTHONPATH: chain to the envi
 
 def run_parts() -> tuple[dict[str, str], dict[str, bytes], str]:
     """(env, files to upload, shell prefix) for every run."""
-    prefix = f'export PYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}${{WORK:-$PWD}}/{HOOK_DIR}"; '
+    prefix = f'export PYTHONPATH="${{PYTHONPATH:+$PYTHONPATH${{GF_PATHSEP:-:}}}}${{WORK:-$PWD}}/{HOOK_DIR}"; '
     return dict(ENV), {f"{HOOK_DIR}/sitecustomize.py": HOOK_SOURCE.encode()}, prefix

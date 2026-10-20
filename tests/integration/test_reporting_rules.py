@@ -22,25 +22,30 @@ VAL_ACC = [0.58, 0.64, 0.69, 0.72, 0.74, 0.76, 0.755, 0.75, 0.745, 0.74, 0.735, 
 TEST_F1 = [0.50, 0.55, 0.58, 0.60, 0.61, 0.62, 0.63, 0.64, 0.65, 0.66, 0.67, 0.68, 0.70, 0.69, 0.685, 0.68, 0.675,
            0.67, 0.665, 0.66]  # peaks at epoch 12
 
-BENCH = textwrap.dedent(f'''\
+def _bench(T, V, F) -> str:
+    return BENCH_T.replace("CURVES", f"{T!r}, {V!r}, {F!r}")
+
+
+BENCH_T = textwrap.dedent('''\
     import argparse, hashlib, os
     p = argparse.ArgumentParser()
     p.add_argument("--lr", type=float, default=0.01)
     a = p.parse_args()
     noise = (int(hashlib.md5(os.environ.get("RUN_TAG", "").encode()).hexdigest(), 16) % 100 - 50) / 25000.0
     shift = 0.03 if a.lr == 0.1 else 0.0
-    T, V, F = {TEST_ACC!r}, {VAL_ACC!r}, {TEST_F1!r}
+    T, V, F = CURVES
     for e in range(20):
         print("epoch %d val acc: %.4f test acc: %.4f test f1: %.4f" % (e, V[e] + shift + noise, T[e] + shift + noise,
                                                                        F[e] + shift + noise))
     ''')
+BENCH = _bench(TEST_ACC, VAL_ACC, TEST_F1)
 NAMES = {"c1_acc": "test acc", "c2_f1": "test f1"}
 
 
-def _search(tmp_path, paper: dict[str, float]) -> GapSearch:
+def _search(tmp_path, paper: dict[str, float], bench: str = BENCH) -> GapSearch:
     art = tmp_path / "art"
     art.mkdir(parents=True)
-    (art / "bench.py").write_text(BENCH, encoding="utf-8")
+    (art / "bench.py").write_text(bench, encoding="utf-8")
     traj = {"c1_acc": {"label": "test acc", "scale": 100.0, "dir": 1, "val": "val acc", "target": True},
             "c2_f1": {"label": "test f1", "scale": 100.0, "dir": 1, "val": None, "target": False}}
     (art / "emit.py").write_text(emit_script({k: (v, 100.0) for k, v in NAMES.items()}, traj), encoding="utf-8")
@@ -91,3 +96,17 @@ async def test_a_setting_cause_is_not_taken_for_a_reporting_rule(tmp_path):
     assert r.reporting is None and r.changes == {"lr": "0.1"}, (r.notes, r.changes)
     ranked = [h["id"] for h in r.differential["ranked"]]
     assert ranked[0] == "settings:lr=0.1", ranked
+
+
+async def test_a_near_miss_as_printed_does_not_block_a_rule_that_fits(tmp_path):
+    """The numbers as printed miss the target by between 2 and 3 sigma (inside history matching's cutoff, beyond the
+    gate's own fit criterion): the rules are compared with them in the posterior instead of the gate standing down."""
+    flat = [0.70 + 0.07 * min(e, 6) / 6 - 0.0019 * max(0, e - 6) for e in range(20)]  # peaks 0.770, ends 0.7453
+    f1 = [x - 0.08 for x in flat]
+    val = [0.60 + 0.005 * e for e in range(20)]  # validation keeps rising: early stopping would read the end
+    s = _search(tmp_path, {"C1": 77.0, "C2": 69.0}, _bench(flat, val, f1))
+    [r] = await s.run()
+    as_run = next(h for h in r.differential["ranked"] if h["id"] == "as-run")
+    assert 2.0 < as_run["max_I"] <= 3.0, as_run
+    assert r.attribution.confidence_label == "Explained by the reporting rule", r.notes
+    assert r.reporting["rule"] in ("best", "best+attarget") and s.runs_used == 5

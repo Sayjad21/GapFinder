@@ -378,7 +378,7 @@ def run_parts(changes: dict[str, str]) -> tuple[dict[str, str], dict[str, bytes]
         return {}, {}, ""
     entry = _SEP.join(f"{rel}:{line}:{name}={value}" for k, value in sorted(patches.items())
                       for rel, line, name in [parse(k)])
-    prefix = f'export PYTHONPATH="${{WORK:-$PWD}}/{HOOK_DIR}${{PYTHONPATH:+:$PYTHONPATH}}"; '
+    prefix = f'export PYTHONPATH="${{WORK:-$PWD}}/{HOOK_DIR}${{PYTHONPATH:+${{GF_PATHSEP:-:}}$PYTHONPATH}}"; '
     files = {f"{HOOK_DIR}/sitecustomize.py": HOOK_SOURCE.encode(), f"{HOOK_DIR}/gf_patch_run.py": RUNNER_SOURCE.encode()}
     return {ENV: entry}, files, prefix
 
