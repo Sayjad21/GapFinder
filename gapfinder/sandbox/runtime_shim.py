@@ -63,6 +63,48 @@ try:
         sys.meta_path.insert(0, _GfTorchFinder())
 except Exception:
     pass
+
+# The paper-year environment's import redirect (gapfinder/env_year.py): GF_LIB_DIRS="dir|dir" (first listed wins);
+# each directory's top-level modules are imported from it, whatever sys.path says (an old release then wins even
+# over a package beside the script).
+try:
+    import os as _gf_os
+    _gf_dirs = [d for d in _gf_os.environ.get("GF_LIB_DIRS", "").split("|") if d and _gf_os.path.isdir(d)]
+    _gf_tops = {}
+    for _d in _gf_dirs:
+        _names = set()
+        for _e in _gf_os.listdir(_d):
+            if _e.endswith(".dist-info") or _e.endswith(".egg-info"):
+                _tl = _gf_os.path.join(_d, _e, "top_level.txt")
+                if _gf_os.path.isfile(_tl):
+                    _names.update(x.strip() for x in open(_tl).read().split() if x.strip())
+                continue
+            if _e in ("bin", "__pycache__") or _e.startswith("."):
+                continue
+            if _gf_os.path.isdir(_gf_os.path.join(_d, _e)):
+                _names.add(_e)
+            elif _e.endswith(".py") or _e.endswith(".so") or _e.endswith(".pyd"):
+                _names.add(_e.split(".")[0])
+        for _n in _names:
+            _gf_tops.setdefault(_n, _d)
+
+    if _gf_tops:
+        import importlib.machinery as _gf_mach
+
+        class _GfLibFinder(object):
+            def find_spec(self, name, path, target=None):
+                d = _gf_tops.get(name)
+                if d is None:
+                    return None
+                spec = _gf_mach.PathFinder.find_spec(name, [d])
+                loader = globals().get("_GfTorchLoader")
+                if spec is not None and name == "torch" and spec.loader is not None and loader is not None:
+                    spec.loader = loader(spec.loader)
+                return spec
+
+        sys.meta_path.insert(0, _GfLibFinder())
+except Exception:
+    pass
 '''
 HOOK_SOURCE = HOOK_BODY + CHAIN_SOURCE  # alone on PYTHONPATH: chain to the environment's own sitecustomize
 

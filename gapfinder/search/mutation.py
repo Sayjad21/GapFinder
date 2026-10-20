@@ -11,7 +11,13 @@ Mutation-based fault localisation (MUSE, Metallaxis) ranks sites by how mutants 
   that define their other operands or use their results (1), and one more step, including one call into a repo
   function that receives the knob's value (an intraprocedural slice plus one interprocedural step);
 - **metric code** (functions named like accuracy, f1, auc, evaluate, test) and the run's **loop bounds**
-  (`range()` constants), and boolean keywords of data loaders (`shuffle`, `drop_last`);
+  (`range()` constants);
+- **the data pipeline** (plan D1.6): data loaders' switches, also where the call leaves them at their default
+  (`drop_last`, `shuffle`); split fractions (a keyword like `test_size=0.2`, or `0.8 * len(x)`): the complement first,
+  then the common fractions; what a scaler, normaliser or encoder is fit on (`fit(X)` against `fit(X_train)`, both
+  ways: leakage, or a paper that fit on everything); filtering thresholds in data code (`min_count=5`,
+  `df[df.n > 10]`); a line a static check flagged (split fractions, evaluation switches, selection on test data)
+  comes first;
 - **executed lines only**, when the runtime trace recorded coverage;
 - **operators implied by measured relations** first: a verified scale relation ("the code's knob is 0.5 x the
   paper's", plan D2.4) makes the matching factor on that knob's slice the first mutants tried.
@@ -32,6 +38,15 @@ METRIC_FN = re.compile(r"(?i)(acc|accuracy|f1|auc|ndcg|recall|precision|hit|mrr|
 SKIP_CALLS = {"print", "format", "write", "info", "debug", "warning", "error", "log", "tqdm", "set_description",
               "add_scalar", "dump", "save"}
 LOADER_BOOLS = {"shuffle", "drop_last", "normalize", "bias", "pin_memory", "replacement"}
+LOADERS = re.compile(r"(DataLoader|Loader|loader|data_loader|DataListLoader|NeighborLoader|batch_iter|BatchSampler)$")
+SPLIT_KW = re.compile(r"(?i)^(test|val|valid|validation|train|dev|holdout|eval)?_?(size|ratio|frac|fraction|split|portion|"
+                      r"percent|pct|prop|proportion)$|^(train|test|val|split|holdout)_?\w*(ratio|frac|size|percent|portion)$")
+COMMON_FRACS = (0.1, 0.2, 0.3, 0.5, 0.25, 0.15)
+FITTERS = re.compile(r"(?i)(scal|norm|pca|imput|vectoriz|encod|standard|minmax|robust|whiten|tfidf|discretiz|binar)")
+FIT_CALLS = {"fit", "fit_transform", "partial_fit"}
+DATA_FN = re.compile(r"(?i)(load|read|prep|preprocess|process|filter|clean|build|dataset|data|split|sample|parse|graph)")
+FILTER_KW = re.compile(r"(?i)^(min|max)_?(count|freq|df|degree|support|len|length|users?|items?|interactions?|occur\w*)$|"
+                       r"^(threshold|thresh|cutoff|min_count|core|k_core|kcore)$")
 
 
 @dataclass
@@ -225,6 +240,16 @@ def _after(op: str, before: str, node: ast.AST) -> str:
         return _unparse(n)
     if op == "not" and isinstance(node, ast.Constant):
         return repr(not node.value)
+    if op.startswith(("set.", "arg.", "kwset.")):
+        from gapfinder.sandbox.ast_patch import HOOK_SOURCE
+
+        ns: dict = {}
+        exec(compile(HOOK_SOURCE.split("class _Loader")[0], "<gf-hook>", "exec"), ns)  # the hook's own transformer
+        mut = ns["_Mut"](getattr(node, "lineno", 0), f"@mut.{getattr(node, 'col_offset', 0)}.{type(node).__name__}.{op}", "1")
+        try:
+            return _unparse(mut._apply(copy.deepcopy(node)))
+        except Exception:  # noqa: BLE001
+            return before
     v = _number(node)
     if v is not None and op in NUM_OPS:
         return {"mul2": v * 2, "div2": v // 2 if isinstance(v, int) and v % 2 == 0 else v / 2, "add1": v + 1,
@@ -234,11 +259,127 @@ def _after(op: str, before: str, node: ast.AST) -> str:
     return before
 
 
+def _fracs(v: float) -> list[float]:
+    """Alternatives to a split fraction: its complement, then the common ones nearest to it."""
+    out = [round(1 - v, 6)] if abs(1 - v - v) > 1e-9 else []
+    for f in sorted(COMMON_FRACS, key=lambda f: abs(f - v)):
+        if abs(f - v) > 1e-9 and all(abs(f - x) > 1e-9 for x in out):
+            out.append(f)
+    return out[:3]
+
+
+def _train_names(name: str, stored: set[str]) -> list[str]:
+    """The train-only (or, from a train name, the whole-data) variants of a variable that the file defines."""
+    low = name.lower()
+    if "train" in low or re.search(r"(^|_)tr(n)?($|_)", low):
+        base = re.sub(r"(?i)(_?train_?|_trn$|_tr$|^tr_)", "", name).strip("_")
+        return [x for x in (base, base.upper(), base.lower()) if x and x in stored and x != name][:1]
+    cands = [f"{name}_train", f"train_{name}", f"{name}_tr", f"{name}train", f"{name}_trn", f"train{name}"]
+    return [c for c in cands if c in stored][:2]
+
+
+def _threshold_ops(v) -> tuple[str, ...]:
+    """A count threshold moves by one or by a factor of two (an odd count is never halved); a real one by the factor."""
+    if isinstance(v, int):
+        return ("add1", "sub1", "mul2") + (("div2",) if v % 2 == 0 else ())
+    return ("mul2", "div2")
+
+
+def _data_mutants(rel: str, tree: ast.Module, add, parents, hints: set[int]) -> None:
+    """The data-pipeline operators of plan D1.6 (see the module docstring)."""
+    from gapfinder.sandbox.ast_patch import arg_op, kwset_op, set_op
+
+    stored = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    masks = sorted(x for x in stored if re.search(r"(?i)(train_?(idx|index|mask|ids)|(idx|index|mask)_?train)", x))
+    for name, stmts, node in _scopes(tree):
+        datafn = name != "<module>" and DATA_FN.search(name)
+        if name != "<module>":  # a parameter's default: def build(interactions, min_count=5, test_ratio=0.1)
+            args = node.args
+            pos = args.args[len(args.args) - len(args.defaults):] if args.defaults else []
+            for arg, d in list(zip(pos, args.defaults)) + [(a, d) for a, d in zip(args.kwonlyargs, args.kw_defaults) if d]:
+                v = _number(d)
+                if v is None:
+                    continue
+                hint = 2 if d.lineno in hints else 0
+                if SPLIT_KW.search(arg.arg) and 0 < v < 1:
+                    for alt in _fracs(float(v)):
+                        add(rel, d, "num", set_op(repr(alt)), 1 - hint, None,
+                            ["data pipeline", "split fraction", arg.arg], parents)
+                elif FILTER_KW.search(arg.arg):
+                    for op in _threshold_ops(v):
+                        add(rel, d, "num", op, 2 - hint, None, ["data pipeline", "filter threshold", arg.arg], parents)
+        for st in stmts:
+            for n in ast.walk(st):
+                hint = 2 if getattr(n, "lineno", None) in hints else 0
+                if isinstance(n, ast.Call):
+                    f = _call_name(n)
+                    kws = {k.arg for k in n.keywords}
+                    if LOADERS.search(f or ""):  # a loader's switches left at their default
+                        text = _unparse(n).lower()
+                        evalish = any(w in text for w in ("test", "val", "eval", "dev"))
+                        if "drop_last" not in kws:
+                            add(rel, n, "Call", kwset_op("drop_last", "True"), 2 - hint, None,
+                                ["data pipeline", "drop_last"] + (["evaluation loader"] if evalish else []), parents)
+                        if "shuffle" not in kws and not evalish:
+                            add(rel, n, "Call", kwset_op("shuffle", "True"), 2 - hint, None,
+                                ["data pipeline", "shuffle"], parents)
+                    for k in n.keywords:  # split fractions and filter thresholds given as keywords
+                        v = _number(k.value)
+                        if v is None or k.arg is None:
+                            continue
+                        if SPLIT_KW.search(k.arg) and 0 < v < 1:
+                            for alt in _fracs(float(v)):
+                                add(rel, k.value, "num", set_op(repr(alt)), 1 - hint, None,
+                                    ["data pipeline", "split fraction", k.arg], parents)
+                        elif SPLIT_KW.search(k.arg) and re.search(r"(?i)percent|pct", k.arg) and 1 < v < 100:
+                            for alt in _fracs(v / 100):
+                                add(rel, k.value, "num", set_op(repr(round(alt * 100, 6))), 1 - hint, None,
+                                    ["data pipeline", "split fraction", k.arg], parents)
+                        elif FILTER_KW.search(k.arg):
+                            for op in _threshold_ops(v):
+                                add(rel, k.value, "num", op, 2 - hint, None, ["data pipeline", "filter threshold", k.arg],
+                                    parents)
+                    if f in FIT_CALLS and n.args and isinstance(n.func, ast.Attribute):
+                        recv = _unparse(n.func.value)
+                        if FITTERS.search(recv):
+                            a0 = n.args[0]
+                            alts = []
+                            if isinstance(a0, ast.Name):
+                                alts = _train_names(a0.id, stored)
+                                if not alts and "train" not in a0.id.lower():
+                                    alts = [f"{a0.id}[{m}]" for m in masks[:1]]
+                            elif isinstance(a0, ast.Subscript) and isinstance(a0.value, ast.Name):
+                                alts = [a0.value.id]  # fit on the whole array instead of the train rows
+                            for alt in alts:
+                                add(rel, n, "Call", arg_op(0, alt), 1 - hint, None,
+                                    ["data pipeline", "normalisation fit", f"{_unparse(a0)} -> {alt}"], parents)
+                # x * 0.8 with a length or a size: a split fraction in arithmetic
+                if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Mult):
+                    for side, other in ((n.left, n.right), (n.right, n.left)):
+                        v = _number(side)
+                        if v is not None and 0 < v < 1 and re.search(r"(?i)len\(|shape|size|num_|n_|count",
+                                                                     _unparse(other)):
+                            for alt in _fracs(float(v)):
+                                add(rel, side, "num", set_op(repr(alt)), 1 - hint, None,
+                                    ["data pipeline", "split fraction"], parents)
+                # a filter on a constant in data code, or inside a subscript (df[df.n > 10])
+                if isinstance(n, ast.Compare) and len(n.ops) == 1 and isinstance(n.ops[0], (ast.Lt, ast.LtE, ast.Gt, ast.GtE)):
+                    v = _number(n.comparators[0])
+                    in_sub = isinstance(parents.get(id(n)), ast.Subscript)
+                    if v is not None and v not in (0, 1) and (datafn or in_sub):
+                        for op in _threshold_ops(v):
+                            add(rel, n.comparators[0], "num", op, 2 - hint, None, ["data pipeline", "filter threshold"],
+                                parents)
+                        add(rel, n, "Compare", "cmpflip", 2 - hint, None, ["data pipeline", "filter threshold"], parents)
+
+
 def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[int]] | None = None,
-                 relations: list[dict] | None = None, files: list[Path] | None = None, limit: int = 40) -> list[Mutant]:
+                 relations: list[dict] | None = None, files: list[Path] | None = None, limit: int = 40,
+                 hints: dict[str, set[int]] | None = None) -> list[Mutant]:
     """Candidate mutants, best first. `knobs`: the knobs the claims depend on (their slices are searched).
     `executed`: repo file -> executed lines (from the runtime trace). `relations`: verified scale relations
-    ({"knob", "family", "c"}): their factor's operators on that knob's slice come first."""
+    ({"knob", "family", "c"}): their factor's operators on that knob's slice come first. `hints`: repo file ->
+    lines a static check flagged (their data-pipeline mutants come first)."""
     from gapfinder.harness_auto import _import_closure
 
     root = Path(root).resolve()
@@ -324,6 +465,7 @@ def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[in
                             for t in fstmts:
                                 if id(t) in d2:
                                     _mutants_of(t, d + 1 + d2[id(t)], knob, frel, add, fparents, kset)
+        _data_mutants(rel, tree, add, parents, set((hints or {}).get(rel, ())))
         # metric code, loop bounds, loader switches
         for name, stmts, node in _scopes(tree):
             metric = name != "<module>" and METRIC_FN.search(name)
@@ -355,7 +497,9 @@ NON_NUMERIC_CALLS = {"range", "list", "dict", "set", "tuple", "str", "open", "fo
                      "replace", "strip", "zip", "enumerate", "map", "filter", "sorted", "reversed", "isinstance",
                      "type", "getattr", "setattr", "hasattr", "iter", "next", "copy", "deepcopy", "to", "cuda", "cpu",
                      "numpy", "tolist", "reshape", "view", "permute", "transpose", "unsqueeze", "squeeze", "load",
-                     "Tensor", "tensor", "array", "zeros", "ones", "empty", "seed", "manual_seed", "DataLoader"}
+                     "Tensor", "tensor", "array", "zeros", "ones", "empty", "seed", "manual_seed", "DataLoader",
+                     "fit", "fit_transform", "transform", "partial_fit", "train_test_split", "read_csv", "read_json",
+                     "load_state_dict", "state_dict", "parameters", "named_parameters"}
 PLUMBING = re.compile(r"parse_args|ArgumentParser|add_argument|os\.environ|hashlib|RUN_TAG|\.seed\(|manual_seed|"
                       r"random\.seed|logging\.|wandb\.|SummaryWriter|tqdm\(")
 

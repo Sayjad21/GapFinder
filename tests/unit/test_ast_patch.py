@@ -136,6 +136,21 @@ def test_mutation_operators_apply_in_memory_and_off_is_a_no_op(tmp_path):
     assert lines(apply_source(src, 6, f"@mut.{c6.keywords[1].value.col_offset}.bool.not", "1"))[5] == "f(alpha=0.5, shuffle=True)"
     assert lines(apply_source(src, 7, f"@mut.{num.col_offset}.num.mul2", "1"))[6] == "lr = 6"
     assert lines(apply_source(src, 1, f"@mut.{sub.col_offset}.Subscript.xdiv2", "0"))[0] == "total = adj.data.shape[0]"
+    from gapfinder.sandbox.ast_patch import kwset_op
+
+    # plan D1.5: pass a keyword as a literal (the older release's default), added or replacing what the call passes
+    assert lines(apply_source(src, 6, f"@mut.{c6.col_offset}.Call.{kwset_op('epoch', '5')}", "1"))[5] == \
+        "f(alpha=0.5, shuffle=False, epoch=5)"
+    assert lines(apply_source(src, 6, f"@mut.{c6.col_offset}.Call.{kwset_op('alpha', repr('mean'))}", "1"))[5] == \
+        "f(alpha='mean', shuffle=False)"
+    from gapfinder.sandbox.ast_patch import arg_op, set_op
+
+    # plan D1.6: a literal replaced (a split fraction), a call's argument replaced (what a scaler is fit on)
+    assert lines(apply_source(src, 7, f"@mut.{num.col_offset}.num.{set_op('0.9')}", "1"))[6] == "lr = 0.9"
+    fit = "s = StandardScaler().fit(X)\n"
+    call = _ast.parse(fit).body[0].value
+    assert apply_source(fit, 1, f"@mut.{call.col_offset}.Call.{arg_op(0, 'X[idx_train]')}", "1").strip() == \
+        "s = StandardScaler().fit(X[idx_train])"
     import pytest
 
     with pytest.raises(RuntimeError):  # no node of that kind at that place: a loud failure, not a silent no-op

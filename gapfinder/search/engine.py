@@ -45,6 +45,10 @@ _LABEL_RANK = {
 }
 
 
+class _LibraryBudget(RuntimeError):
+    """The library probe's share of the run budget is used."""
+
+
 class RunBudgetExceeded(RuntimeError):
     pass
 
@@ -115,6 +119,13 @@ class SearchConfig:
     mutation_max: int = 24
     mutation_keep: int = 6
     mutation_budget_frac: float = 0.35
+    # plans D1.3-D1.5, D7.2: when the paper-year packages (or the paper-era code) change the numbers, which package
+    # (delta debugging), which release or commit (binary search) and which call site (API and source diff); at most
+    # library_budget_frac of the run budget; two configurations give "the same numbers" within library_z standard
+    # errors on every claim
+    library_probe: bool = True
+    library_budget_frac: float = 0.25
+    library_z: float = 3.0
     max_points: int = 4  # such claims used per search (each costs runs for every configuration checked)
     point_configs: int = 3  # before history matching: the best joint fits also measured at those claims
     # out of space: one Super call compares the paper with the traced run (gapfinder/search/contrast.py);
@@ -283,6 +294,7 @@ class ClaimResult:
     # what a person checks first, whatever the headline label
     differential: dict | None = None
     reporting: dict | None = None  # the reporting rule that explains the claims, when one does
+    library: dict | None = None  # the library probe: culprit packages, change points, API leads (plan D1.3-D1.5)
 
 
 def _norm_knob(k: str) -> str:
@@ -471,7 +483,8 @@ class GapSearch:
         self.split_report: dict[str, dict] = {}  # claim -> noise band across seeds, and across seeds and splits
         self.differentials: dict = {}  # claim id -> diagnose.Differential
         self.scale_relations: list[dict] = []  # verified "the code's knob is g(the paper's)" (feeds the mutation round)
-        self.code_leads: dict[str, list[dict]] = {}  # claim id -> the mutation round's fitting groups  # protocol tests: a selection or label edit, switched off and measured
+        self.code_leads: dict[str, list[dict]] = {}  # claim id -> the mutation round's fitting groups
+        self._library_out: dict[str, dict] = {}  # claim id -> the library probe's findings and notes  # protocol tests: a selection or label edit, switched off and measured
         self.trace_records: list[dict] = []  # the raw dry-run records (for the paper-to-trace contrast)
         self.paper_text = paper_text
         if self.cfg.coverage and self.spec.code_root() is not None:  # a local base, or the spec's `source`
@@ -1076,6 +1089,16 @@ class GapSearch:
                                   label=gate.attribution.confidence_label, changes={}, gap_before=g0,
                                   gap_after=gate.gap_after, reporting=gate.reporting["rule"])
             return gate
+        if self.cfg.library_probe:
+            # before the settings search: a release-localised library effect is evidence for the paper-year knob
+            # (the paper predates the release that changed the numbers), which the search's labels then use
+            lib_out: dict = {"notes": []}
+            try:
+                await self._library_probe(t, lib_out)
+                await self._era_probe(t, lib_out)
+            except (RunBudgetExceeded, budget.BudgetExceeded, _LibraryBudget) as exc:
+                lib_out["notes"].append(f"library probe stopped early: {exc}")
+            self._library_out[t.claim_id] = lib_out
         tried: set[frozenset] = set()
         try:
             await self._search(t, res, tried)
@@ -1113,6 +1136,11 @@ class GapSearch:
         self._refuted_label(t, res)
         if res.attribution is not None:
             res.attribution.hypotheses_tested = len(tried)
+        lib_out = self._library_out.get(t.claim_id)
+        if lib_out:  # kept outside `res`: the spec-knob round may replace res's fields
+            res.notes += [n for n in lib_out["notes"] if n not in res.notes]
+            body = {k: v for k, v in lib_out.items() if k != "notes"}
+            res.library = body or None
         self._stated_value_notes(res)
         self._finish_differential(t, res)
         self.orch.events.emit("attribution", claim=t.claim_id, status=res.status,
@@ -1156,7 +1184,8 @@ class GapSearch:
             diff.score(h)
         diff._normalise()
 
-    def _config_hypothesis(self, diff, changes: Changes, prior: float, title: str | None = None):
+    def _config_hypothesis(self, diff, changes: Changes, prior: float, title: str | None = None,
+                           cls: str | None = None):
         """A configuration as a hypothesis: its measured values on every claim (claims it wasn't measured on keep
         the naive prediction)."""
         from gapfinder.diagnose import Hypothesis, Prediction
@@ -1171,7 +1200,11 @@ class GapSearch:
                 preds[cid] = Prediction.from_values(vals, c.naive_sd)
         code = any(ast_patch.is_patch(k) for k in changes)
         cfg = ", ".join(f"{k}={v}" for k, v in sorted(changes.items()))
-        return Hypothesis(("code:" if code else "settings:") + cfg, "code" if code else "settings",
+        if cls is None:
+            from gapfinder import env_year
+
+            cls = "code" if code else "library" if set(changes) & {env_year.KNOB, env_year.ERA_KNOB} else "settings"
+        return Hypothesis(f"{cls}:" + cfg, cls,
                           title or (f"a code change: {cfg}" if code else f"the setting {cfg}"), prior, preds,
                           detail={"changes": dict(changes)}, runs=len(self.measure_ok(changes)),
                           check=f"run with {cfg}" + (" (an in-memory code patch)" if code else ""))
@@ -1453,7 +1486,16 @@ class GapSearch:
                        | {k for k in res.changes if not k.startswith("@")}
                        | {x["knob"] for x in (res.screen or [])[:3] if x.get("units", 0) > 1 and not x["knob"].startswith("@")})
         executed = self.trace_report.executed if getattr(self, "trace_report", None) is not None else None
-        ms = find_mutants(root, knobs, executed, self.scale_relations, limit=self.cfg.mutation_max)
+        hints: dict[str, set[int]] = {}
+        try:  # lines a static check flagged (split fractions, evaluation switches, selection on test data)
+            from gapfinder.ingest.code_checks import code_checks
+
+            for x in code_checks(root, set(self.spec.knobs), limit=80):
+                if x.family in ("split_fraction", "eval_switch", "selection_in_code", "label_in_prediction"):
+                    hints.setdefault(x.file, set()).add(x.line)
+        except Exception:  # noqa: BLE001 (a hint only)
+            hints = {}
+        ms = find_mutants(root, knobs, executed, self.scale_relations, limit=self.cfg.mutation_max, hints=hints)
         if not ms:
             return
         room = (self.cfg.max_runs or 10 ** 6) - self.runs_used
@@ -1544,6 +1586,288 @@ class GapSearch:
                                             [b.result_checkpoint for b in self.measure_ok(cfg) if b.result_checkpoint])
         res.notes.append(f"explained with a code change (tested in memory, no file edited): {origin.describe()}; "
                          "a code lead, not a confirmed cause")
+
+    # ------------------------------------------------------------ library drift and the paper-era code (D1.3-D1.5, D7.2)
+    def _claim_sd(self, c: Target) -> float:
+        vals = [b.parsed_metrics[c.metric] for b in self.measure_ok({}) if c.metric in b.parsed_metrics]
+        return max(statistics.stdev(vals) if len(vals) >= 2 else 0.0, self.cfg.noise_floor_frac * abs(c.paper_value),
+                   1e-12)
+
+    async def _lib_same(self, t: Target, a: Changes, b: Changes, label: str, max_n: int = 3) -> bool:
+        """Whether two configurations give the same numbers on every claim (the target and its held-outs) within
+        library_z standard errors. Sequential: one run each, another when the comparison is borderline, up to max_n.
+        A configuration that doesn't run gives no numbers, so it is never "the same"."""
+        z, worst = self.cfg.library_z, float("inf")
+        for n in range(1, max_n + 1):
+            await _all(self.measure(a, n, label), self.measure(b, n, label))
+            worst, compared = 0.0, 0
+            for c in self._diag_claims(t):
+                va = [x.parsed_metrics[c.metric] for x in self.measure_ok(a) if c.metric in x.parsed_metrics]
+                vb = [x.parsed_metrics[c.metric] for x in self.measure_ok(b) if c.metric in x.parsed_metrics]
+                if not va or not vb:
+                    continue
+                se = self._claim_sd(c) * math.sqrt(1 / len(va) + 1 / len(vb))
+                worst = max(worst, abs(statistics.fmean(va) - statistics.fmean(vb)) / se)
+                compared += 1
+            if not compared:
+                return False
+            if worst <= 0.6 * z or worst >= 1.5 * z:
+                break
+        return worst <= z
+
+    def _lib_room(self, start: int) -> None:
+        cap = int((self.cfg.max_runs or 10 ** 6) * self.cfg.library_budget_frac)
+        if self.runs_used - start >= cap:
+            raise _LibraryBudget(f"its share of the run budget ({cap} runs) is used")
+
+    async def _vm_probe(self, cmd: str, files: dict[str, bytes], timeout: float = 900) -> str:
+        """One command in a disposable VM from the loaded checkpoint, with the runtime shim (not a branch)."""
+        from gapfinder.sandbox.backend import InfraError
+
+        parent = await self.orch.stage("loaded", {})
+        cmd, env, files = self.orch._with_runtime_shim(cmd, {}, files)
+        try:
+            r = await self.orch._exec(parent, cmd, {**env, "RUN_TAG": "gf-library-probe"}, timeout, disposable=True,
+                                      files=files)
+        except InfraError as exc:
+            self.orch.events.emit("note", msg=f"library probe: the API probe failed to start ({str(exc)[:200]})")
+            return ""
+        self.orch.cost.add_run(r.resources.cost_usd)
+        return (r.stdout or "") + "\n" + (r.stderr or "")
+
+    async def _library_probe(self, t: Target, out: dict) -> None:
+        """Which old package changes the numbers (delta debugging), from which release (binary search over its
+        releases), and at which call site (the API and source diff of what the repository calls, each signature
+        lead verified by an in-memory code edit on the newer release). gapfinder/diagnose/library.py."""
+        from gapfinder import env_year
+        from gapfinder.diagnose import library as lib
+        from gapfinder.sandbox import ast_patch
+        from gapfinder.sandbox.spec import Knob
+
+        info = getattr(self.spec, "library", None) or {}
+        pins = info.get("pins") or {}
+        K = env_year.KNOB
+        if not pins or K not in self.spec.knobs:
+            return
+        start = self.runs_used
+        choices = self.spec.knobs[K].choices
+        by_dir = {p["dir"]: d for d, p in pins.items()}
+        dirs = sorted(by_dir)
+        has_all = "all" in choices
+        bundles = {p["dir"]: set(p.get("bundle") or [p["dir"]]) for p in pins.values()}
+        every = set().union(*bundles.values())
+
+        def cfg(sub, extra=()) -> Changes:
+            """A set of pinned packages, each with the dependencies it brought in, as the knob's value."""
+            on = set().union(*(bundles[x] for x in sub)) if sub else set()
+            if not on and not extra:
+                return {}
+            if has_all and on == every and not extra:
+                return {K: "all"}
+            return {K: ",".join(sorted(on) + list(extra))}
+
+        out.update({"packages": {d: p["old"] for d, p in pins.items()}, "culprits": [], "change_points": []})
+        note = out["notes"].append
+        independent = False
+        if has_all:
+            ref = {K: "all"}
+            self._lib_room(start)
+            out["effect"] = not await self._lib_same(t, ref, {}, "library: all")
+            if not out["effect"]:
+                note("library: the packages as of the paper's date give the same numbers as today's "
+                                 "(no effect beyond noise)")
+                return
+            if len(dirs) == 1:
+                culprits = dirs
+            else:
+                await _all(*(self.measure(cfg([d]), 1, "library: one package") for d in dirs))
+                alone = []
+                for d in dirs:
+                    self._lib_room(start)
+                    if await self._lib_same(t, cfg([d]), ref, "library: one package"):
+                        alone.append(d)
+                if alone:
+                    culprits = alone[:1]
+                    out["ddmin"] = {"tests": 0, "minimal": True, "note": "one package alone gives every old package's numbers"}
+                else:
+                    async def test(sub):
+                        self._lib_room(start)
+                        return await self._lib_same(t, cfg(sub), ref, "library: delta debugging")
+
+                    culprits, n_tests, minimal = await lib.ddmin(dirs, test, known={frozenset([d]): False for d in dirs},
+                                                                 max_tests=16)
+                    out["ddmin"] = {"tests": n_tests, "minimal": minimal}
+        else:  # the old packages don't import together: each alone
+            culprits = []
+            for d in dirs:
+                self._lib_room(start)
+                if not await self._lib_same(t, cfg([d]), {}, "library: one package"):
+                    culprits.append(d)
+            out["effect"] = bool(culprits)
+            independent = True
+            if not culprits:
+                note("library: no old package changes the numbers beyond noise")
+                return
+        out["culprits"] = [by_dir[d] for d in culprits]
+        note("library: " + (" and ".join(f"{by_dir[d]} {pins[by_dir[d]]['old']}" for d in culprits))
+                         + (" together" if len(culprits) > 1 and not independent else "")
+                         + " gives the numbers of every package as of the paper's date" if not independent else
+                         "library: " + ", ".join(f"{by_dir[d]} {pins[by_dir[d]]['old']}" for d in culprits)
+                         + " change the numbers (each alone)")
+        diff = self.differentials.get(t.claim_id) or self._new_differential(t)
+        self.differentials[t.claim_id] = diff
+        c_cfg = cfg(culprits) if not independent else cfg(culprits[:1])
+        if self.measure_ok(c_cfg):
+            diff.add(self._config_hypothesis(diff, c_cfg, 0.1, title="library drift: " + ", ".join(
+                f"{by_dir[d]}=={pins[by_dir[d]]['old']}" for d in culprits) + " (as of the paper's date)", cls="library"))
+        root = self.spec.code_root()
+        executed = self.trace_report.executed if getattr(self, "trace_report", None) is not None else None
+        for P in culprits[:2]:
+            dist, pin = by_dir[P], pins[by_dir[P]]
+            others = [] if independent else [d for d in culprits if d != P]
+            rel = list(pin.get("releases") or [])
+
+            def at(ver, rel=rel, others=others, P=P, dist=dist) -> Changes:
+                if ver == rel[0]:
+                    return cfg(others + [P])
+                if ver == rel[-1]:
+                    return cfg(others)
+                # a release between: installed on demand, beside the dependencies the paper-era one brought
+                held = set().union(*(bundles[x] for x in others)) if others else set()
+                return cfg(others, extra=sorted(bundles[P] - {P} - held) + [f"{dist}=={ver}"])
+
+            if len(rel) < 2:
+                continue
+
+            async def same_v(va, vb, at=at, dist=dist):
+                self._lib_room(start)
+                return await self._lib_same(t, at(va), at(vb), f"library: {dist} releases")
+
+            cps = await lib.change_points(rel, same_v, max_points=2)
+            if cps:
+                self._library_evidence(K, [cfg(culprits if not independent else [P])[K]]
+                                       + (["all"] if has_all and not independent else []),
+                                       f"The paper ({info.get('date', 'its date')}) predates {dist} {cps[0][1]}, the "
+                                       f"first release that gives today's numbers ({cps[0][0]} gives the paper-era "
+                                       "ones)")
+            for va, vb in cps:
+                cp = {"package": dist, "before": va, "after": vb, "leads": []}
+                out["change_points"].append(cp)
+                note(f"library: {dist} {vb} changed the numbers ({va} gives the older ones)")
+                if root is None:
+                    continue
+                sites = lib.call_sites(root, pin.get("modules") or [dist.replace("-", "_")],
+                                       [pin["path"]] if pin.get("path") else None, executed)
+                if not sites:
+                    cp["note"] = "no call into the package found in the repository's code"
+                    continue
+                quals = list(dict.fromkeys(x.qual for x in sites))[:150]
+                pre = env_year.run_prefix()
+                pa = pre.replace("{%s}" % K, at(va).get(K, "0"))
+                pb = pre.replace("{%s}" % K, at(vb).get(K, "0"))
+                text = await self._vm_probe(lib.probe_command(pa, pb), lib.probe_files(quals))
+                A, B = lib.parse_probe(text, "A"), lib.parse_probe(text, "B")
+                if not A or not B:
+                    cp["note"] = "the API probe returned nothing: " + text[-300:]
+                    continue
+                top = (pin.get("modules") or [dist])[0].split(".")[0]
+                cp["loaded"] = {"before": (A.get("versions") or {}).get(top), "after": (B.get("versions") or {}).get(top)}
+                leads = lib.compare(sites, A, B, va, vb)
+                tried = []
+                for x in [x for x in leads if x.op][:4]:
+                    if ast_patch.entry_script(root / x.file) and not ast_patch.direct_entry(self.spec.run.command, x.file):
+                        continue
+                    name = f"@ast:{x.file}:{x.line}:@mut.{x.col}.Call.{x.op}"
+                    self.spec.knobs.setdefault(name, Knob(layer="environment", default="0", env=True, choices=["0", "1"]))
+                    self._lib_room(start)
+                    ok = await self._lib_same(t, {**at(vb), name: "1"}, at(va), "library: API lead")
+                    tried.append((x, name, ok))
+                if tried and not any(ok for _, _, ok in tried) and len(tried) > 1:
+                    together = {**at(vb), **{name: "1" for _, name, _ in tried}}
+                    self._lib_room(start)
+                    if await self._lib_same(t, together, at(va), "library: API leads together"):
+                        cp["together"] = [x.site + " " + x.op for x, _, _ in tried]
+                        note(f"library: with {dist} {vb}, the {len(tried)} API edits together ("
+                                         + "; ".join(x.detail for x, _, _ in tried) + f") give {va}'s numbers")
+                verified = {id(x): ok for x, _, ok in tried}
+                cp["leads"] = [{**x.to_dict(), "verified": verified.get(id(x))} for x in leads[:10]]
+                for x, name, ok in tried:
+                    if ok:
+                        note(f"library: verified at the call site {x.site}: {x.detail}; with {dist} {vb} "
+                                         f"and the call changed (in memory: {x.op}), the numbers are {va}'s")
+                        diff.add(self._config_hypothesis(diff, {**at(vb), name: "1"}, 0.08,
+                                                         title=f"library API change at {x.site}: {x.detail}",
+                                                         cls="library"))
+                if not any(ok for _, _, ok in tried):
+                    top_leads = [x for x in leads if x.kind != "source"][:2] or leads[:2]
+                    if top_leads:
+                        note(f"library: leads for {dist} {va} -> {vb} (unverified): "
+                                         + "; ".join(f"{x.site} {x.detail}" for x in top_leads))
+
+    def _library_evidence(self, knob: str, values: list[str], fact: str) -> None:
+        """Evidence for the paper-year or paper-era knob at these values: what the paper's date says it ran."""
+        a = self.assumptions.get(knob)
+        if a is None:
+            return
+        quote = fact + ": " + ", ".join(f"{knob}={v}" for v in values)
+        if any(e.quote == quote for e in a.evidence):
+            return
+        self.assumptions[knob] = a.model_copy(update={"evidence": [*a.evidence, Evidence(
+            kind="measurement", ref="library probe (PyPI upload dates, the paper's date, release search)", quote=quote)]})
+
+    async def _era_probe(self, t: Target, lib_out: dict) -> None:
+        """The paper-era code: does the repository's last commit before the paper give other numbers, and which later
+        commit changed them (binary search over the commits up to the given one; their diff from GitHub)."""
+        import asyncio as _asyncio
+
+        from gapfinder import env_year
+        from gapfinder.diagnose import library as lib
+
+        info = (getattr(self.spec, "library", None) or {}).get("era")
+        K = env_year.ERA_KNOB
+        if not info or K not in self.spec.knobs:
+            return
+        start = self.runs_used
+        ref = {K: "1"}
+        self._lib_room(start)
+        moved = not await self._lib_same(t, ref, {}, "paper-era code")
+        out = {"sha": info["sha"], "date": info["date"], "effect": moved, "change_points": []}
+        lib_out["era"] = out
+        note = lib_out["notes"].append
+        if not moved:
+            note(f"paper-era code: the commit {info['sha'][:10]} ({info['date']}) gives the same numbers")
+            return
+        shas = [c["sha"] for c in info.get("commits") or []]
+        if info["sha"] in shas:
+            shas = shas[shas.index(info["sha"]):]
+        else:
+            shas = [info["sha"]] + shas
+        given = info.get("commit") or ""
+        if not shas or not (shas[-1].startswith(given) or given.startswith(shas[-1])):
+            shas.append(given)
+
+        def at(sha: str) -> Changes:
+            return ref if sha == shas[0] else {} if sha == shas[-1] else {K: sha}
+
+        async def same(a, b):
+            self._lib_room(start)
+            return await self._lib_same(t, at(a), at(b), "paper-era commits")
+
+        note(f"paper-era code: the commit {info['sha'][:10]} ({info['date']}) gives other numbers")
+        self._library_evidence(K, ["1"], f"The repository's last commit before the paper ({info['sha'][:10]}, "
+                                         f"{info['date']}) gives other numbers than the given commit")
+        if len(shas) > 2:
+            for a, b in await lib.change_points(shas, same, max_points=2):
+                d = await _asyncio.to_thread(env_year.commit_diff, info["repo"], b) if info.get("repo") else None
+                msg = next((c.get("message", "") for c in info.get("commits") or [] if c["sha"] == b), "")
+                out["change_points"].append({"before": a, "after": b, "message": msg, "diff": d})
+                files = [f["file"] for f in (d or {}).get("files") or [] if f["code"]][:6]
+                note(f"paper-era code: commit {b[:10]} ({msg}) changed the numbers"
+                                 + (f"; it changed {', '.join(files)}" if files else ""))
+        diff = self.differentials.get(t.claim_id) or self._new_differential(t)
+        self.differentials[t.claim_id] = diff
+        diff.add(self._config_hypothesis(diff, ref, 0.08, title=f"the code as of the paper (commit {info['sha'][:10]})",
+                                         cls="code"))
 
     def _interp_identity(self, curve, sweep, sd) -> list[float]:
         """The swept claims against the measured curve as is (g = identity), in sigma."""

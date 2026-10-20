@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import json
 import math
+import os
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -831,6 +832,7 @@ class HarnessResult:
     curves: list[dict] = field(default_factory=list)  # learning-curve points, from the per-epoch log
     unmapped: list[dict] = field(default_factory=list)  # one-setting variants whose setting maps to no knob
     paper_year: dict | None = None  # the paper-year environment knob: pins, skipped, used
+    paper_era: dict | None = None  # the repository's last commit before the paper (the paper-era code knob)
     notes: list[str] = field(default_factory=list)
 
 
@@ -911,11 +913,33 @@ def harness_markdown(r: HarnessResult) -> str:
         L.append("")
     if r.paper_year:
         y = r.paper_year
+        own = y.get("own") or {}
         L += ["## Paper-year environment (knob `gf_paper_year_env`)", "",
-              f"Packages as of {y['date']} (Python {y['python']}): "
-              + (", ".join(f"`{d}=={v}`" for d, v in sorted(y["pins"].items())) or "none older than installed")
+              f"Packages as of {y['date']} (Python {y['python']}), each in its own directory under `/opt/gf_py`: "
+              + (", ".join(f"`{d}=={v}`" + (" (the repository's own package)" if d == own.get("dist") else "")
+                           for d, v in sorted(y["pins"].items())) or "none older than installed")
               + (f". Used: {'yes' if y['used'] else 'no, ' + y.get('why_not', 'nothing to pin')}." if y["pins"] else "."),
-              ""] + [f"- {d}: {w}" for d, w in sorted(y["skipped"].items())] + [""]
+              ""]
+        if y.get("used"):
+            L += ["Values: `0` (as installed), " + ("`all`, " if y.get("all_ok") else "")
+                  + "one directory, a comma list, or `dist==version` (installed on demand by the run). The runtime "
+                  "shim imports those packages from there whatever sys.path says.", ""]
+            if y.get("failed"):
+                L += [f"Failed to install: {', '.join(y['failed'])}.", ""]
+            if not y.get("all_ok") and y.get("pins"):
+                L += ["Not importable all together; each listed value imports alone.", ""]
+        if y.get("deps"):
+            L += ["Dependencies the old releases need at other versions (date-bounded, from their own requirements):", ""]
+            L += [f"- `{d}=={v}`: {y['dep_why'].get(d, '')}" for d, v in sorted(y["deps"].items())] + [""]
+        L += [f"- {d}: {w}" for d, w in sorted({**y["skipped"], **{k: v for k, v in (y.get("dep_why") or {}).items()
+                                                                  if k not in (y.get("deps") or {})}}.items())] + [""]
+    if r.paper_era:
+        e = r.paper_era
+        L += ["## Paper-era code (knob `gf_paper_era_code`)", "",
+              f"The repository's last commit before the paper's date: `{e['sha'][:12]}` ({e['date']}: {e['message']}); "
+              f"{e.get('files', 0)} code files in `/opt/gf_paper_era`, copied over the checkout when the knob is 1. "
+              f"{len(e.get('commits') or [])} commits from it to the given one (history before the given commit "
+              "only) for the binary search.", ""]
     if r.plan:
         L += ["## Fit in one Sandboxes operation (3600 s)", "", f"{r.plan.action}: {r.plan.note}"
               + (f"; discrepancy allowance {r.plan.discrepancy}" if r.plan.discrepancy is not None else ""), ""]
@@ -1131,36 +1155,85 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
         traj = trajectories_for_emit(r.claims, bound, logs[0])
         em = emit_script(bindings_for_emit(r.claims, bound, r.curves), traj)
         final = "rm -rf out; ls gf_harness"
+        final_files = {f"{HARNESS_DIR}/emit.py": em.encode()}
+        era = None
         if paper_date:
             from gapfinder.env_build import third_party_imports
 
             py, installed = env_year.parse_freeze(a.stdout or "")
             mods = third_party_imports(root)
-            pins, why = env_year.paper_year_pins(mods, installed, paper_date, py or "3.10",
-                                                 cache=Path(".gf_cache") / "pypi")
-            r.paper_year = {"date": str(paper_date), "python": py, "pins": pins, "skipped": why, "used": False}
+            own = env_year.own_package(root)
+            releases: dict[str, list[str]] = {}
+            cache = Path(os.environ.get("GF_PYPI_CACHE") or Path(".gf_cache") / "pypi")
+            pins, why = env_year.paper_year_pins(mods, installed, paper_date, py or "3.10", cache=cache, own=own,
+                                                 releases=releases)
+            deps, dep_why, brought = (env_year.dependency_pins(pins, installed, paper_date, py or "3.10", cache=cache)
+                                      if pins else ({}, {}, {}))
+            r.paper_year = {"date": str(paper_date), "python": py, "pins": pins, "skipped": why, "used": False,
+                            "own": own, "releases": releases, "deps": deps, "dep_why": dep_why, "brought": brought}
             if pins:
-                final += ("; " + env_year.install_command(pins) + f'; PYTHONPATH="{env_year.TARGET_DIR}" "${{PYTHON:-python}}" '
-                          f'-c "import {", ".join(m for m in mods if m not in env_year.SKIP)}" >/dev/null 2>&1; '
-                          "echo GF_YEAR_IMPORT=$?")
-        w = await backend.run(b.checkpoint, final, timeout=OPERATION_S - 100, disposable=False,
-                              files={f"{HARNESS_DIR}/emit.py": em.encode()})
+                every = {**pins, **deps}
+                check_mods = mods + ([own["module"]] if own and own["dist"] in pins else [])
+                final += (f"; {env_year.install_command(every)}; "
+                          f"{sprefix}{env_year.import_check(every, check_mods, brought)}")
+            if repo and commit:
+                era = env_year.commit_before(repo, commit, paper_date)
+                if era:
+                    era["commits"] = env_year.commits_between(repo, commit, era["date"])
+                    final += f"; {env_year.era_fetch_command(era['sha'])}"
+                    final_files[env_year.ERA_SCRIPT] = env_year.era_fetch_script(repo).encode()
+        w = await backend.run(b.checkpoint, final, env=senv, timeout=OPERATION_S - 100, disposable=False,
+                              files={**final_files, **(sfiles if r.paper_year and r.paper_year["pins"] else {})})
         if w.exit_code != 0 or not w.checkpoint:
             return finish("data", "writing the emitter into the base checkpoint failed")
         if r.paper_year and r.paper_year["pins"]:
-            failed = re.findall(r"GF_PIN_FAIL (\S+)", w.stdout or "")
-            r.paper_year["failed"] = failed
-            r.paper_year["used"] = "GF_YEAR_IMPORT=0" in (w.stdout or "") and len(failed) < len(r.paper_year["pins"])
-            if not r.paper_year["used"]:
-                r.paper_year["why_not"] = ("the old versions don't import together" if not failed
-                                           else f"{len(failed)} of {len(r.paper_year['pins'])} pins failed to install")
+            y = r.paper_year
+            failed = sorted(set(re.findall(r"GF_PIN_FAIL (\S+)", w.stdout or "")))
+            imports = env_year.parse_import_check(w.stdout or "")
+            all_ok = not failed and imports.get("all", False)
+            direct = sorted(y["pins"])
+            # a package whose bundle (it and the dependencies it brought) installed; alone: it imports by itself too
+            installed_ok = [d for d in direct if not ({d, *y["brought"].get(d, [])} & set(failed))]
+            alone = ([d for d in installed_ok if imports.get(env_year.dirname(d), False)] if len(direct) > 1
+                     else (installed_ok if all_ok else []))
+            y.update(failed=failed, imports=imports, all_ok=all_ok, alone=alone,
+                     usable=installed_ok if all_ok else alone)
+            y["used"] = bool(y["usable"])
+            if not y["used"]:
+                y["why_not"] = ("the old versions don't import" if not failed
+                                else f"{len(failed)} of {len(y['pins']) + len(y['deps'])} pins failed to install")
+        if era:
+            n_files = int((re.search(r"GF_ERA_FILES (\d+)", w.stdout or "") or [0, 0])[1])
+            era["files"] = n_files
+            r.paper_era = era
         (out / HARNESS_DIR).mkdir(exist_ok=True)
         (out / HARNESS_DIR / "emit.py").write_text(em, encoding="utf-8")
         r.spec = spec_dict(out.name, w.checkpoint, str(root.resolve()), t, r.claims, bound, repeats, r.plan, per_run,
                            r.curves, parallel, traj)
+        library: dict = {}
         if r.paper_year and r.paper_year["used"]:
+            y = r.paper_year
             r.spec["run"]["command"] = env_year.run_prefix() + r.spec["run"]["command"]
-            r.spec["knobs"][env_year.KNOB] = {"layer": "environment", "default": "0", "choices": ["0", "1"]}
+            r.spec["knobs"][env_year.KNOB] = {"layer": "environment", "default": "0", "choices": env_year.knob_choices(
+                [env_year.bundle(d, y["brought"]) for d in y["alone"]], y["all_ok"])}
+            own = y.get("own") or {}
+            library["pins"] = {d: {"old": y["pins"][d], "installed": (own.get("version") if d == own.get("dist") else
+                                                                      None) or y["releases"].get(d, [None])[-1],
+                                   "dir": env_year.dirname(d), "bundle": env_year.bundle(d, y["brought"]),
+                                   "deps": {x: y["deps"][x] for x in y["brought"].get(d, [])},
+                                   "releases": y["releases"].get(d, []), "own": d == own.get("dist"),
+                                   "imports_alone": d in y["alone"],
+                                   "modules": [own["module"]] if d == own.get("dist") else
+                                   [m for m in mods if env_year.DIST.get(m, m) == d],
+                                   "path": own.get("path") if d == own.get("dist") else None}
+                               for d in y["usable"]}
+            library["date"], library["python"] = y["date"], y["python"]
+        if era and era.get("files"):
+            r.spec["run"]["command"] = env_year.era_prefix() + r.spec["run"]["command"]
+            r.spec["knobs"][env_year.ERA_KNOB] = {"layer": "environment", "default": "0", "choices": ["0", "1"]}
+            library["era"] = {"repo": repo, "commit": commit, **era}
+        if library:
+            r.spec["library"] = library
         import yaml
 
         (out / "spec.yaml").write_text("# written by `gapfinder harness`; read HARNESS.md and approve the commands\n"

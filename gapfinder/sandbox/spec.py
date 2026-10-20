@@ -96,6 +96,11 @@ class HarnessSpec(BaseModel):
     # MC Dropout's T and splits, 0.05). None: a full-scale reproduction, and `gapfinder search` uses 0.01.
     # 0.05 for every case made a 5.8% gap (VGAE), 2.3% (FastGCN) and 2.2% (GraphMAE) look like noise
     discrepancy: float | None = None
+    # written by `gapfinder harness` with a paper date (gapfinder/env_year.py): the old packages behind the knob
+    # gf_paper_year_env ({"pins": {dist: {"old", "installed", "dir", "releases", "own", "modules", "path"}}}) and the
+    # paper-era commit behind gf_paper_era_code ({"era": {"repo", "commit", "sha", "date", "commits"}}), for the
+    # library probe (gapfinder/diagnose/library.py)
+    library: dict | None = None
 
     @model_validator(mode="after")
     def _placeholders_known(self):

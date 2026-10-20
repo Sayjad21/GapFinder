@@ -147,7 +147,11 @@ class _Mut(ast.NodeTransformer):
     KIND: num | bool | Subscript | Attribute | Name | Call | BinOp | Compare | UnaryOp. OP:
     - numbers: mul2 div2 mul10 div10 add1 sub1 (an int stays an int);
     - any expression: xmul2 xdiv2 xmul10 xdiv10 xadd1 xsub1 (the node, multiplied or shifted);
-    - calls: red.NEW (the function renamed: mean -> sum), kw.OLD.NEW (a keyword argument renamed);
+    - calls: red.NEW (the function renamed: mean -> sum), kw.OLD.NEW (a keyword argument renamed),
+      kwset.NAME.B64 (the keyword NAME passed as the literal whose source is B64, url-safe base64 without padding:
+      added, or replacing what the call passes);
+    - any node: set.B64 (replaced by the expression whose source is B64); calls: arg.I.B64 (positional argument I
+      replaced by it): a split fraction, or what a scaler is fit on (plan D1.6);
     - comparisons: cmpflip (< and <=, > and >=); booleans: not.
     VALUE "0" leaves the code as it is (the knob's default)."""
     _SCALE = {"mul2": ("*", 2), "div2": ("/", 2), "mul10": ("*", 10), "div10": ("/", 10), "add1": ("+", 1),
@@ -191,6 +195,29 @@ class _Mut(ast.NodeTransformer):
             for kw in node.keywords:
                 if kw.arg == old:
                     kw.arg = new
+            return node
+        if op.startswith("set.") or (op.startswith("arg.") and isinstance(node, ast.Call)):
+            import base64
+            parts = op.split(".", 2)
+            enc = parts[-1]
+            text = base64.urlsafe_b64decode((enc + "=" * (-len(enc) % 4)).encode("ascii")).decode("utf-8")
+            val = ast.copy_location(ast.parse(text, mode="eval").body, node)
+            if op.startswith("set."):
+                return val
+            i = int(parts[1])
+            if i < len(node.args):
+                node.args[i] = val
+                return node
+        if op.startswith("kwset.") and isinstance(node, ast.Call):
+            import base64
+            kname, enc = op.split(".", 2)[1:3]
+            text = base64.urlsafe_b64decode((enc + "=" * (-len(enc) % 4)).encode("ascii")).decode("utf-8")
+            val = ast.copy_location(ast.parse(text, mode="eval").body, node)
+            for kw in node.keywords:
+                if kw.arg == kname:
+                    kw.value = val
+                    return node
+            node.keywords.append(ast.keyword(arg=kname, value=val))
             return node
         if op == "cmpflip" and isinstance(node, ast.Compare) and len(node.ops) == 1:
             swap = {ast.Lt: ast.LtE, ast.LtE: ast.Lt, ast.Gt: ast.GtE, ast.GtE: ast.Gt}
@@ -316,6 +343,27 @@ def is_patch(knob: str) -> bool:
 
 def knob_name(rel: str, line: int, name: str) -> str:
     return f"{PREFIX}{rel}:{line}:{name}"
+
+
+def kwset_op(name: str, literal: str) -> str:
+    """The mutation operator that passes keyword `name` as the literal `literal` (Python source, e.g. "0.8")."""
+    return f"kwset.{name}." + _b64(literal)
+
+
+def _b64(text: str) -> str:
+    import base64
+
+    return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def set_op(literal: str) -> str:
+    """The node replaced by the expression `literal` (Python source)."""
+    return "set." + _b64(literal)
+
+
+def arg_op(i: int, expr: str) -> str:
+    """A call's positional argument i replaced by the expression `expr`."""
+    return f"arg.{i}." + _b64(expr)
 
 
 def parse(knob: str) -> tuple[str, int, str]:

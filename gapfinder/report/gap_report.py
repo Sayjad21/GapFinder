@@ -85,7 +85,7 @@ class GapReport:
                 screen=c.get("screen") or [], hypotheses_tested=c.get("hypotheses_tested", 0),
                 replay=c.get("replay") or [], notes=c.get("notes") or [], value_sets=c.get("value_sets") or {},
                 diagnosis=c.get("diagnosis"), equivalent=c.get("equivalent") or [], relations=c.get("relations") or {},
-                differential=c.get("differential"), reporting=c.get("reporting"))
+                differential=c.get("differential"), reporting=c.get("reporting"), library=c.get("library"))
         claims = d.get("claims") or []
         return cls(paper=d.get("paper", "?"), artifact=d.get("artifact", "?"), results=[claim(c) for c in claims],
                    noise=d.get("noise") or {}, naive=d.get("naive") or {}, runs=d.get("runs", 0),
@@ -265,6 +265,23 @@ class GapReport:
         if not r.changes or label in ("Reproduced", "Unexplained", "Inconclusive"):
             return {"kind": None, "text": None, "confirmed": None}
         confirmed = label in ("Explained", "Paper-artifact inconsistency")
+        lib = r.library or {}
+        if set(r.changes) & {"gf_paper_year_env", "gf_paper_era_code"} and len(r.changes) == 1:
+            if "gf_paper_year_env" in r.changes:
+                where = "; ".join(f"`{cp['package']}` {cp['after']} changed the numbers ({cp['before']} gives the "
+                                  "paper's)" + "".join(f", at {x['site']}: {x['detail']}" for x in cp.get("leads") or []
+                                                       if x.get("verified"))
+                                  for cp in lib.get("change_points") or [])
+                text = ("Library drift: the packages as of the paper's date give the paper's numbers"
+                        + (f" ({', '.join(lib.get('culprits') or [])})" if lib.get("culprits") else "")
+                        + (f"; {where}" if where else ""))
+            else:
+                era = lib.get("era") or {}
+                cps = era.get("change_points") or []
+                text = ("Paper-era code: the repository's last commit before the paper gives the paper's numbers"
+                        + "".join(f"; commit `{cp['after'][:10]}` ({cp.get('message', '')}) changed them" for cp in cps))
+            return {"kind": "library_drift" if "gf_paper_year_env" in r.changes else "paper_era_code",
+                    "confirmed": confirmed, "text": text + ("" if confirmed else " (fits but not confirmed)")}
         if len(r.changes) > 1:
             return {"kind": "interacting_factors", "confirmed": confirmed,
                     "text": "Interacting factors: these changes close the gap only together, and "
@@ -383,6 +400,7 @@ class GapReport:
             out += [f"- `{', '.join(f'{k}={v}' for k, v in sorted(e['config'].items()))}`"
                     + (" (reported)" if i == 0 else "") for i, e in enumerate(r.equivalent)]
         out += _differential_lines(r.differential)
+        out += _library_lines(r.library)
         if r.diagnosis:
             out += ["", "### History matching (every measured configuration, all claims together)",
                     f"- {r.diagnosis['text']}"]
@@ -629,6 +647,34 @@ def _unknown_lines(u: dict) -> list[str]:
                 f"{a['mean_abs_gap'] * 100:.1f}% ({a['runs']} runs)" for a in u["alternatives"]]
     else:
         out.append("- Near alternatives: none recorded")
+    return out
+
+
+def _library_lines(lib: dict | None) -> list[str]:
+    """The library probe (gapfinder/diagnose/library.py): which package, which release, which call site."""
+    if not lib or not (lib.get("effect") or (lib.get("era") or {}).get("effect")):
+        return []
+    out = ["", "### Library drift and the paper-era code"]
+    if lib.get("effect"):
+        out.append("- Packages as of the paper's date change the numbers; the culprit: "
+                   + (", ".join(f"`{d}=={lib['packages'][d]}`" for d in lib.get("culprits") or []) or "not narrowed down"))
+    for cp in lib.get("change_points") or []:
+        out.append(f"- `{cp['package']}` {cp['after']} changed them ({cp['before']} gives the older numbers)")
+        for x in cp.get("leads") or []:
+            v = {True: " **verified**", False: " (tested: not it)", None: ""}[x.get("verified")]
+            out.append(f"  - {x['site']}: {x['detail']}{v}")
+            for ln in (x.get("diff") or [])[:12]:
+                out.append(f"    `{ln}`")
+        if cp.get("note"):
+            out.append(f"  - {cp['note']}")
+    era = lib.get("era") or {}
+    if era.get("effect"):
+        out.append(f"- The repository's last commit before the paper, `{era['sha'][:10]}` ({era['date']}), gives other "
+                   "numbers than the given commit")
+        for cp in era.get("change_points") or []:
+            files = [f["file"] for f in ((cp.get("diff") or {}).get("files") or []) if f.get("code")][:6]
+            out.append(f"  - commit `{cp['after'][:10]}` ({cp.get('message', '')}) changed them"
+                       + (f": {', '.join(files)}" if files else ""))
     return out
 
 

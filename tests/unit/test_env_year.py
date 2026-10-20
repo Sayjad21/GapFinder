@@ -34,7 +34,7 @@ def test_pins_only_where_the_installed_version_is_newer(tmp_path):
     assert pins == {"scikit-learn": "0.21.0"}
     assert "already" in why["numpy"] and "compiled" in why["torch-scatter"] and "not installed" in why["absent"]
     cmd = install_command(pins)
-    assert '"scikit-learn==0.21.0"' in cmd and "--no-deps --target /opt/gf_paper_year" in cmd
+    assert '"scikit-learn==0.21.0"' in cmd and '--no-deps --target "${GF_PY_ROOT:-/opt/gf_py}/scikit_learn"' in cmd
 
 
 def test_parse_freeze():
