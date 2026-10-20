@@ -64,6 +64,12 @@ def _commands_in(path: Path, rel: str) -> list[Command]:
                     break
             if cd:
                 cmd = f"cd {cd} && {cmd}"
+        # help syntax: optional groups are not part of the command (`python main.py [-h] [--model MODEL]`: BOND)
+        cmd = re.sub(r"\s*\[\s*-[^\]]*\]", "", cmd).strip()
+        # a README in a subfolder: its commands run from there (BOND's benchmark/README.md)
+        sub = Path(rel).parent.as_posix()
+        if not rel.endswith(".sh") and sub not in ("", ".") and not cmd.startswith("cd "):
+            cmd = f"cd {sub} && {cmd}"
         out.append(Command(cmd, f"{rel}:{line}"))
     return out
 
@@ -73,8 +79,9 @@ def pick_commands(root: str | Path, claims: list[dict], limit: int = 5) -> list[
     root = Path(root)
     words = set().union(*(claim_words(c) for c in claims)) if claims else set()
     cands: list[Command] = []
-    for p in sorted(root.glob("README*")) + sorted(root.rglob("*.sh")):
-        if any(part.startswith(".") for part in p.relative_to(root).parts):
+    readmes = sorted(root.glob("README*")) + sorted(p for p in root.glob("*/README*")) + sorted(root.glob("*/*/README*"))
+    for p in readmes + sorted(root.rglob("*.sh")):
+        if any(part.startswith(".") or part in ("docs", "doc", "test", "tests") for part in p.relative_to(root).parts[:-1]):
             continue
         cands += _commands_in(p, p.relative_to(root).as_posix())
     for c in cands:
@@ -109,7 +116,9 @@ def download_steps(root: str | Path) -> list[str]:
 
 _METRIC_SYNONYMS = {
     "acc": {"acc", "accuracy", "top1", "top-1"}, "auc": {"auc", "roc", "rocauc", "roc_auc"},
-    "f1": {"f1", "f-score", "fscore", "f_score", "f1score"}, "precision": {"precision", "prec"},
+    "f1": {"f1", "f-score", "fscore", "f_score", "f1score"},
+    "ap": {"ap", "averageprecision", "avgprecision", "average_precision"},  # before "precision" (BOND's AP)
+    "precision": {"precision", "prec"}, "nmi": {"nmi"}, "ari": {"ari"},
     "recall": {"recall", "rec"}, "mse": {"mse"}, "mae": {"mae"}, "rmse": {"rmse"}, "ndcg": {"ndcg"}, "hr": {"hr", "hit"},
     "map": {"map"}, "mrr": {"mrr"}, "loss": {"loss"}, "bleu": {"bleu"}, "ppl": {"ppl", "perplexity"},
 }
@@ -117,7 +126,11 @@ _PAIR = re.compile(r"([A-Za-z][\w@./ -]{0,40}?)\s*[:=]\s*([-+]?\d+(?:\.\d+)?(?:[
 
 
 def _family(label: str) -> str | None:
-    toks = re.findall(r"[a-z0-9@]+", label.lower().replace("-", ""))
+    low = label.lower().replace("-", " ")
+    if re.search(r"\bmean\s+average\s+precision\b", low):
+        return "map"
+    text = re.sub(r"\b(average|avg)\s+precision\b", "averageprecision", low)
+    toks = re.findall(r"[a-z0-9@]+", text)
     for fam, syn in _METRIC_SYNONYMS.items():
         if any(t in syn or t.split("@")[0] in syn for t in toks):
             return fam
@@ -133,20 +146,45 @@ def _qual_of(word: str) -> str:
     return "test" if w.startswith("test") else "train" if w.startswith("train") else "best" if w == "best" else "val"
 
 
+# a known metric name, a space and a number, with no separator ("199Z :acc 0.9045 , nmi 0.6831": SDCN); only for
+# metric names, since "epoch 3" or "batch 64" have the same shape
+_BARE = re.compile(r"(?<![\w.])([A-Za-z][\w@-]{0,15})\s+([-+]?\d*\.\d+(?:[eE][-+]?\d+)?)(%?)(?![\w.])")
+# a short tag that opens a line and ends in a colon ("199Z :", "Q:"), kept as a qualifier of the line's numbers
+_LINE_TAG = re.compile(r"^\s*\d*([A-Za-z][\w-]{0,7})?\s*:(?=\s*[A-Za-z])")
+
+
 def labelled_numbers(log: str, tail_lines: int = 40) -> dict[str, float]:
     """(label -> last printed value) over the last lines of a run's output. A label takes the nearest test, val or
     train word before it on its line ("test auc: 0.65  acc: 0.62": the acc is test acc), and a line that says
-    "best" marks its numbers as best ("End. Best Iteration 3: HR = 0.68": the best epoch, not the last)."""
+    "best" marks its numbers as best ("End. Best Iteration 3: HR = 0.68": the best epoch, not the last). A metric
+    printed without a separator ("acc 0.9045") counts too, and a short tag opening the line ("199Z :acc 0.9045")
+    qualifies its numbers ("Z acc")."""
     found: dict[str, float] = {}
     for line in log.splitlines()[-tail_lines:]:
         best = bool(re.search(r"(?i)\bbest\b", line))
+        t = _LINE_TAG.match(line)
+        tag = t.group(1) if t and t.group(1) and not _QUAL.fullmatch(t.group(1)) else None
+        if tag:
+            line = line[t.end():]
+        spans = []
+        for m in _BARE.finditer(line):
+            if _family(m.group(1)) is None:
+                continue
+            spans.append((m.start(), m.end()))
+            quals = [_qual_of(q.group(1)) for q in _QUAL.finditer(line[: m.end(1)]) if q.group(1).lower() != "best"]
+            key = " ".join((["best"] if best else []) + ([quals[-1]] if quals else []) + ([tag] if tag else [])
+                           + [m.group(1)])
+            found[key] = float(m.group(2)) / (100 if m.group(3) else 1)
         for m in _PAIR.finditer(line):
+            if any(a <= m.start(2) < b for a, b in spans):
+                continue
             raw = _PREFIX.sub("", " ".join(m.group(1).split()).strip(" -"))
             quals = [_qual_of(q.group(1)) for q in _QUAL.finditer(line[: m.end(1)]) if q.group(1).lower() != "best"]
             base = " ".join(_QUAL.sub("", raw).split()).strip(" -_:")
             if not base:
                 continue
-            key = " ".join(([("best")] if best else []) + ([quals[-1]] if quals else []) + [base])
+            key = " ".join((["best"] if best else []) + ([quals[-1]] if quals else []) + ([tag] if tag else [])
+                           + [base])
             found[key] = float(m.group(2)) / (100 if m.group(3) else 1)
     return found
 

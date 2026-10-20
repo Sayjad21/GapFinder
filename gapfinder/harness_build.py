@@ -279,6 +279,14 @@ def dataset_values(root: Path, flag: ScriptFlag | None) -> list[str]:
     return sorted(set(out))
 
 
+def _alternatives(value: str) -> list[str] | None:
+    """`[a|b|c]`, `{a,b,c}`, `a|b|c`, `(a/b)`: the values a README offers for one flag."""
+    m = re.fullmatch(r"\s*[\[{(<]?\s*([\w.-]+(?:\s*[|,/]\s*[\w.-]+)+)\s*[\]})>]?\s*", value)
+    if not m:
+        return None
+    return [v.strip() for v in re.split(r"[|,/]", m.group(1)) if v.strip()]
+
+
 def _q(v: str) -> str:
     return v if re.fullmatch(r"[\w@%+=:,./-]+", v) else shlex.quote(v)
 
@@ -303,6 +311,23 @@ def template_command(root: str | Path, cmd: str, claims: list[dict]) -> Template
         f = flags.get(name)
         opt = f.option if f else "--" + name
         value = passed.get(name, None) if name in passed else (f.default if f else None)
+        if name in passed and value is not None and value.strip("<>[]{}").lower() == name.lower():
+            value = f.default if f else None  # a placeholder (`--model MODEL`, `--dataset <dataset>`)
+            passed.pop(name)
+        alts = _alternatives(value) if name in passed and value is not None else None
+        if alts:  # `--name [usps|hhar|reut|acm|dblp|cite]` (SDCN): the claim's, which defines the claim
+            hits = [v for v in alts if _matches(v, words)]
+            if len(hits) == 1:
+                t.note += f"the README lists {alts} for {opt}; the claim's is {hits[0]!r}; "
+                parts.append(f"{opt} {_q(hits[0])}")
+                naive.append(parts[-1])
+                t.fixed[name] = "one of the README's alternatives: the claim's"
+                continue
+            t.note += f"the README lists {alts} for {opt} and none or several match the claim; the code default is used; "
+            passed.pop(name)
+            value = f.default if f else None
+            if value is None:
+                continue
         if _DATASET.match(name):
             vals = dataset_values(root, f)
             if value is not None and not _matches(value, words):
@@ -317,6 +342,13 @@ def template_command(root: str | Path, cmd: str, claims: list[dict]) -> Template
                 parts.append(f"{opt} {_q(value)}")
                 naive.append(f"{opt} {_q(value)}")
             t.fixed[name] = "dataset: defines the claim"
+            continue
+        if (value is not None and not re.fullmatch(r"(?i)[-+]?\d*\.?\d+(e[-+]?\d+)?|true|false|none", str(value))
+                and _matches(str(value), words)):
+            # `--model dominant` for a DOMINANT claim, `--method PGD` for a CE-PGD one: what the claim is about
+            t.fixed[name] = f"its value {value!r} is one of the claim's conditions: defines the claim"
+            parts.append(f"{opt} {_q(str(value))}")
+            naive.append(parts[-1])
             continue
         if name in passed and f is None:  # passed but not declared in the script (e.g. a config file's keys)
             t.fixed[name] = "passed by the command but not declared in the script: kept as written"
@@ -423,6 +455,21 @@ BIND = %(bind)s
 PAIR = re.compile(%(pair)r)
 QUAL = re.compile(%(qual)r)
 PREFIX = re.compile(%(prefix)r)
+BARE = re.compile(%(bare)r)
+LINE_TAG = re.compile(%(line_tag)r)
+SYNONYMS = %(synonyms)s
+
+
+def family(label):
+    low = label.lower().replace("-", " ")
+    if re.search(r"\bmean\s+average\s+precision\b", low):
+        return "map"
+    text = re.sub(r"\b(average|avg)\s+precision\b", "averageprecision", low)
+    toks = re.findall(r"[a-z0-9@]+", text)
+    for fam, syn in SYNONYMS:
+        if any(t in syn or t.split("@")[0] in syn for t in toks):
+            return fam
+    return None
 
 
 def qual_of(w):
@@ -434,13 +481,29 @@ def labelled(log, tail_lines=40):
     found = {}
     for line in log.splitlines()[-tail_lines:]:
         best = bool(re.search(r"(?i)\bbest\b", line))
+        t = LINE_TAG.match(line)
+        tag = t.group(1) if t and t.group(1) and not QUAL.match(t.group(1) + "$") else None
+        if tag:
+            line = line[t.end():]
+        spans = []
+        for m in BARE.finditer(line):
+            if family(m.group(1)) is None:
+                continue
+            spans.append((m.start(), m.end()))
+            quals = [qual_of(q.group(1)) for q in QUAL.finditer(line[: m.end(1)]) if q.group(1).lower() != "best"]
+            key = " ".join((["best"] if best else []) + ([quals[-1]] if quals else []) + ([tag] if tag else [])
+                           + [m.group(1)])
+            found[key] = float(m.group(2)) / (100 if m.group(3) else 1)
         for m in PAIR.finditer(line):
+            if any(a <= m.start(2) < b for a, b in spans):
+                continue
             raw = PREFIX.sub("", " ".join(m.group(1).split()).strip(" -"))
             quals = [qual_of(q.group(1)) for q in QUAL.finditer(line[: m.end(1)]) if q.group(1).lower() != "best"]
             base = " ".join(QUAL.sub("", raw).split()).strip(" -_:")
             if not base:
                 continue
-            key = " ".join((["best"] if best else []) + ([quals[-1]] if quals else []) + [base])
+            key = " ".join((["best"] if best else []) + ([quals[-1]] if quals else []) + ([tag] if tag else [])
+                           + [base])
             found[key] = float(m.group(2)) / (100 if m.group(3) else 1)
     return found
 
@@ -488,7 +551,11 @@ def emit_script(bindings: dict[str, tuple]) -> str:
     learning curve, counted from 1])."""
     bind = "{" + ", ".join(f"{k!r}: ({v[0]!r}, {float(v[1])!r}" + (f", {int(v[2])!r})" if len(v) > 2 else ")")
                            for k, v in sorted(bindings.items())) + "}"
-    return EMIT_TEMPLATE % {"bind": bind, "pair": _PAIR.pattern, "qual": _QUAL.pattern, "prefix": _PREFIX.pattern}
+    from gapfinder.harness_auto import _BARE, _LINE_TAG, _METRIC_SYNONYMS
+
+    syn = "[" + ", ".join(f"({k!r}, {sorted(v)!r})" for k, v in _METRIC_SYNONYMS.items()) + "]"  # ordered
+    return EMIT_TEMPLATE % {"bind": bind, "pair": _PAIR.pattern, "qual": _QUAL.pattern, "prefix": _PREFIX.pattern,
+                            "bare": _BARE.pattern, "line_tag": _LINE_TAG.pattern, "synonyms": syn}
 
 
 KEEP_DATA = r'''# written by `gapfinder harness` (plan item 7). `before`: list the work directory. `after` (once the data steps
@@ -588,11 +655,11 @@ SEED_PREFIX = ('GF_SEED=$("${PYTHON:-python}" -c "import os, zlib; print(zlib.cr
                '.encode(\'utf-8\')) % 100000)"); ')
 
 
-def run_command(t: Templated, repeats: int, shards: bool) -> str:
+def run_command(t: Templated, repeats: int, shards: bool, parallel: int = PARALLEL) -> str:
     """One cell: `repeats` runs of the templated command, PARALLEL at a time with one thread each (or one run per
     shard), each with its own seed, then the emitter."""
     threads = "export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 TF_NUM_INTRAOP_THREADS=1 " \
-              "TF_NUM_INTEROP_THREADS=1; " if repeats > 1 and not shards else ""
+              "TF_NUM_INTEROP_THREADS=1; " if repeats > 1 and not shards and parallel > 1 else ""
     one = t.command.replace("$GF_SEED", "$((GF_SEED + r))")
     if shards:
         body = f"r={{shard}}; ({one}) > out/run{{shard}}.log 2>&1"
@@ -600,12 +667,13 @@ def run_command(t: Templated, repeats: int, shards: bool) -> str:
         body = f"r=1; ({one}) > out/run1.log 2>&1"
     else:
         body = (f"n=0; for r in $(seq 1 {repeats}); do ({one}) > out/run$r.log 2>&1 & n=$((n+1)); "
-                f"if [ $((n % {PARALLEL})) -eq 0 ]; then wait; fi; done; wait")
+                f"if [ $((n % {parallel})) -eq 0 ]; then wait; fi; done; wait")
     return f'mkdir -p out; rm -f out/run*.log; {threads}{SEED_PREFIX}{body}; "${{PYTHON:-python}}" {HARNESS_DIR}/emit.py'
 
 
 def spec_dict(name: str, base: str, source: str, t: Templated, claims: list[dict], bound: dict[str, Binding],
-              repeats: int, plan: ShrinkPlan, per_run_s: float | None, curves: list[dict] = ()) -> dict:
+              repeats: int, plan: ShrinkPlan, per_run_s: float | None, curves: list[dict] = (),
+              parallel: int = PARALLEL) -> dict:
     knobs = {k: {kk: vv for kk, vv in v.items() if kk in ("layer", "default", "choices")} for k, v in t.knobs.items()}
     shards = plan.action == "shards" or (plan.action == "shrink" and repeats > 1)
     if plan.action == "shrink" and t.epochs_knob:
@@ -614,7 +682,7 @@ def spec_dict(name: str, base: str, source: str, t: Templated, claims: list[dict
     if t.epochs_knob and per_run_s:
         fit = int(OPERATION_S * 0.8 / max(per_run_s / max(int(t.knobs[t.epochs_knob]["default"]), 1), 1e-9))
         knobs[t.epochs_knob]["max"] = max(int(knobs[t.epochs_knob]["default"]), fit)
-    run = {"command": run_command(t, repeats, shards), "output": "stdout", "format": "kv",
+    run = {"command": run_command(t, repeats, shards, parallel), "output": "stdout", "format": "kv",
            "timeout": int(OPERATION_S - 300)}
     if shards:
         run["shards"] = [str(i) for i in range(1, repeats + 1)]
@@ -680,6 +748,7 @@ class HarnessResult:
     curves: list[dict] = field(default_factory=list)  # learning-curve points, from the per-epoch log
     unmapped: list[dict] = field(default_factory=list)  # one-setting variants whose setting maps to no knob
     paper_year: dict | None = None  # the paper-year environment knob: pins, skipped, used
+    notes: list[str] = field(default_factory=list)
 
 
 def harness_markdown(r: HarnessResult) -> str:
@@ -745,7 +814,8 @@ def harness_markdown(r: HarnessResult) -> str:
               + (" (stopped at the smoke timeout)" if s.get("timed_out") else ""), ""]
         if s.get("per_run_values"):
             L += [f"- `{k}`: {', '.join(f'{x:.4g}' for x in v)}" for k, v in s["per_run_values"].items()]
-            L += ["", "Seeds vary: " + ("yes" if s.get("seeds_vary") else "**no: identical runs; the noise band "
+            L += ["", "Seeds vary: " + ("unknown (one copy)" if s.get("seeds_vary") is None else "yes"
+                                        if s.get("seeds_vary") else "**no: identical runs; the noise band "
                                         "will be zero**"), ""]
     if r.bindings:
         L += ["## Metric binding", "", "Test before unqualified before validation before train; final before best; "
@@ -766,6 +836,8 @@ def harness_markdown(r: HarnessResult) -> str:
     if r.plan:
         L += ["## Fit in one Sandboxes operation (3600 s)", "", f"{r.plan.action}: {r.plan.note}"
               + (f"; discrepancy allowance {r.plan.discrepancy}" if r.plan.discrepancy is not None else ""), ""]
+    if r.notes:
+        L += ["## Notes", ""] + [f"- {n}" for n in r.notes] + [""]
     L += [f"Model spend: ${r.cost_usd:.4f}", ""]
     return "\n".join(L)
 
@@ -794,9 +866,13 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
                         target: str, out: str | Path, repeats: int = 1, smoke_timeout: float = 2400,
                         max_steps: int = 12, image: str | None = None, force: bool = False,
                         fetch_cmd: str | None = None, env_checkpoint: str | None = None,
-                        paper_date=None) -> HarnessResult:
+                        paper_date=None, command: str | None = None,
+                        bind: dict[str, str] | None = None) -> HarnessResult:
     """Steps 0-8 of the module docstring. `env_checkpoint`: an environment already built (skips env-build).
-    `paper_date` (a date): also install the imported packages as they were then, behind one knob (item 19)."""
+    `paper_date` (a date): also install the imported packages as they were then, behind one knob (item 19).
+    The two choices a person approving the harness makes, given up front (recorded in HARNESS.md): `command`, the
+    experiment command when the picker can't choose (two scripts, a chain); `bind`, claim id -> printed label, when
+    the binder refuses a tie (only a label the run printed is accepted)."""
     from gapfinder.env_build import build_env, fetch, short_run_goal
     from gapfinder.sandbox import runtime_shim
 
@@ -817,11 +893,16 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
         r.claims = select_claims(ledger, target)
     except (KeyError, ValueError) as e:
         return finish("claims", str(e))
-    cmds = [c for c in pick_commands(root, r.claims, limit=12) if re.match(r"^(cd [\w./-]+ *(&&|;) *)?python", c.cmd)]
+    cmds = [Command(command, "given by the runner")] if command else \
+        [c for c in pick_commands(root, r.claims, limit=12) if re.match(r"^(cd [\w./-]+ *(&&|;) *)?python", c.cmd)]
     # a data-preparation script is a data step, not the experiment (RippleNet's preprocess.py comes first)
     experiments = [c for c in cmds if not _PREP.search(next((a for a in _split_command(c.cmd)[1] if a.endswith(".py")), ""))]
     cmds = (experiments or cmds)[:5]
     r.commands = cmds
+    if command:
+        r.notes.append(f"command given by the runner: `{command}`")
+    for cid, label in (bind or {}).items():
+        r.notes.append(f"{cid} bound to the printed label `{label}` by the runner")
     if not cmds:
         return finish("command", "no python command in the README or shell scripts")
     if len(cmds) > 1 and cmds[0].score == cmds[1].score and cmds[0].score > 0 and \
@@ -858,27 +939,58 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
     a = await backend.run(env_checkpoint, step_a, env=senv, timeout=OPERATION_S - 100, disposable=False, files=files)
     if a.exit_code != 0 or not a.checkpoint:
         return finish("data", f"the data steps failed (exit {a.exit_code}): {((a.stdout or '') + (a.stderr or ''))[-800:]}")
-    copies = max(1, min(repeats, PARALLEL))
-    threads = "export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1; " if copies > 1 else ""
     one = sprefix + t.naive.replace("$GF_SEED", "$((GF_SEED + r))")
-    # `copies` runs at once (the cell's own pattern), each stopped at the smoke timeout (`timeout` exits 124)
-    smoke = (f"mkdir -p out; {threads}{SEED_PREFIX}s0=$(date +%s); pids=''; for r in $(seq 1 {copies}); do "
-             f"(export r GF_SEED; timeout {int(smoke_timeout)} bash -c {shlex.quote(one)}) > out/run$r.log 2>&1 & "
-             f"pids=\"$pids $!\"; done; rc=0; for p in $pids; do wait $p || rc=$?; done; echo GF_SMOKE_RC=$rc; "
-             f"echo GF_SMOKE_S=$(( $(date +%s) - s0 )); for r in $(seq 1 {copies}); do echo GF_LOG_$r; "
-             f"tail -c 20000 out/run$r.log; echo; done; \"${{PYTHON:-python}}\" {HARNESS_DIR}/keep_data.py after")
-    b = await backend.run(a.checkpoint, smoke, env={**senv, "RUN_TAG": "gf-harness-smoke"}, timeout=OPERATION_S - 60,
-                          disposable=False, files=None)
-    so = b.stdout or ""
+
+    async def smoke_run(copies: int):
+        threads = "export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1; " if copies > 1 else ""
+        # `copies` runs at once (the cell's own pattern), each stopped at the smoke timeout (`timeout` exits 124)
+        smoke = (f"mkdir -p out; {threads}{SEED_PREFIX}s0=$(date +%s); pids=''; for r in $(seq 1 {copies}); do "
+                 f"(export r GF_SEED; timeout {int(smoke_timeout)} bash -c {shlex.quote(one)}) > out/run$r.log 2>&1 & "
+                 f"pids=\"$pids $!\"; done; rc=0; for p in $pids; do wait $p || rc=$?; done; echo GF_SMOKE_RC=$rc; "
+                 f"echo GF_SMOKE_S=$(( $(date +%s) - s0 )); for r in $(seq 1 {copies}); do echo GF_LOG_$r; "
+                 f"tail -c 20000 out/run$r.log; echo; done; \"${{PYTHON:-python}}\" {HARNESS_DIR}/keep_data.py after")
+        b = await backend.run(a.checkpoint, smoke, env={**senv, "RUN_TAG": "gf-harness-smoke"},
+                              timeout=OPERATION_S - 60, disposable=False, files=None)
+        so = b.stdout or ""
+        rc = int((re.search(r"GF_SMOKE_RC=(\d+)", so) or [0, 1])[1])
+        secs = float((re.search(r"GF_SMOKE_S=(\d+)", so) or [0, 0])[1])
+        logs = re.split(r"(?m)^GF_LOG_\d+\s*$", so.split("GF_DATA_MANIFEST")[0])[1:]
+        return b, so, rc, secs, logs
+
+    parallel = copies = max(1, min(repeats, PARALLEL))
+    b, so, rc, secs, logs = await smoke_run(copies)
+    if copies > 1 and (not b.checkpoint or not logs or rc not in (0, 124)):
+        # copies in parallel failed (b5a: 4 TensorFlow attacks on dense 2708 x 2708 matrices, exit 120, while one
+        # copy runs): one at a time, and the cell runs its repeats one at a time too
+        failed_rc, parallel = rc, 1
+        b, so, rc, secs, logs = await smoke_run(1)
+        copies = 1
+        r.notes.append(f"{min(repeats, PARALLEL)} copies in parallel failed (exit {failed_rc}); one copy passed, so "
+                       "the cell runs its repeats one at a time")
     r.manifest = _manifest(so)
-    rc = int((re.search(r"GF_SMOKE_RC=(\d+)", so) or [0, 1])[1])
-    secs = float((re.search(r"GF_SMOKE_S=(\d+)", so) or [0, 0])[1])
-    logs = re.split(r"(?m)^GF_LOG_\d+\s*$", so.split("GF_DATA_MANIFEST")[0])[1:]
     r.smoke = {"copies": copies, "rc": rc, "seconds": secs, "timed_out": rc == 124}
     if not b.checkpoint or not logs or (rc not in (0, 124)):
         return finish("smoke", f"the smoke run failed (exit {rc}): {(logs[0] if logs else so + (b.stderr or ''))[-1200:]}")
     r.bindings = bind_metrics(logs[0], [{"claim_id": c["claim_id"], "metric": c["metric"],
                                          "paper_value": c["paper_value"]} for c in r.claims])
+    if bind:
+        from gapfinder.harness_auto import labelled_numbers as _ln
+
+        printed = _ln(logs[0])
+        for cid, label in bind.items():
+            if label not in printed:
+                return finish("metrics", f"--bind {cid}={label!r}: the run printed no such label; it printed "
+                                         + ", ".join(repr(k) for k in printed))
+            c = next((x for x in r.claims if x["claim_id"] == cid), None)
+            if c is None:
+                return finish("metrics", f"--bind {cid}: no such claim")
+            v = printed[label]
+            ratio = abs(c["paper_value"]) / abs(v) if v else 1.0
+            scale = 100.0 if 30 < ratio < 300 else 0.01 if 0.003 < ratio < 0.03 else 1.0
+            old = next((x for x in r.bindings if x.claim_id == cid), None)
+            r.bindings = [x for x in r.bindings if x.claim_id != cid] + [Binding(
+                cid, label, v, scale, alternatives=old.alternatives if old else [],
+                refused=f"(given by the runner{'; the binder had refused: ' + old.refused if old and old.refused else ''})")]
     bound = {bb.claim_id: bb for bb in r.bindings if bb.label}
     if r.claims[0]["claim_id"] not in bound:
         return finish("metrics", "the target's number can't be bound: "
@@ -913,7 +1025,7 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
         return finish("smoke", f"the run didn't finish in {int(smoke_timeout)} s and its length can't be estimated "
                                "(no epoch counter in its output); set the scale by hand")
     # in one VM the cell runs PARALLEL at a time (the smoke run measured exactly that); as shards, each repeat is a job
-    cell = per_run * math.ceil(repeats / PARALLEL)
+    cell = per_run * math.ceil(repeats / parallel)
     r.plan = shrink_plan(cell) if cell <= OPERATION_S * 0.8 or repeats == 1 else \
         shrink_plan(per_run * repeats, independent_jobs=repeats)
     if r.plan.action == "shrink" and not t.epochs_knob:
@@ -948,7 +1060,7 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
     (out / HARNESS_DIR).mkdir(exist_ok=True)
     (out / HARNESS_DIR / "emit.py").write_text(em, encoding="utf-8")
     r.spec = spec_dict(out.name, w.checkpoint, str(root.resolve()), t, r.claims, bound, repeats, r.plan, per_run,
-                       r.curves)
+                       r.curves, parallel)
     if r.paper_year and r.paper_year["used"]:
         r.spec["run"]["command"] = env_year.run_prefix() + r.spec["run"]["command"]
         r.spec["knobs"][env_year.KNOB] = {"layer": "environment", "default": "0", "choices": ["0", "1"]}

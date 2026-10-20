@@ -42,3 +42,15 @@ only `case.md` and `answer_key.sha256` here. The runner never opens a key before
   confidently wrong).
 - The harness: how far `gapfinder harness` got unaided (step reached), and what a person had to change.
 - Cost per case.
+
+## Addendum (2026-10-20, after b5a's reveal): b5b and b5c under tag `batch-5b`
+
+b5b and b5c stopped at the harness under `batch-5` (RESULT.md) and their keys were never opened. The harness
+(not the engine) was then extended for the formats they exposed, each a general class: README help syntax and
+alternative lists, READMEs in subfolders, metrics printed without a separator and line tags, the metric names
+AP/NMI/ARI, a flag whose string value is one of the claim's conditions fixed as defining the claim, one copy at a
+time when parallel copies fail, and two recorded approval levers (`--command`, `--bind`). b5b and b5c run under
+tag `batch-5b` with the same steps as above. The levers are used only with what `case.md` states (its entry
+point, its mapping of printed lines to columns), and every use is recorded. That the harness now builds these
+two cases is not evidence for the harness changes (they were revealed by them); the searches' results are
+evidence for the engine, which is unchanged since `batch-5`.

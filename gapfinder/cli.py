@@ -396,7 +396,8 @@ async def cmd_harness(args) -> int:
                             ledger=ledger, target=args.target, out=args.out, repeats=args.repeats,
                             smoke_timeout=args.smoke_timeout, max_steps=args.max_steps, image=args.image,
                             force=args.force, env_checkpoint=args.env_checkpoint,
-                            paper_date=paper_date(args.arxiv, args.paper_date) if (args.arxiv or args.paper_date) else None)
+                            paper_date=paper_date(args.arxiv, args.paper_date) if (args.arxiv or args.paper_date) else None,
+                            command=args.command, bind=dict(b.split("=", 1) for b in args.bind or []))
     print(f"{'ready for approval' if r.ok else 'stopped at ' + r.stage}" + (f": {r.reason[:300]}" if r.reason else ""))
     print(f"wrote {Path(args.out) / 'HARNESS.md'}" + (f", {Path(args.out) / 'spec.yaml'}, "
                                                        f"{Path(args.out) / 'targets.json'}" if r.ok else ""))
@@ -538,6 +539,9 @@ def main(argv: list[str] | None = None) -> int:
     ph.add_argument("--force", action="store_true", help="go on despite static blockers")
     ph.add_argument("--arxiv", help="the paper's arXiv id: its month dates the paper-year environment knob")
     ph.add_argument("--paper-date", help="YYYY-MM-DD: the paper-year environment knob without an arXiv id")
+    ph.add_argument("--command", help="the experiment command, when the picker can't choose (recorded in HARNESS.md)")
+    ph.add_argument("--bind", action="append", metavar="CLAIM=LABEL",
+                    help="which printed label is a claim's number, when the binder refuses a tie (recorded)")
     ph.add_argument("--out", required=True, help="output directory: spec.yaml, targets.json, HARNESS.md")
 
     args = p.parse_args(argv)

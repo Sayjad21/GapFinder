@@ -84,3 +84,21 @@ def test_progress_estimate_extrapolates_from_the_epoch_counter():
     log = "\n".join(f"epoch {i} loss: 1" for i in range(5))  # 0-based: 5 of 20 epochs done
     assert progress_estimate(log, 100.0, 20) == 400.0
     assert progress_estimate("no counter", 100.0, 20) is None
+
+
+def test_emitter_matches_the_binder_on_bare_metrics_and_line_tags(tmp_path):
+    log = ("198Z :acc 0.9000 , nmi 0.6800 , ari 0.7300 , f1 0.9000\n"
+           "199Q :acc 0.8695 , nmi 0.5890 , ari 0.6525 , f1 0.8684\n"
+           "199Z :acc 0.9045 , nmi 0.6831 , ari 0.7391 , f1 0.9042\n"
+           "inj_cora DOMINANT AUC: 0.8270+-0.0560 (0.8430)\tAP: 0.2000+-0.0300 (0.2080)\tRecall: 0.2380+-0.0400 (0.2610)\n"
+           "batch 64 lr 0.001\n")
+    found = labelled_numbers(log)
+    assert found["Z acc"] == 0.9045 and found["Q acc"] == 0.8695 and found["AP"] == 0.2
+    assert "batch" not in found and "lr" not in found  # not metric names
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "run1.log").write_text(log, encoding="utf-8")
+    labels = ["Z acc", "Q nmi", "inj_cora DOMINANT AUC", "AP", "Recall"]
+    (tmp_path / "emit.py").write_text(emit_script({f"m{i}": (k, 1.0) for i, k in enumerate(labels)}), encoding="utf-8")
+    out = subprocess.run([sys.executable, "emit.py"], cwd=tmp_path, capture_output=True, text=True).stdout
+    vals = dict(line.split("=", 1) for line in out.splitlines())
+    assert [float(vals[f"m{i}"]) for i in range(len(labels))] == [found[k] for k in labels]
