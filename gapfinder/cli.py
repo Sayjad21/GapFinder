@@ -58,12 +58,16 @@ async def cmd_ledger(args) -> int:
 
     out = Path(args.out)
     paper = load_paper(args.paper, figure_dir=out / "figures")
+    from gapfinder.ingest import tables as tbl
+
+    latex_grids: list = []
     if not args.no_source:  # the arXiv LaTeX source: tables with exact symbols, and figure data drawn in it
         from gapfinder.ingest import arxiv_source
 
         aid = args.arxiv or arxiv_source.detect_arxiv_id(paper.full_text, Path(args.paper).name)
         src = arxiv_source.fetch_source(aid, settings().cache_dir / "arxiv") if aid else None
         paper.supplement = arxiv_source.supplement(src) if src else ""
+        latex_grids = tbl.latex_grids(arxiv_source.document(src)) if src else []
         print(f"arXiv source: {aid or 'no id found'}; " + (f"{paper.supplement.count('Table:')} table(s), "
               f"{paper.supplement.count('Figure data:')} figure(s) with data" if paper.supplement else "none used"))
         # "we follow the setting of [X]": the cited paper's setup sections, from its own source (plan item 18)
@@ -78,7 +82,33 @@ async def cmd_ledger(args) -> int:
 
     claims = await extract_claims(router, paper, tier=args.claims_tier)
     _write(out / "raw" / "claims.json", [c.model_dump() for c in claims])  # pre-grounding, for offline re-grounding
-    crep = ground_claims(paper, claims)
+    # plan D3.2-D3.4: the tables as grids, from the source and from the PDF, read twice and reconciled
+    try:
+        pdf_grids = tbl.pdf_grids(args.paper)
+    except Exception as exc:  # noqa: BLE001 (a PDF the table finder can't read: the source's grids still count)
+        pdf_grids = []
+        print(f"PDF tables not read: {exc}")
+    grids = latex_grids + pdf_grids
+    _write(out / "tables.json", [g.to_dict() for g in grids])
+    mismatches = [{"table": a.label, "latex": a.source, "pdf": b.source, "cells": tbl.reconcile(a, b)}
+                  for a, b in tbl.match(latex_grids, pdf_grids)]
+    _write(out / "table_mismatches.json", [m for m in mismatches if m["cells"]])
+    if args.table_claims:  # every numeric cell of the method's rows the model didn't already claim (D3.3)
+        from gapfinder.ledger.schemas import Claim, ClaimType
+
+        import re
+
+        have = {(c.figure_or_table, c.reported_value) for c in claims}
+        # the paper's name for its method: the title's capitalised words (RippleNet, GraphMAE); bold rows otherwise
+        names = re.findall(r"\b[A-Z][A-Za-z0-9-]{2,}\b", paper.pages[0].text[:400])[:3] if paper.pages else []
+        for g in latex_grids or pdf_grids:
+            for x in tbl.cell_claims(g, tbl.label(g, names)):
+                if (x["figure_or_table"], x["reported_value"]) in have:
+                    continue
+                claims.append(Claim(id=f"T{len(claims) + 1}", figure_or_table=x["figure_or_table"], metric=x["metric"],
+                                    unit=x["unit"] or None, reported_value=x["reported_value"],
+                                    conditions=x["conditions"], type=ClaimType.absolute, quote=x["quote"]))
+    crep = ground_claims(paper, claims, grids)
     results, not_results = await filter_claims(router, paper, crep.kept)
     _write(out / "claim_ledger.json", ClaimLedger(paper=str(args.paper), claims=results).model_dump())
     assumptions = await build_assumption_space(router, paper, rm, crep.kept)
@@ -422,6 +452,8 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--no-cache", action="store_true")
     pl.add_argument("--arxiv", help="the paper's arXiv id, for its LaTeX source (default: detected from the PDF)")
     pl.add_argument("--no-source", action="store_true", help="don't fetch the arXiv LaTeX source")
+    pl.add_argument("--table-claims", action="store_true",
+                    help="add the method rows' table cells the model didn't claim (plan D3.3)")
     pl.add_argument("--claims-tier", default="ultra", choices=["ultra", "super"],
                     help="model for claim extraction (assumptions always use Ultra); see eval/claims_tier.py")
 

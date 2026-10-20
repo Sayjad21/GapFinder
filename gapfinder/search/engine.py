@@ -177,6 +177,10 @@ class SearchConfig:
     # early_stopping_patience for n_heads, l2_coef and patience), where the paper's own values never became
     # evidence. Grounded: only the spec's knob names are accepted. Skipped without a router or offline.
     semantic_map: bool = True
+    # plan D4: link unmatched ledger names to knobs by retrieval first (no model call); at most link_lesions dry runs
+    # check a link whose knob has no traced role
+    link_names: bool = True
+    link_lesions: int = 3
     # combine in waves, confirming a pair that fits within noise as soon as it appears (anytime budget use)
     early_confirm: bool = True
     trace_steps: int = 30  # the dry run stops itself after this many optimizer steps...
@@ -402,7 +406,8 @@ def secant_values(points: list[tuple[str, float | None]], target: float, role: s
 
 NAME_MAP_PROMPT = """A paper reading produced setting names that don't match the program's own knob names. For each
 reading, name the program knob it refers to, or null if none does. Only use knob names from the list, exactly.
-Match by meaning (what the setting controls), not by spelling; when unsure, answer null.
+Match by meaning (what the setting controls), not by spelling; when unsure, answer null. A reading may list the knobs a
+search over the code's flags and help texts retrieved for it: choose among those, or null when none of them is it.
 
 Program knobs:
 {knobs}
@@ -765,7 +770,7 @@ class GapSearch:
                                      if self.spec_only else ""))
         if self.cfg.trace:
             await self._trace()
-        if self.cfg.semantic_map:
+        if self.cfg.semantic_map or self.cfg.link_names:
             await self._map_names()
         await self.calibrate()
         results = []
@@ -934,10 +939,71 @@ class GapSearch:
                                               + ("; ".join(f"{c['metric']} {c['naive']:.4g} -> {c['without']:.4g}"
                                                            for c in moved) if moved else "no claim moved beyond noise"))
 
+    async def _link_names(self, pending: list[Assumption]) -> dict[str, list]:
+        """Plan D4.1, D4.3: retrieval of the knob each unmatched ledger name refers to (gapfinder/ingest/links.py).
+        A decisive link is absorbed here, with no model call; one whose knob has no traced role is checked by a lesion
+        first (a dry run with the knob at a distinctive value: the sink that value reaches is its role). Returns
+        every name's candidates, for the model to choose among."""
+        from gapfinder.ingest import links as L
+        from gapfinder.search.trace import analyze
+
+        ents = L.entities(self.spec, self.spec.code_root())
+        out, mapped, lesions = {}, {}, 0
+        for a in pending:
+            ctx = " ".join([a.paper_value] + [e.quote for e in a.evidence if e.kind == "paper"][:2])
+            cands = L.link(a.knob, ctx, ents)
+            out[a.knob] = cands
+            top = L.decisive(cands, ents)
+            if top is None or ast_patch_is_patch(top.knob):
+                continue
+            ent = next(e for e in ents if e.name == top.knob)
+            want = L.term_role(a.knob + " " + ctx[:80])
+            if ent.role is None and want is not None and self.cfg.trace and lesions < self.cfg.link_lesions:
+                d = _num(self.spec.knobs[top.knob].default)
+                if d is not None and d != 0:
+                    lesions += 1
+                    probe = str(int(d) + 7) if float(d).is_integer() and "." not in self.spec.knobs[top.knob].default \
+                        else f"{d * 1.37:.6g}"
+                    try:
+                        recs = await self.orch.trace_run(self.cfg.trace_steps, self.cfg.trace_seconds, {top.knob: probe})
+                    except Exception as exc:  # noqa: BLE001 (a lesion is an aid)
+                        recs = []
+                        self.orch.events.emit("note", msg=f"link lesion skipped ({str(exc)[:120]})")
+                    if recs:
+                        from gapfinder.sandbox.spec import Knob
+
+                        knobs = {**self.spec.knobs, top.knob: Knob(**{**self.spec.knobs[top.knob].model_dump(),
+                                                                      "default": probe})}
+                        kr = analyze(recs, knobs, self.spec.code_root()).roles.get(top.knob)
+                        ent.role = kr.role if kr else None
+                        if ent.role is None:  # the value reached no sink the trace knows
+                            self.orch.events.emit("note", msg=f"link {a.knob} -> {top.knob}: the lesion's value "
+                                                              "reached no known sink; left to the model")
+                            continue
+            if L.role_ok(a.knob + " " + ctx[:80], ent) is False:
+                self.orch.events.emit("note", msg=f"link {a.knob} -> {top.knob} dropped: the knob's value is a "
+                                                  f"{ent.role}, the paper's term a {want}")
+                continue
+            mapped[a.knob] = top.knob
+        by_name = {a.knob: a for a in pending}
+        for name, k in mapped.items():
+            self._absorb(by_name[name].model_copy(update={"knob": k}), k)
+            self.renamed[name] = k
+            self.unmapped = [u for u in self.unmapped if u != name]
+        if mapped:
+            self.orch.events.emit("note", msg="knob names linked by retrieval (no model call): "
+                                              + ", ".join(f"{a} -> {k}" for a, k in mapped.items()))
+        return {k: v for k, v in out.items() if k not in mapped}
+
     async def _map_names(self) -> None:
-        """Map unmatched ledger names to the spec's knobs by meaning, then absorb those assumptions."""
+        """Map unmatched ledger names to the spec's knobs: by retrieval first (plan D4), then by meaning, the model
+        choosing among the retrieved candidates (or none), then absorb those assumptions."""
         pending = [a for a in self._unmapped_assumptions if a.knob in self.unmapped]
-        if not pending or self.router is None:
+        if not pending:
+            return
+        cands = await self._link_names(pending) if self.cfg.link_names else {}
+        pending = [a for a in self._unmapped_assumptions if a.knob in self.unmapped]
+        if not pending or self.router is None or not self.cfg.semantic_map:
             return
         knobs = []
         for k, kn in self.spec.knobs.items():
@@ -948,8 +1014,10 @@ class GapSearch:
         items = []
         for a in pending:
             q = next((e.quote for e in a.evidence if e.kind == "paper"), "")
+            cs = [c.knob for c in cands.get(a.knob, [])]
             items.append(f"- {a.knob}: paper value {a.paper_value!r}; code default {a.code_default!r}"
-                         + (f'; paper says "{q[:160]}"' if q else ""))
+                         + (f'; paper says "{q[:160]}"' if q else "")
+                         + (f"; retrieved candidates (best first): {', '.join(cs)}" if cs else ""))
         msg = NAME_MAP_PROMPT.format(knobs="\n".join(knobs), items="\n".join(items))
         try:
             out = await self.router.structured("super", [{"role": "user", "content": msg}], NameMap)
