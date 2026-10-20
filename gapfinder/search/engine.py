@@ -104,6 +104,10 @@ class SearchConfig:
     reporting_gate: bool = True
     gate_posterior: float = 0.8
     differential: bool = True  # rank every class's explanations at the end (diagnose.core)
+    # plan D2.4: when claims sweep a knob, test "the paper's v is the code's g(v)" (g = c*v, v+c, a percent): one c
+    # for every swept point, estimated from the measured curve, then verified by runs at g(v) for every claim
+    scale_probe: bool = True
+    scale_repeats: int = 2
     max_points: int = 4  # such claims used per search (each costs runs for every configuration checked)
     point_configs: int = 3  # before history matching: the best joint fits also measured at those claims
     # out of space: one Super call compares the paper with the traced run (gapfinder/search/contrast.py);
@@ -458,7 +462,8 @@ class GapSearch:
         self.audit_report: dict | None = None  # gapfinder/search/audit.py, after the claims
         self.protocol_results: list[dict] = []
         self.split_report: dict[str, dict] = {}  # claim -> noise band across seeds, and across seeds and splits
-        self.differentials: dict = {}  # claim id -> diagnose.Differential  # protocol tests: a selection or label edit, switched off and measured
+        self.differentials: dict = {}  # claim id -> diagnose.Differential
+        self.scale_relations: list[dict] = []  # verified "the code's knob is g(the paper's)" (feeds the mutation round)  # protocol tests: a selection or label edit, switched off and measured
         self.trace_records: list[dict] = []  # the raw dry-run records (for the paper-to-trace contrast)
         self.paper_text = paper_text
         if self.cfg.coverage and self.spec.code_root() is not None:  # a local base, or the spec's `source`
@@ -1082,6 +1087,8 @@ class GapSearch:
             if self._usable_points():
                 await self._points_for_fits(t, res)
             self._history_match(t, res)
+            if self._usable_points():
+                await self._scale_probe(t, res)
             if self.cfg.patch_knobs and self._wants_patch(res):
                 await self._contrast(res)
                 self._match_constants(res)
@@ -1118,6 +1125,24 @@ class GapSearch:
             specs.append(ClaimSpec(c.claim_id, c.metric, c.paper_value, statistics.fmean(vals), sd, target=c is t))
         return Differential(specs, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc)
 
+    def _add_point_claims(self, diff) -> None:
+        """The claims at fixed knob values (Target.at) join the differential once their naive runs exist."""
+        from gapfinder.diagnose import ClaimSpec
+
+        for p in self._usable_points():
+            if p.claim_id in diff.claims:
+                continue
+            vals = [b.parsed_metrics[p.metric] for b in self.measure_ok(self._point_config(p, {}))
+                    if p.metric in b.parsed_metrics]
+            if not vals:
+                continue
+            sd = max(statistics.stdev(vals) if len(vals) >= 2 else 0.0, self.bands[p.metric].band / 2,
+                     self.cfg.noise_floor_frac * abs(p.paper_value))
+            diff.claims[p.claim_id] = ClaimSpec(p.claim_id, p.metric, p.paper_value, statistics.fmean(vals), sd)
+        for h in diff.hypotheses.values():  # rescored on the larger claim set
+            diff.score(h)
+        diff._normalise()
+
     def _config_hypothesis(self, diff, changes: Changes, prior: float, title: str | None = None):
         """A configuration as a hypothesis: its measured values on every claim (claims it wasn't measured on keep
         the naive prediction)."""
@@ -1125,8 +1150,10 @@ class GapSearch:
         from gapfinder.sandbox import ast_patch
 
         preds = {}
+        points = {p.claim_id: p for p in self.points}
         for cid, c in diff.claims.items():
-            vals = [b.parsed_metrics[c.metric] for b in self.measure_ok(changes) if c.metric in b.parsed_metrics]
+            at = self._point_config(points[cid], changes) if cid in points else changes  # a claim at a fixed value
+            vals = [b.parsed_metrics[c.metric] for b in self.measure_ok(at) if c.metric in b.parsed_metrics]
             if vals:
                 preds[cid] = Prediction.from_values(vals, c.naive_sd)
         code = any(ast_patch.is_patch(k) for k in changes)
@@ -1245,6 +1272,156 @@ class GapSearch:
                          for p in self._usable_points() for c in cs))
         except (RunBudgetExceeded, budget.BudgetExceeded):
             pass
+
+    # ------------------------------------------------------------ scale conventions (plan D2.4)
+    SCALE_FACTORS = (0.1, 0.2, 0.25, 1 / 3, 0.5, 2 / 3, 1.5, 2.0, 3.0, 4.0, 5.0, 10.0)  # c in "code = c x paper"
+    UNIT_FACTORS = (0.01, 100.0)  # a percent against a fraction
+    OFFSETS = (-1.0, 1.0)  # off by one (an epoch, a layer, a hop counted from 0 or 1)
+
+    def _curve(self, knob: str, metric: str) -> dict[float, tuple[float, int]]:
+        """value of the knob -> (median of the metric, runs) over the measured configurations that change only it."""
+        out = {}
+        d = _num(self.spec.knobs[knob].default)
+        for key, branches in self._runs.items():
+            cfg = dict(key)
+            if set(cfg) - {knob}:
+                continue
+            v = d if not cfg else _num(cfg[knob])
+            vals = [b.parsed_metrics[metric] for b in branches if b.status == BranchStatus.succeeded
+                    and metric in (b.parsed_metrics or {})]
+            if v is not None and vals:
+                out[v] = (statistics.median(vals), len(vals))
+        return out
+
+    @staticmethod
+    def _interp(curve: dict[float, tuple[float, int]], x: float, extrapolate: float = 0.5) -> float | None:
+        """The measured curve at x: linear between measured points, and linear beyond the ends up to `extrapolate` x
+        the measured span (a screening estimate only: the scale probe's verification runs decide)."""
+        xs = sorted(curve)
+        if len(xs) < 2:
+            return curve[xs[0]][0] if xs and abs(x - xs[0]) < 1e-12 else None
+        span = xs[-1] - xs[0]
+        if x < xs[0] - extrapolate * span - 1e-12 or x > xs[-1] + extrapolate * span + 1e-12:
+            return None
+        if x <= xs[0]:
+            a, b = xs[0], xs[1]
+        elif x >= xs[-1]:
+            a, b = xs[-2], xs[-1]
+        else:
+            a, b = next((a, b) for a, b in zip(xs, xs[1:]) if a - 1e-12 <= x <= b + 1e-12)
+        ya, yb = curve[a][0], curve[b][0]
+        return ya if b == a else ya + (yb - ya) * (x - a) / (b - a)
+
+    @staticmethod
+    def _snap_value(v: float, like: str) -> str:
+        """A knob value written like the default (an integer stays an integer)."""
+        if re.fullmatch(r"[-+]?\d+", like.strip()) and abs(v - round(v)) < 1e-9:
+            return str(int(round(v)))
+        return f"{v:.6g}"
+
+    async def _scale_probe(self, t: Target, res: ClaimResult) -> None:
+        """Claims that sweep one knob (the target at its default, the others at fixed values): is the paper's knob a
+        rescaled version of the code's? The factor is the one meaningful value (2, 1/2, 10, 100, +-1...) that makes the
+        measured curve match every swept claim; it is then verified by running the code at g(v) for every claim.
+        A setting's unit or convention differing between paper and code (an edge counted twice, a percent against a
+        fraction, an epoch counted from 0) is a paper-code inconsistency the plain value search cannot express."""
+        if not self.cfg.scale_probe:
+            return
+        from gapfinder.diagnose import FIT_I, STRICT_I
+
+        by_knob: dict[str, list[Target]] = {}
+        for p in self._usable_points():
+            if len(p.at) == 1 and p.metric == t.metric:
+                by_knob.setdefault(next(iter(p.at)), []).append(p)
+        await self._measure_points([])  # the naive run at every point's value: the code's curve
+        diff = self.differentials.get(t.claim_id) or self._new_differential(t)
+        self.differentials[t.claim_id] = diff
+        self._add_point_claims(diff)
+        for knob, pts in by_knob.items():
+            v0 = _num(self.spec.knobs[knob].default)
+            if len(pts) < 2 or v0 is None:
+                continue
+            sweep = [(v0, t.paper_value, t)] + [(_num(p.at[knob]), p.paper_value, p) for p in pts]
+            if any(v is None for v, _, _ in sweep):
+                continue
+            curve = self._curve(knob, t.metric)
+            if len(curve) < 3:
+                continue
+            sd = max(self.bands[t.metric].band / 2, self.cfg.noise_floor_frac * abs(t.paper_value))
+            fams = ([("x", c) for c in self.SCALE_FACTORS] + [("x", c) for c in self.UNIT_FACTORS]
+                    + [("+", c) for c in self.OFFSETS])
+            scored = []
+            for fam, c in fams:
+                g = (lambda v, c=c: v * c) if fam == "x" else (lambda v, c=c: v + c)
+                preds = [self._interp(curve, g(v)) for v, _, _ in sweep]
+                if any(y is None for y in preds):
+                    continue
+                zs = [abs(z - y) / math.sqrt(sd ** 2 + (self.cfg.hm_disc * z) ** 2) for (_, z, _), y in zip(sweep, preds)]
+                scored.append((max(zs), sum(x * x for x in zs), fam, c, g))
+            if not scored:
+                continue
+            scored.sort(key=lambda x: (x[0], x[1]))
+            worst, _, fam, c, g = scored[0]
+            ident = [x for x in self._interp_identity(curve, sweep, sd)]
+            self.orch.events.emit("note", msg=f"{t.claim_id}: scale probe on {knob}: best g(v) = "
+                                              f"{'%g*v' % c if fam == 'x' else 'v%+g' % c} (worst claim {worst:.1f} "
+                                              f"sigma on the measured curve; as is {max(ident):.1f})")
+            if worst > FIT_I or worst >= max(ident):
+                continue
+            # verify: run the code at g(v) for every claim
+            configs = []
+            for v, _, claim in sweep:
+                gv = self._snap_value(g(v), self.spec.knobs[knob].default)
+                cfg = {} if _same_value(gv, self.spec.knobs[knob].default) else {knob: gv}
+                configs.append((claim, cfg))
+            try:
+                await _all(*(self.measure(cfg, self.cfg.scale_repeats, f"scale {knob}") for _, cfg in configs))
+            except (RunBudgetExceeded, budget.BudgetExceeded):
+                pass
+            from gapfinder.diagnose import Hypothesis, Prediction
+
+            preds = {}
+            for claim, cfg in configs:
+                vals = [b.parsed_metrics[t.metric] for b in self.measure_ok(cfg) if t.metric in b.parsed_metrics]
+                if vals and claim.claim_id in diff.claims:
+                    preds[claim.claim_id] = Prediction.from_values(vals, diff.claims[claim.claim_id].naive_sd)
+            rel = "%g x the paper's" % c if fam == "x" else "the paper's %+g" % c
+            h = diff.add(Hypothesis(f"code:scale:{knob}:{fam}{c:g}", "code",
+                                    f"the code's {knob} is {rel} (a unit or convention differs between paper and code)",
+                                    0.08, preds, detail={"knob": knob, "family": fam, "c": c},
+                                    runs=sum(len(self.measure_ok(cfg)) for _, cfg in configs),
+                                    check=f"find where {knob} enters the computation and compare its unit with the paper's"))
+            v_target = configs[0][1]
+            swept = [claim.claim_id for _, _, claim in sweep]
+            fits = all(cid in h.per_claim and h.per_claim[cid]["I"] <= STRICT_I and cid in preds for cid in swept)
+            self.scale_relations.append({"knob": knob, "family": fam, "c": c, "verified": bool(fits),
+                                         "claims": len(sweep)})
+            res.notes.append(f"scale probe: the code's {knob} as {rel} {'fits every swept claim' if fits else 'does not fit every swept claim'} "
+                             f"after {h.runs} runs at g(v) (" + ", ".join(
+                                 f"{claim.claim_id} at {knob}={cfg.get(knob, self.spec.knobs[knob].default)}"
+                                 for claim, cfg in configs) + ")")
+            if fits and len(sweep) >= 3 and _rank(res) > _LABEL_RANK[ConfidenceLabel.inconsistency.value]:
+                old = dict(res.changes)
+                res.changes, res.gap_after = dict(v_target), self.gap(t, v_target)
+                res.closes = True
+                res.attribution = self._attribution(t, v_target, res.gap_after, ConfidenceLabel.inconsistency,
+                                                    [b.result_checkpoint for b in self.measure_ok(v_target)
+                                                     if b.result_checkpoint])
+                res.held_out = {claim.claim_id: {"gap_before": self.gap(claim, {}) if claim is t else None,
+                                                 "gap_after": (self.value(cfg, t.metric) - claim.paper_value)
+                                                 / abs(claim.paper_value), "ok": True, "at": {knob: cfg.get(knob, self.spec.knobs[knob].default)}}
+                                for claim, cfg in configs[1:]}
+                res.notes.append(f"labelled Paper-artifact inconsistency: one factor ({rel}) makes every one of the "
+                                 f"{len(sweep)} swept claims fit" + (f"; it replaces {old}" if old and old != res.changes
+                                                                      else ""))
+
+    def _interp_identity(self, curve, sweep, sd) -> list[float]:
+        """The swept claims against the measured curve as is (g = identity), in sigma."""
+        out = []
+        for v, z, _ in sweep:
+            y = self._interp(curve, v)
+            out.append(float("inf") if y is None else abs(z - y) / math.sqrt(sd ** 2 + (self.cfg.hm_disc * z) ** 2))
+        return out
 
     def _point_check(self, p: Target, changes: Changes) -> dict:
         """Like a held-out claim: no worse under the candidate than under the naive configuration, beyond noise."""
@@ -2537,3 +2714,10 @@ def _better(a: ClaimResult, b: ClaimResult) -> bool:
     ga = abs(a.gap_after) if a.gap_after is not None else float("inf")
     gb = abs(b.gap_after) if b.gap_after is not None else float("inf")
     return (_rank(a), ga) < (_rank(b), gb)
+
+
+def _num(v) -> float | None:
+    try:
+        return float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
