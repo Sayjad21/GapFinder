@@ -2328,7 +2328,7 @@ class GapSearch:
         best: ClaimResult | None = None
         for c in candidates[: self.cfg.verify_candidates]:
             trial = await self._verify(t, c, res)
-            if best is None or _better(trial, best):
+            if best is None or (_better(trial, best) and not self._tied_on_target(t, trial, best)):
                 best = trial
             if _rank(best) == 0:
                 break
@@ -2905,6 +2905,15 @@ class GapSearch:
             v += (self.cfg.hm_disc * t.paper_value) ** 2
         return -0.5 * (t.paper_value - m) ** 2 / v - 0.5 * math.log(2 * math.pi * v)
 
+    def _tied_on_target(self, t: Target, a: ClaimResult, b: ClaimResult) -> bool:
+        """Plan D2.3 at verification: two verified answers with the same label whose target fits are equally likely
+        within the discrepancy floor are a tie the target can't break; the candidate order (held-outs, the prior,
+        the fewest and smallest changes) has already broken it, so the earlier one stays."""
+        if _rank(a) != _rank(b) or not a.changes or not b.changes:
+            return False
+        la, lb = self.loglik(t, a.changes, discrepancy=True), self.loglik(t, b.changes, discrepancy=True)
+        return la is not None and lb is not None and abs(la - lb) < LL_EQUIVALENT
+
     def _others_misfit(self, t: Target, changes: Changes) -> int:
         """1 when a held-out claim or a claim at another condition, measured under the configuration, is implausible
         there (I > 3, history matching's cutoff), else 0: the held-outs break ties on the target (plan D2.3)."""
@@ -2964,6 +2973,24 @@ class GapSearch:
         if not pts:
             return
         cfgs = [dict(e["config"]) for e in res.equivalent][:8]
+        held = self._diag_claims(t)
+
+        def same_numbers(a: Changes, b: Changes) -> bool:
+            for c in held:
+                va = [x.parsed_metrics[c.metric] for x in self.measure_ok(a) if c.metric in x.parsed_metrics]
+                vb = [x.parsed_metrics[c.metric] for x in self.measure_ok(b) if c.metric in x.parsed_metrics]
+                if not va or not vb:
+                    return False
+                se = self._claim_sd(c) * math.sqrt(1 / len(va) + 1 / len(vb))
+                if abs(statistics.fmean(va) - statistics.fmean(vb)) > 2 * se:
+                    return False
+            return True
+
+        # parsimony first: a candidate that only adds a change with no effect on any claim to another candidate is
+        # that candidate (they would split the posterior between them)
+        cfgs = [c for c in cfgs if not any(set(o.items()) < set(c.items()) and same_numbers(c, o) for o in cfgs)]
+        if len(cfgs) < 2:
+            return
         await self._measure_points([], "point (as run)")
         conds = []
         for p in pts.values():

@@ -99,9 +99,9 @@ def _tie(lr, wd):
 
 
 async def test_b_an_exact_hit_on_the_target_loses_to_the_held_out(tmp_path):
-    src = _tie(lr=(3.0, 0.0), wd=(2.6, 3.0))  # the decoy: exact on auc, ap unchanged; the truth: auc -0.4, ap fits
+    src = _tie(lr=(3.0, 0.0), wd=(2.6, 6.0))  # the decoy: exact on auc, ap unchanged; the truth: auc -0.4, ap fits
     s = _search(tmp_path, src, {"lr": "0.01", "wd": "0.0005"}, ["auc", "ap"],
-                [Target("C1", "auc", 78.0), Target("C2", "ap", 63.0, held_out=True)])
+                [Target("C1", "auc", 78.0), Target("C2", "ap", 66.0, held_out=True)])
     [r] = await s.run()
     assert r.changes == {"wd": "0.0025"}, (r.changes, r.notes)
 
