@@ -1,0 +1,25 @@
+# written by `gapfinder harness`; read HARNESS.md and approve the commands
+name: harness
+base: c6dd9389-eb85-4995-abc1-c3fb1d08e44a
+source: <scratch>\b5\b5c\repo
+run:
+  command: if [ "{gf_paper_year_env}" = 1 ]; then export PYTHONPATH="/opt/gf_paper_year${PYTHONPATH:+:$PYTHONPATH}"; fi; mkdir -p out; rm -f out/run*.log; GF_SEED=$("${PYTHON:-python}" -c "import os, zlib;
+    print(zlib.crc32(os.environ.get('RUN_TAG', 'x').encode('utf-8')) % 100000)"); r=1; (cd benchmark && "${PYTHON:-python}" main.py --model dominant --dataset inj_cora --gpu -1) > out/run1.log 2>&1; "${PYTHON:-python}"
+    gf_harness/emit.py
+  output: stdout
+  format: kv
+  timeout: 3300
+knobs:
+  gf_paper_year_env:
+    layer: environment
+    default: '0'
+    choices:
+    - '0'
+    - '1'
+allowed_paths:
+- out/
+metrics:
+- c_auc
+- c_ap
+- c_rec_recall
+- gf_runs
