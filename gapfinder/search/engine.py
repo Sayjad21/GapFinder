@@ -108,6 +108,13 @@ class SearchConfig:
     # for every swept point, estimated from the measured curve, then verified by runs at g(v) for every claim
     scale_probe: bool = True
     scale_repeats: int = 2
+    # plan D5: mutation-based localisation, when no setting fits every claim or a scale relation needs its code site;
+    # at most mutation_max mutants, in three stages (one run each; the best mutation_keep at every claim's condition;
+    # the best two repeated), within mutation_budget_frac of the run budget
+    mutations: bool = True
+    mutation_max: int = 24
+    mutation_keep: int = 6
+    mutation_budget_frac: float = 0.35
     max_points: int = 4  # such claims used per search (each costs runs for every configuration checked)
     point_configs: int = 3  # before history matching: the best joint fits also measured at those claims
     # out of space: one Super call compares the paper with the traced run (gapfinder/search/contrast.py);
@@ -463,7 +470,8 @@ class GapSearch:
         self.protocol_results: list[dict] = []
         self.split_report: dict[str, dict] = {}  # claim -> noise band across seeds, and across seeds and splits
         self.differentials: dict = {}  # claim id -> diagnose.Differential
-        self.scale_relations: list[dict] = []  # verified "the code's knob is g(the paper's)" (feeds the mutation round)  # protocol tests: a selection or label edit, switched off and measured
+        self.scale_relations: list[dict] = []  # verified "the code's knob is g(the paper's)" (feeds the mutation round)
+        self.code_leads: dict[str, list[dict]] = {}  # claim id -> the mutation round's fitting groups  # protocol tests: a selection or label edit, switched off and measured
         self.trace_records: list[dict] = []  # the raw dry-run records (for the paper-to-trace contrast)
         self.paper_text = paper_text
         if self.cfg.coverage and self.spec.code_root() is not None:  # a local base, or the spec's `source`
@@ -1097,6 +1105,11 @@ class GapSearch:
                     await self._patch_round(t, res)
                 except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
                     res.notes.append(f"patch round stopped early: {exc}")
+        if self.cfg.history_matching and self.cfg.mutations:
+            try:
+                await self._mutation_round(t, res)
+            except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
+                res.notes.append(f"mutation round stopped early: {exc}")
         self._refuted_label(t, res)
         if res.attribution is not None:
             res.attribution.hypotheses_tested = len(tried)
@@ -1414,6 +1427,123 @@ class GapSearch:
                 res.notes.append(f"labelled Paper-artifact inconsistency: one factor ({rel}) makes every one of the "
                                  f"{len(sweep)} swept claims fit" + (f"; it replaces {old}" if old and old != res.changes
                                                                       else ""))
+
+    # ------------------------------------------------------------ mutation-based localisation (plan D5)
+    def _wants_mutations(self, t: Target, res: ClaimResult) -> bool:
+        rel = [r for r in self.scale_relations if r.get("verified")]
+        label = res.attribution.confidence_label if res.attribution else ConfidenceLabel.unexplained.value
+        out_of_space = (res.diagnosis or {}).get("kind", "").startswith("out_of_space")
+        return bool(rel) or out_of_space or label in (ConfidenceLabel.unexplained.value,
+                                                      ConfidenceLabel.conflicts_held_out.value)
+
+    async def _mutation_round(self, t: Target, res: ClaimResult) -> None:
+        """Small code edits at sites on the data flow of the knobs the claims depend on, scored on every claim.
+        Stages: one run each (target); the best `mutation_keep` at every claim's condition; the best two repeated.
+        Mutants that predict the same numbers form one group (behaviour can't tell them apart); the group is
+        reported with its origin (the deepest site on the data flow) first. Never "Explained": a fitting mutant is a
+        code lead, a paper-code inconsistency only when a verified scale relation implies it."""
+        root = self.spec.code_root()
+        if root is None or not self._wants_mutations(t, res):
+            return
+        from gapfinder.diagnose import FIT_I, STRICT_I
+        from gapfinder.sandbox.spec import Knob
+        from gapfinder.search.mutation import find_mutants
+
+        knobs = sorted({k for p in self._usable_points() for k in p.at} | {r["knob"] for r in self.scale_relations}
+                       | {k for k in res.changes if not k.startswith("@")}
+                       | {x["knob"] for x in (res.screen or [])[:3] if x.get("units", 0) > 1 and not x["knob"].startswith("@")})
+        executed = self.trace_report.executed if getattr(self, "trace_report", None) is not None else None
+        ms = find_mutants(root, knobs, executed, self.scale_relations, limit=self.cfg.mutation_max)
+        if not ms:
+            return
+        room = (self.cfg.max_runs or 10 ** 6) - self.runs_used
+        cap = int((self.cfg.max_runs or 10 ** 6) * self.cfg.mutation_budget_frac)
+        n_pts = len(self._usable_points())
+        per_kept = (1 + n_pts) * 2
+        n_first = max(0, min(len(ms), min(room, cap) - self.cfg.mutation_keep * per_kept))
+        ms = ms[:n_first]
+        if not ms:
+            res.notes.append("mutation round: no room left in the run budget")
+            return
+        for m in ms:
+            self.spec.knobs.setdefault(m.name, Knob(layer="environment", default="0", env=True, choices=["0", "1"]))
+        self.orch.events.emit("note", msg=f"{t.claim_id}: mutation round: {len(ms)} mutants on the data flow of "
+                                          f"{', '.join(knobs) or 'the metric code'} (top: {ms[0].describe()})")
+        await _all(*(self.measure({m.name: "1"}, 1, "mutation screen") for m in ms))
+        ran = [m for m in ms if self.measure_ok({m.name: "1"})]
+        if not ran:
+            res.notes.append(f"mutation round: none of {len(ms)} mutants ran")
+            return
+        g0 = abs(self.gap(t, {}))
+
+        def target_score(m):
+            i = self.implausibility(t, {m.name: "1"})
+            g = self.gap(t, {m.name: "1"})
+            return (i if i is not None else float("inf"), abs(g) if g is not None else float("inf"))
+        moved = [m for m in ran if target_score(m)[1] < g0 - self.band(t)]
+        moved.sort(key=lambda m: (target_score(m), -m.priority))
+        kept = moved[: self.cfg.mutation_keep]
+        if not kept:
+            res.notes.append(f"mutation round: none of {len(ran)} mutants moved {t.claim_id} toward the paper")
+            return
+        diff = self.differentials.get(t.claim_id) or self._new_differential(t)
+        self.differentials[t.claim_id] = diff
+        self._add_point_claims(diff)
+        await self._measure_points([{m.name: "1"} for m in kept], "mutation point")
+        hyps = {}
+        for m in kept:
+            hyps[m.name] = diff.add(self._config_hypothesis(diff, {m.name: "1"}, 0.02 if not m.tags else 0.05,
+                                                            title=f"a code change: {m.describe()}"))
+        best = sorted(kept, key=lambda m: (-hyps[m.name].posterior, hyps[m.name].max_I))[:2]
+        for m in best:  # repeats at the target and at every claim's condition
+            await self.measure({m.name: "1"}, self.confirm_repeats(t), "mutation confirm")
+            for p in self._usable_points():
+                await self.measure(self._point_config(p, {m.name: "1"}), self.cfg.scale_repeats, "mutation confirm")
+            hyps[m.name] = diff.add(self._config_hypothesis(diff, {m.name: "1"}, 0.02 if not m.tags else 0.05,
+                                                            title=f"a code change: {m.describe()}"))
+        fitting = [m for m in kept if hyps[m.name].fits_all]
+        if not fitting:
+            res.notes.append("mutation round: no mutant fits every claim (" + "; ".join(
+                f"{m.describe()}: worst {hyps[m.name].max_I:.1f} sigma" for m in kept[:3]) + ")")
+            return
+        # one group per set of mutants with the same predictions (within one band on every claim)
+        groups: list[list] = []
+        for m in sorted(fitting, key=lambda m: hyps[m.name].max_I):
+            pm = hyps[m.name].per_claim
+            for g in groups:
+                pg = hyps[g[0].name].per_claim
+                if all(abs(pm[c]["pred"] - pg[c]["pred"]) <= max(diff.claims[c].naive_sd, 1e-9) * 2 for c in pm):
+                    g.append(m)
+                    break
+            else:
+                groups.append([m])
+        top = groups[0]
+        origin = max(top, key=lambda m: (m.dist, m.kind == "num"))  # the deepest site: where the quantity comes from
+        top.sort(key=lambda m: m is not origin)
+        h = hyps[origin.name]
+        self.code_leads[t.claim_id] = [{"group": [m.describe() for m in g], "worst_sigma": round(hyps[g[0].name].max_I, 2),
+                                        "grounded": any(x.tags and "relation" in " ".join(x.tags) for x in g)} for g in groups]
+        grounded = any("relation" in " ".join(m.tags) for m in top)
+        res.notes.append(f"mutation round: {len(top)} equivalent code change(s) fit every claim (worst "
+                         f"{h.max_I:.1f} sigma): " + "; ".join(m.describe() for m in top[:5])
+                         + (" (implied by the verified scale relation)" if grounded else ""))
+        strict = h.max_I <= STRICT_I and len(diff.claims) >= 3
+        label = (ConfidenceLabel.inconsistency if grounded and strict else ConfidenceLabel.fits_but_unsupported)
+        current = res.attribution.confidence_label if res.attribution else ConfidenceLabel.unexplained.value
+        keep_scale = current == ConfidenceLabel.inconsistency.value and res.changes and not any(
+            k.startswith("@") for k in res.changes)
+        if keep_scale:  # the scale relation is the answer; the mutant is where it lives in the code
+            res.notes.append(f"the code site of that relation: {origin.describe()}")
+            return
+        if _rank(res) <= _LABEL_RANK[label.value] and current != ConfidenceLabel.unexplained.value and res.changes:
+            return
+        cfg = {origin.name: "1"}
+        res.changes, res.gap_after = cfg, self.gap(t, cfg)
+        res.closes = res.gap_after is not None and abs(res.gap_after) <= self.band_at(t, cfg)
+        res.attribution = self._attribution(t, cfg, res.gap_after, label,
+                                            [b.result_checkpoint for b in self.measure_ok(cfg) if b.result_checkpoint])
+        res.notes.append(f"explained with a code change (tested in memory, no file edited): {origin.describe()}; "
+                         "a code lead, not a confirmed cause")
 
     def _interp_identity(self, curve, sweep, sd) -> list[float]:
         """The swept claims against the measured curve as is (g = identity), in sigma."""

@@ -117,6 +117,10 @@ def _dump():
         except Exception:
             pass
         _rec["ranges"] = {"%s:%s" % k: v for k, v in list(_rec["ranges"].items())[:_MAX]}
+        cov = {}
+        for (fn, ln) in list(_lines):
+            cov.setdefault(fn, []).append(ln)
+        _rec["lines"] = dict((k, sorted(v)) for k, v in cov.items())
         os.makedirs(_OUT, exist_ok=True)
         with open(os.path.join(_OUT, "%d.json" % os.getpid()), "w") as f:
             json.dump(_rec, f, default=str)
@@ -129,6 +133,48 @@ def _stop():
     sys.stdout.flush(); sys.stderr.flush()
     os._exit(0)
 
+
+# ---- line coverage of the repo's own files (plan D5.2: which lines the run executes). Only frames whose file is
+# under the repo get a local tracer, so library code runs untraced; each line is recorded once.
+_lines = set()
+_LINES_MAX = 50000
+_SKIP = (".gf_trace", ".gf_patch", ".gf_runtime", "site-packages", "dist-packages")
+
+
+_relcache = {}
+
+
+def _global(frame, event, arg):
+    try:
+        fn = frame.f_code.co_filename
+        rel = _relcache.get(fn)
+        if rel is None:
+            full = os.path.realpath(fn) if fn and not fn.startswith("<") else ""
+            rel = os.path.relpath(full, _ROOT).replace(os.sep, "/") if full.startswith(_ROOT) and not any(
+                x in full for x in _SKIP) else ""
+            _relcache[fn] = rel
+        if rel:
+            def loc(frame, event, arg, rel=rel):
+                try:
+                    if event == "line" and len(_lines) < _LINES_MAX:
+                        _lines.add((rel, frame.f_lineno))
+                except Exception:
+                    pass
+                return loc
+            if event == "call":
+                _lines.add((rel, frame.f_lineno))
+            return loc
+    except Exception:
+        pass
+    return None
+
+
+if os.environ.get("GF_TRACE_LINES", "1") == "1":
+    try:
+        sys.settrace(_global)
+        threading.settrace(_global)
+    except Exception:
+        pass
 
 atexit.register(_dump)
 if _SECONDS > 0:

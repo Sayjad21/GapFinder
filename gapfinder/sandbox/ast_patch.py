@@ -130,9 +130,87 @@ class _Swap(ast.NodeTransformer):
     def visit_AsyncFunctionDef(self, node):
         return self._defaults(node)
 
+def _number(node):
+    """The value of a numeric literal (int or float, not bool), on Python 3.6 to 3.12, else None."""
+    num = getattr(ast, "Num", None)
+    if num is not None and isinstance(node, num) and not isinstance(getattr(node, "n", None), bool):
+        return node.n
+    if isinstance(node, getattr(ast, "Constant", ())) and type(node.value) in (int, float):
+        return node.value
+    return None
+
+def _const(v, like):
+    return ast.copy_location(ast.parse(repr(v), mode="eval").body, like)
+
+class _Mut(ast.NodeTransformer):
+    """NAME "@mut.COL.KIND.OP", VALUE "1": one mutation of the node at (LINE, COL) of that kind (plan D5.1).
+    KIND: num | bool | Subscript | Attribute | Name | Call | BinOp | Compare | UnaryOp. OP:
+    - numbers: mul2 div2 mul10 div10 add1 sub1 (an int stays an int);
+    - any expression: xmul2 xdiv2 xmul10 xdiv10 xadd1 xsub1 (the node, multiplied or shifted);
+    - calls: red.NEW (the function renamed: mean -> sum), kw.OLD.NEW (a keyword argument renamed);
+    - comparisons: cmpflip (< and <=, > and >=); booleans: not.
+    VALUE "0" leaves the code as it is (the knob's default)."""
+    _SCALE = {"mul2": ("*", 2), "div2": ("/", 2), "mul10": ("*", 10), "div10": ("/", 10), "add1": ("+", 1),
+              "sub1": ("-", 1)}
+
+    def __init__(self, line, name, value):
+        parts = name.split(".")
+        self.line, self.col, self.kind, self.op = line, int(parts[1]), parts[2], ".".join(parts[3:])
+        self.on, self.done = value.strip() == "1", 0
+
+    def _match(self, node):
+        if getattr(node, "lineno", None) != self.line or getattr(node, "col_offset", None) != self.col:
+            return False
+        if self.kind == "num":
+            return _number(node) is not None
+        if self.kind == "bool":
+            return (isinstance(node, getattr(ast, "NameConstant", ())) or isinstance(node, getattr(ast, "Constant", ()))) \
+                and isinstance(getattr(node, "value", None), bool)
+        return type(node).__name__ == self.kind
+
+    def _apply(self, node):
+        op = self.op
+        if op in self._SCALE and self.kind == "num":
+            sym, k = self._SCALE[op]
+            v = _number(node)
+            new = {"*": v * k, "/": (v // k if isinstance(v, int) and v % k == 0 else v / k), "+": v + k, "-": v - k}[sym]
+            return _const(new, node)
+        if op.startswith("x") and op[1:] in self._SCALE:
+            sym, k = self._SCALE[op[1:]]
+            binop = {"*": ast.Mult(), "/": ast.Div(), "+": ast.Add(), "-": ast.Sub()}[sym]
+            return ast.copy_location(ast.BinOp(left=node, op=binop, right=_const(k, node)), node)
+        if op.startswith("red.") and isinstance(node, ast.Call):
+            new = op[4:]
+            if isinstance(node.func, ast.Attribute):
+                node.func.attr = new
+            elif isinstance(node.func, ast.Name):
+                node.func.id = new
+            return node
+        if op.startswith("kw.") and isinstance(node, ast.Call):
+            old, new = op.split(".")[1:3]
+            for kw in node.keywords:
+                if kw.arg == old:
+                    kw.arg = new
+            return node
+        if op == "cmpflip" and isinstance(node, ast.Compare) and len(node.ops) == 1:
+            swap = {ast.Lt: ast.LtE, ast.LtE: ast.Lt, ast.Gt: ast.GtE, ast.GtE: ast.Gt}
+            t = type(node.ops[0])
+            if t in swap:
+                node.ops = [swap[t]()]
+            return node
+        if op == "not" and self.kind == "bool":
+            return _const(not node.value, node)
+        raise RuntimeError("GF_AST_PATCH: mutation %s does not apply to %s" % (op, type(node).__name__))
+
+    def visit(self, node):
+        if self._match(node) and not self.done:
+            self.done += 1
+            return self._apply(node) if self.on else node
+        return ast.NodeTransformer.visit(self, node)
+
 def patch_tree(tree, entries):
     for _rel, line, name, val in entries:
-        sw = _Swap(line, name, val)
+        sw = _Mut(line, name, val) if name.startswith("@mut.") else _Swap(line, name, val)
         tree = sw.visit(tree)
         if not sw.done:
             raise RuntimeError("GF_AST_PATCH: no literal %s on line %d" % (name, line))  # or no if statement

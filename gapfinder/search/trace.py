@@ -74,11 +74,13 @@ class TraceReport:
     leads: list[Lead] = field(default_factory=list)
     runtime_values: dict[str, str] = field(default_factory=dict)  # knob -> every value its config records gave
     steps: int = 0
+    executed: dict[str, list[int]] = field(default_factory=dict)  # repo file -> lines the dry run executed (D5.2)
 
     def to_dict(self) -> dict:
         return {"processes": self.processes, "steps": self.steps,
                 "roles": {k: asdict(v) for k, v in self.roles.items()}, "ambiguous": self.ambiguous,
-                "leads": [asdict(x) | {"knob": x.knob} for x in self.leads], "runtime_values": self.runtime_values}
+                "leads": [asdict(x) | {"knob": x.knob} for x in self.leads], "runtime_values": self.runtime_values,
+                "executed_lines": sum(len(v) for v in self.executed.values())}
 
     def summary(self) -> str:
         r = ", ".join(f"{k}={v.role}" for k, v in sorted(self.roles.items())) or "none"
@@ -141,6 +143,11 @@ def _sink_values(rec: dict):
 def analyze(records: list[dict], knobs: dict, repo_root: Path | None = None) -> TraceReport:
     """`knobs`: the spec's knobs (name -> Knob). `repo_root`: the artifact's code, to read literal leads."""
     rep = TraceReport(processes=len(records), steps=sum(r.get("steps", 0) for r in records))
+    lines: dict[str, set[int]] = {}
+    for r in records:
+        for fn, ls in (r.get("lines") or {}).items():
+            lines.setdefault(fn, set()).update(int(x) for x in ls if int(x) > 0)
+    rep.executed = {fn: sorted(v) for fn, v in sorted(lines.items())}
     roles: dict[str, set] = {}
     where: dict[str, KnobRole] = {}
     unmatched: list[tuple[dict, str, float]] = []

@@ -114,3 +114,29 @@ def test_the_runtime_shim_runs_gpu_written_code_on_the_cpu(tmp_path):
                          env={**os.environ, "PYTHONPATH": os.pathsep.join([str(hook), str(tmp_path / "lib")])})
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "cpu"
+
+
+def test_mutation_operators_apply_in_memory_and_off_is_a_no_op(tmp_path):
+    """Plan D5.1: node-addressed mutations (file, line, column, kind, operator)."""
+    import ast as _ast
+
+    from gapfinder.sandbox.ast_patch import apply_source
+
+    src = ("total = adj.data.shape[0]\nfor i in range(200):\n    pass\ny = x.mean(dim=1)\nok = a < b\n"
+           "f(alpha=0.5, shuffle=False)\nlr = 3\n")
+    t = _ast.parse(src)
+    sub, rng, call, cmp_, c6, num = (t.body[0].value, t.body[1].iter.args[0], t.body[2].value, t.body[3].value,
+                                     t.body[4].value, t.body[5].value)
+    lines = lambda out: out.splitlines()  # noqa: E731
+    assert lines(apply_source(src, 1, f"@mut.{sub.col_offset}.Subscript.xdiv2", "1"))[0] == "total = adj.data.shape[0] / 2"
+    assert lines(apply_source(src, 2, f"@mut.{rng.col_offset}.num.sub1", "1"))[1] == "for i in range(199):"
+    assert lines(apply_source(src, 4, f"@mut.{call.col_offset}.Call.red.sum", "1"))[3] == "y = x.sum(dim=1)"
+    assert lines(apply_source(src, 5, f"@mut.{cmp_.col_offset}.Compare.cmpflip", "1"))[4] == "ok = a <= b"
+    assert lines(apply_source(src, 6, f"@mut.{c6.col_offset}.Call.kw.alpha.weight", "1"))[5] == "f(weight=0.5, shuffle=False)"
+    assert lines(apply_source(src, 6, f"@mut.{c6.keywords[1].value.col_offset}.bool.not", "1"))[5] == "f(alpha=0.5, shuffle=True)"
+    assert lines(apply_source(src, 7, f"@mut.{num.col_offset}.num.mul2", "1"))[6] == "lr = 6"
+    assert lines(apply_source(src, 1, f"@mut.{sub.col_offset}.Subscript.xdiv2", "0"))[0] == "total = adj.data.shape[0]"
+    import pytest
+
+    with pytest.raises(RuntimeError):  # no node of that kind at that place: a loud failure, not a silent no-op
+        apply_source(src, 1, "@mut.0.Compare.cmpflip", "1")
