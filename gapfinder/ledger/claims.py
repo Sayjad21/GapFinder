@@ -108,6 +108,7 @@ async def extract_claims(router: Router, paper: PaperText, *, max_chars: int = 1
     return out.claims
 
 
-def ground_claims(paper: PaperText, claims: list[Claim]) -> GroundingReport:
-    g = Grounder(paper.full_text, pages={p.number: p.text for p in paper.pages})
+def ground_claims(paper: PaperText, claims: list[Claim], grids: list | None = None) -> GroundingReport:
+    """`grids`: the paper's tables (gapfinder/ingest/tables.py), so a number is grounded in its table's cells too."""
+    g = Grounder(paper.full_text, pages={p.number: p.text for p in paper.pages}, grids=grids)
     return g.check_claims(claims)

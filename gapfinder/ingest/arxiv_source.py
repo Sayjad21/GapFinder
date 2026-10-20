@@ -70,8 +70,20 @@ def unpack(data: bytes, dest: Path) -> Path | None:
 
 
 def main_tex(src: Path) -> Path | None:
-    cands = [p for p in src.rglob("*.tex") if "\\documentclass" in p.read_text("utf-8", "replace")]
-    cands.sort(key=lambda p: ("\\begin{document}" not in p.read_text("utf-8", "replace"), len(p.parts), p.name))
+    """The paper's main file: a full document that inputs the archive's other files, longest first. A venue's
+    template shipped beside the paper (IJCAI's `ijcai19.tex`, "Instructions for Authors") is a full document too,
+    and sorted first by name it was read instead of the paper (batch-5 b5a)."""
+    texts = {p: _strip_comments(p.read_text("utf-8", "replace")) for p in src.rglob("*.tex")}
+    stems = {p.stem for p in texts}
+
+    def inputs(t: str) -> int:
+        return sum(1 for m in re.finditer(r"\\(?:input|include|subfile)\{([^}]+)\}", t)
+                   if Path(m.group(1)).stem in stems)
+
+    cands = [p for p, t in texts.items() if "\\documentclass" in t]
+    cands.sort(key=lambda p: ("\\begin{document}" not in texts[p],
+                              bool(re.search(r"(?i)instructions for authors|formatting instructions|template", texts[p][:4000])),
+                              -inputs(texts[p]), -len(texts[p]), len(p.parts), p.name))
     return cands[0] if cands else None
 
 
@@ -157,6 +169,12 @@ def figure_data(doc: str, root: Path, max_points: int = 60) -> list[str]:
         if series:
             out.append(f"Figure data: {caption}\n" + "\n".join(series))
     return out
+
+
+def document(src: Path) -> str:
+    """The flattened main document ('' when there is none)."""
+    main = main_tex(src)
+    return flatten(main, main.parent) if main is not None else ""
 
 
 def supplement(src: Path) -> str:

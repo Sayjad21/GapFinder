@@ -189,14 +189,15 @@ class Orchestrator:
         self.events.emit("cost", **self.cost.summary())
         return branch
 
-    async def trace_run(self, steps: int = 30, seconds: float = 900) -> list[dict]:
-        """One dry run of the naive command with the sink-tracing hook (gapfinder/sandbox/trace_hook.py),
-        from the loaded checkpoint. Returns the per-process trace records (empty when nothing was traced:
-        not a Python artifact, or an infrastructure failure). Not a branch: it counts toward no budget."""
+    async def trace_run(self, steps: int = 30, seconds: float = 900, changes: dict[str, str] | None = None) -> list[dict]:
+        """One dry run of the naive command (or of `changes`: a lesion, plan D4.3) with the sink-tracing hook
+        (gapfinder/sandbox/trace_hook.py), from the loaded checkpoint. Returns the per-process trace records (empty
+        when nothing was traced: not a Python artifact, or an infrastructure failure). Not a branch: it counts toward
+        no budget."""
         from gapfinder.sandbox import trace_hook
 
-        parent = await self.stage("loaded", {})
-        cmd, env = self.spec.render(self.spec.run, {})
+        parent = await self.stage("loaded", changes or {})
+        cmd, env = self.spec.render(self.spec.run, changes or {})
         tenv, tfiles, prefix, suffix = trace_hook.run_parts(steps, seconds)
         cmd, env, tfiles = self._with_runtime_shim(cmd, env, tfiles)
         try:
