@@ -216,69 +216,46 @@ None of the fixes listed above is measured on a fresh paper yet.
 
 ---
 
-## 6. Remaining bottlenecks to real generalisation (ordered by impact)
+## 6. Remaining bottlenecks (2026-10-20, after batch-5; ordered by impact on finding the cause)
 
-### 6.1 Too few fresh papers to know if anything generalises
-- **Evidence:** 5 sealed blind papers; sealers find about one usable paper per 3 hours.
-- **Why it matters:** about 15 fixes since the last fresh paper that needed them, none proven. A real rate needs
-  about 20-30 papers.
-- **What would help:** a ready pool of documented gaps (ML Reproducibility Challenge reports, author-confirmed GitHub
-  issues), collected in advance.
+Evidence base: 8 sealed blind papers. Causes that are settings: 4 (1 correct, 1 partial, 1 close miss, 1 wrong
+before the cap). Causes that are code, evaluation or library: 4 (none found). In all three batch-5 misses the
+information that answers the case was already in data GapFinder had collected.
 
-### 6.2 The harness is still mostly built by hand
-- **Evidence:** the experiment ran unaided on about 2 of the last 6 repos. Every harness needed a person or agent
-  for the data, the table-cell command, the parser and the scaling (section 4).
-- **Why it matters:** "any paper" breaks here first, and it is a bias risk.
+### 6.1 The hypothesis space is settings only
+- GapFinder searches flags, config values, literal constants and a few switches.
+- Missed classes: evaluation and reporting choices (b5b: the paper reports the best epoch chosen with the labels),
+  code defects (b5a: edges counted twice), library API drift (b5c: a renamed parameter silently dropped), data
+  pipeline switches (SparseTSF: `drop_last`).
 
-### 6.3 Causes outside what GapFinder can change
-- It changes settings, constants, switches and some scoring rules.
-- It can't test:
-  - a model or algorithm written differently (only `gapfinder diff`, which needs reference code);
-  - data preprocessing differences (filtering, splits, normalisation);
-  - library version behaviour.
-- These are common real causes, and they get "Unexplained" at best.
+### 6.2 Equally good fits: it picks the wrong one
+- FastGCN (lr 0.005 against 0.001), GraphMAE (a wrong setting), b5a (a decoy that hit the number exactly, among 14
+  fits). Ties are broken on the target alone; deterministic programs make the noise band the floor.
 
-### 6.4 Few reported numbers mean many equally good answers
-- **Evidence:** planted causes, 1 claim 3/11 against 8 claims 6/8. Real targets often have 1-2 numbers.
-- **Not built:** the paper's learning curves and figures as extra claims.
+### 6.3 Paper reading is unreliable
+- Claims dropped as ungrounded: 57 of 67 (b5a), 48 of 95 (b5b), 24 of 58 (b5c). Missing table cells (RippleNet's
+  Table 3); garbled conditions (RippleNet's Tables 4-5). Claims for batch-5 had to come from the sealer's case.md.
 
-### 6.5 CPU only, 3.9 GB, one hour per piece
-- Most modern papers need a GPU, so they can't be tested.
-- Shards and segments help slow papers; nothing helps models that need a GPU or more memory.
+### 6.4 Paper terms are not linked to code by meaning
+- λ1 against `--l2_weight` (RippleNet), "% perturbed edges" against `--perturb_ratio` (b5a): name matching only.
 
-### 6.6 Paper reading still misses things
-- **Evidence:** RippleNet's λ1 and GraphMAE's appendix (both fixed, untested).
-- Not followed: "as in [X]" to the cited paper (AutoReproduce's paper lineage).
+### 6.5 Only simple code changes can be tested
+- Literal swaps and a few operation swaps. Not: loop bounds (`range(200)`), structure (early stopping, averaging),
+  arithmetic (`x / 2`), keyword routing.
 
-### 6.7 Flawed-but-reproducing papers are only partly covered
-- Tested now: test-score selection, label-based edits, evaluation switches.
-- Undetected: normalising with test-set statistics, test data leaking into preprocessing, reporting the best of many
-  seeds.
+### 6.6 The harness needs a person on harder repos
+- Two-command experiments (b5a), ambiguous printed lines (b5b), command choice (b5c), memory-heavy parallel copies,
+  scripts whose settings live in code (b5c); env-build gave up wrongly (no CPU shim in its own steps) and reported the
+  wrong checkpoint on failure; the default CPU-time limit (300 s) killed long runs.
 
-### 6.8 When it is right, it still sounds unsure
-- **Evidence:** Fair Clustering's λ=100 was right but "Fits but unsupported", because the paper's stated (wrong)
-  value was the only evidence.
-- It needs a clear label for "this value fits every claim, and the paper's stated value was run and doesn't".
-
-### 6.9 Noise is modelled only from seeds
-- **Evidence:** one planted miss came from noise that grows with the configuration.
-- Variance from data splits isn't modelled (Bouthillier et al.).
-
-### 6.10 Budget
-- About $1.30 left under the cap: 2-3 more papers' ledgers.
-- Planted-cause testing costs $0.
-
-**What would move it most:**
-1. a pool of 20+ documented gaps (6.1);
-2. an end-to-end harness builder, especially data and the table-cell command (6.2, section 4);
-3. figures and curves as claims (6.4);
-4. GPU access (6.5, a platform question).
-
-6.3 and 6.7 are the hardest: they need understanding of code structure and data pipelines.
+### 6.7 Evaluation size and 6.8 machine and budget
+- Owned by the project owner (2026-10-20): more sealed papers and more budget.
 
 ---
 
-## 7. Next work (agreed 2026-10-19; status kept up to date here)
+## 7. Work plans (status kept up to date here)
+
+7.1 and 7.2: the plan of 2026-10-19 (done). 7.3: the plan of 2026-10-20.
 
 From the owner's 10-bottleneck plan, after a web check. Each item names its bottleneck (section 6) and why it is
 allowed under the no-patching rule: a recurring class, a published method, or plumbing/measurement.
@@ -320,6 +297,121 @@ allowed under the no-patching rule: a recurring class, a published method, or pl
 | A penalty on configurations whose spread grows | Measured harmful: the true cause often raises the spread too |
 | Curve extraction from vector PDFs (for now) | No validated accuracy; arXiv source covers about 93% of papers |
 | Reproducibility-challenge reports as the main source | Measured near-zero yield; secondary only |
+
+### 7.3 Plan of 2026-10-20: bottlenecks 6.1-6.6 (status kept here)
+
+Rules for every item:
+- **Allowed as:** a published method or a class seen on two or more papers (2.1).
+- **Acceptance test:** a new instance of the class (a toy or a planted case), never the batch-5 case that revealed it.
+- **Regression check:** the dev suite (69 cases, $0) shows no loss and still 0 confidently wrong.
+- **Progress:** measured only on fresh sealed papers.
+
+Ordered by dependency; each line is one commit or more.
+
+#### D1. A differential diagnosis over cause classes (6.1)
+
+The baseline from the sources:
+- the irreproducibility taxonomies (Gundersen & Kirkpatrick 2022; Liao et al. 2021);
+- sequential diagnosis that orders tests by value of information (MAI-DxO 2025; Singh et al. 2025).
+
+Beyond them: explicit Bayesian bookkeeping over measured likelihoods instead of an LLM panel; a cost per test; an
+"outside every class" hypothesis that keeps prior mass (the honest label); an adversarial step that searches for the
+best rival before any confident label.
+
+| ID | Item | Design | Acceptance | Status |
+|---|---|---|---|---|
+| D1.1 | Diagnosis core | `gapfinder/diagnose/`: hypotheses (class, changes or transform, prior, evidence, posterior); probes per class (applicability, cost, likelihood from all claims with a model-discrepancy term); a scheduler by expected information per cost, batched for parallel Sandboxes, adaptive stop; the settings search becomes one probe family; the report becomes a ranked differential (top 3, evidence, how to check) | a toy where the true cause is in each class in turn, with decoys in the others: the true class ranked first, and in the top 3 on every toy | |
+| D1.2 | Reporting probes, zero runs | the emitter reports, per claim and run, the final, best (by direction), best-by-validation, last-k mean and argbest epoch; across runs the mean, median and max-of-N with order-statistics likelihoods ("Show your work", Dodge et al. 2019). Hypotheses: best epoch chosen with the test labels (a flaw), best-by-validation (a protocol difference), best of N seeds, another aggregate | toys for each, including a legitimate early-stopping one that must not be called a flaw | |
+| D1.3 | Library drift: time-travel environment | the paper-date environment resolved by the resolver itself (`uv pip install --exclude-newer <date>`), including the repository's own package when it is on PyPI, in a separate target, one knob | a toy package with two releases whose default changes | |
+| D1.4 | Library drift: which package, which release | delta debugging (ddmin) over the packages whose versions differ, then binary search over that package's releases between the paper's and the installed | a toy with two drifting packages, one of them a decoy | |
+| D1.5 | Library drift: which parameter | at every call site the entry closure executes, the callee's signature under both releases (imported in the VM): removed or renamed parameters, changed defaults, keywords that land in `**kwargs` and are never read (a runtime check that records reads) | a toy with a renamed keyword swallowed by `**kwargs`, and one with a changed default | |
+| D1.6 | Data-pipeline probes | mutation operators tagged "data": `drop_last`, `shuffle`, split fractions, normalisation fit on train versus all, filtering thresholds; existing leakage checks feed priors | a toy whose test loader drops the last batch | |
+
+#### D2. Discriminating experiments (6.2)
+
+The baseline from the sources: Bayesian optimal design for model discrimination, i.e. the mutual information
+between the hypothesis and the outcome (Box & Hill; T-optimality; the 2024 survey; classifier-based estimators;
+EGIG under misspecification, Catanach & Das).
+
+Beyond them: a transfer surrogate learned from the runs already made, predicting a candidate's value under another
+reported condition without simulating it; batch selection for parallel runs; only conditions the paper reports
+count as evidence.
+
+| ID | Item | Design | Acceptance | Status |
+|---|---|---|---|---|
+| D2.1 | Condition knobs | the harness turns the dataset flag (and other claim-defining flags) into condition knobs, so claims on other rows (other datasets, other budgets) become claims at fixed conditions (`Target.at`) | a toy with two datasets where one candidate fits both | |
+| D2.2 | Discrimination scheduler | when 2 or more hypotheses are within the equivalence threshold: the predictive distribution per hypothesis and condition (transfer surrogate plus run noise plus discrepancy), the expected information gain per cost, greedy batch selection, posterior update; the posterior includes priors (paper-stated values, round numbers, code evidence) | equifinal toys (two settings, three settings with one decoy hitting the target exactly): the truth ranked first | |
+| D2.3 | Exact-hit decoy guard | a likelihood with a model-discrepancy floor, so an exact hit can't beat the truth on the target alone; ties go to the held-outs | the exact-hit toy | |
+| D2.4 | Scale hypotheses on swept knobs | when claims sweep a knob, fit the paper's v = the code's g(v) for g in {c·v, v + c, v^c}, with c snapped to paper-meaningful values (2, 10, 100, 1/2...); verify by running g at every point; feeds D5's operators | a toy with a percent-against-fraction knob and one with a doubled count | |
+
+#### D3. Paper reading (6.3)
+
+The baseline from the sources: vision models for table structure and LLMs for cell text (XLLM 2025); LLMs
+hallucinate cells (DTBench); LLM grading agrees with humans at r = 0.93 (Horn & Keuper 2026).
+
+Beyond them: claims built deterministically from the table grid (the LLM only labels coordinates and never writes a
+number); two independent grids (LaTeX and PDF) reconciled cell by cell.
+
+| ID | Item | Design | Acceptance | Status |
+|---|---|---|---|---|
+| D3.1 | Numeric grounding | a claim is grounded when its number (in any spelling: 0.729, 72.9, 72.9%) appears in the quoted window or in its table's cells; fuzzy quote matching | re-grounding the cached ledgers recovers dropped true claims, adds no false ones (checked against LaTeX tables) | |
+| D3.2 | Table grids | LaTeX tables with `\multicolumn`/`\multirow` to grids with header rows and columns; PDF tables via PyMuPDF's table finder; mean±std and bold parsed | grid tests on the cached sources | |
+| D3.3 | Cell claims plus LLM labels | every numeric cell is a candidate claim; Super labels which rows and columns are the paper's method, the datasets and the metrics, by coordinate; conditions from the headers | recall of Table 3/4/5 cells on RippleNet, GraphMAE and b5a against the LaTeX ground truth | |
+| D3.4 | Double entry | LaTeX and PDF grids reconciled; prose claims from two independent passes, agreement kept, disagreement flagged | mismatches injected into a grid are found | |
+| D3.5 | Recall harness | `eval/claims_recall.py` scores any extractor against LaTeX ground truth, with an LLM judge for header semantics | runs on the cached papers | |
+
+#### D4. Paper-to-code links (6.4)
+
+The baseline from the sources: LiSSA (RAG plus LLM, ICSE 2025); Alor et al. 2025 (LLM F1 around 80%; most false links
+come from naming assumptions).
+
+Beyond them: every link verified by execution, with a dry run perturbing the candidate and the trace showing the
+value reaching a sink of the right role.
+
+| ID | Item | Design | Acceptance | Status |
+|---|---|---|---|---|
+| D4.1 | Candidate retrieval | paper terms with their definitions (LaTeX "where λ1 is the L2 weight", table headers); code entities (flags with help text, config keys, named literals, parameters with defaults and comments); BM25 over split identifiers plus an ML synonym lexicon | recall of the true flag in the top 5 on a link set built from the dev-set specs | |
+| D4.2 | LLM adjudication | Super chooses among the retrieved candidates with quotes, or none | precision and recall on the same link set | |
+| D4.3 | Lesion verification | a dry run with the candidate changed; its trace must show the value reaching a sink of the term's role (a rate to an optimiser, a weight to a loss term, a ratio to a count); links failing it are dropped | a toy with a name decoy (a flag named like the term that feeds something else) | |
+| D4.4 | Use everywhere | links feed the assumptions' knob names, the claims at fixed conditions (D2.1) and the reporting of stated values | the end-to-end toy | |
+
+#### D5. Code-change localisation (6.5)
+
+The baseline from the sources: mutation-based fault localisation (MUSE, Metallaxis; FLIM 2025 on interference
+mutants); metamorphic testing of ML code (Murphy et al.; Dwarakanath et al. 2018, 71% of bugs).
+
+Beyond them:
+- the "failing test" is the paper's whole set of claims, scored by history matching;
+- sites restricted to executed lines on the data flow of the swept knob or of the metric (trace coverage plus a
+  slice);
+- operators from the metamorphic relations D2.4 finds;
+- interference mitigation by held-out validation and invariants (claims the cause must not move).
+
+| ID | Item | Design | Acceptance | Status |
+|---|---|---|---|---|
+| D5.1 | A general mutation hook | node-addressed AST edits (file, line, column, node kind, operator) in the in-memory patch hook: constants ×2 ÷2 ×10 ÷10 ±1, range and loop bounds, reductions (mean/sum/max, torch/numpy/tf, functions and methods), `dim`/`axis`, comparisons, boolean keywords, keyword routing (pass a swallowed keyword as the parameter it maps to) | unit tests per operator; the repo on disk never changes | |
+| D5.2 | Site selection | executed lines from the runtime trace; a static slice from the swept knob and from the metric's computation; ranking by distance | the slice of a toy's knob contains its budget line | |
+| D5.3 | Mutation localisation and screening | successive halving over the mutants (one run each, then repeats for the best); score = gain in joint fit over every claim; interference control (screen on the target, validate on the held-outs, invariant claims must not move, minimal edits first, D2.4-derived operators first) | toys: an edge counted twice, a mean that should be a sum, an off-by-one loop bound; each found, no confident label on a decoy mutant | |
+| D5.4 | Reporting | a mutant that fits is a code lead with its diff and evidence, never "Explained" | report tests | |
+
+#### D6. Harness (6.6)
+
+The baseline from the sources: Repo2Run (86% of 420 projects, NeurIPS 2025); ResearchEnvBench 2026 (verification by
+running); PIPer 2025.
+
+| ID | Item | Design | Acceptance | Status |
+|---|---|---|---|---|
+| D6.1 | CPU shim in every env-build step | the shim's environment and files on every command, not only the goal | a toy that calls `.cuda()` in its import path | |
+| D6.2 | Failure reporting | env-build returns its last good checkpoint; `env_build.json` is written in the harness folder; an infrastructure error at any harness step writes HARNESS.md with the step | tests | |
+| D6.3 | CPU-time limit from the timeout | `ulimit -t` = timeout × vCPUs × 1.2 unless set | test | |
+| D6.4 | Memory-aware parallelism | the smoke run measures each copy's peak memory; parallel copies = floor(0.8 × 3.9 GB / peak) | a toy that allocates 1.5 GB | |
+| D6.5 | README procedure graph | Super reads the README's blocks and prose into ordered steps grounded to verbatim commands (setup, data, train, evaluate) with the files each writes and reads; the cell is the chain ending at the step whose output binds the claims; knobs from every python step (prefixed on collision); verified by running | toys: train then evaluate; preprocess, train, attack | |
+| D6.6 | Binding by quote | when the binder ties, Super chooses with a quoted paper sentence ("we choose distribution Z"); no quote, no binding (never by closeness to the paper's number) | a toy with Z/Q lines and a paper sentence | |
+| D6.7 | Literals as knobs | when a script exposes few flags, the named literals the run executes (trace roles: epochs, rate, size, weight, count) become patch knobs in the spec | a toy whose settings are module constants | |
+
+**Order:** D6.1-D6.3 (small), D1.1-D1.2, D2.4 with D5.1-D5.4, D1.3-D1.6, D2.1-D2.3, D3, D4, D6.4-D6.7; then the dev
+suite, the planted benchmark and a fresh sealed batch.
+
 
 ## 8. Where things are
 
