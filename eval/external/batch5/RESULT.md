@@ -6,6 +6,7 @@ was opened; each key matched its sealed hash.
 | Case | Documented cause | GapFinder | Score (the key's pre-registered rule) |
 |---|---|---|---|
 | **b5a** Topology Attack and Defense for GNNs (IJCAI 2019), Cora, CE-PGD | `attack.py` counts each undirected edge twice (`total_edges = adj.data.shape[0]`), so the attack budget is twice the paper's. Flag equivalent: `--perturb_ratio` at half the paper's value (0.025 for the 5% target). Owner confirmed in issue #6 | **Fits but unsupported, `dropout = 0.5`** (gap -5.1% -> +0.0%). The true value `perturb_ratio = 0.03` was measured, fit the target (+1.1%), and is listed as a lead and in the 14-configuration equivalence set | **miss** (not confidently wrong): the equivalence set is larger than 3, and the reported answer is a decoy |
+| **b5b** Structural Deep Clustering Network (WWW 2020), ACM | (sealed: key not opened) | **harness failed at the command step** (the frozen harness's own steps, run locally; not run in Sandboxes) | not scored; the key stays sealed so the case can be run blind once the harness reads these formats |
 
 Run committed in `6c9e89c` before the key was opened (hash `9022bd01...88e9`, matches).
 
@@ -28,6 +29,20 @@ Run committed in `6c9e89c` before the key was opened (hash `9022bd01...88e9`, ma
      unsupported".
 3. **A deterministic program.** All 5 naive runs gave 0.684, so the noise band is the floor and 14
    configurations are statistically indistinguishable on the target alone.
+
+## b5b: the harness could not be built (two formats it does not read)
+
+Run on the frozen code's own deterministic steps (claims, command, template, binder), locally, at no cost:
+- **The README lists the datasets as alternatives:** `python sdcn.py --name [usps|hhar|reut|acm|dblp|cite]`. The
+  dataset flag is called `--name`, which the harness treats as how-to-run, so the whole bracket was kept as the
+  value (`--name '[usps|hhar|reut|acm|dblp|cite]'`). Class: README placeholders and alternatives (`[a|b|c]`,
+  `{a,b}`, `<dataset>`), and dataset flags with other names.
+- **The program prints `199Z :acc 0.9045 , nmi 0.6831 , ari 0.7391 , f1 0.9042`:** a label then a space then the
+  number. The binder reads `label: value` and `label = value` only, so it finds no number. Class: metrics printed
+  without a separator.
+- Env-build would have spent Super calls on a goal command that can't work, so the case was not run in Sandboxes.
+  Per the protocol it is not built by hand. Its key is still sealed: once the harness reads both formats, b5b can
+  be run blind in a later batch.
 
 ## The automatic harness on its first unseen repo
 
