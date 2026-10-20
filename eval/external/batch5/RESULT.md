@@ -6,10 +6,12 @@ was opened; each key matched its sealed hash.
 | Case | Documented cause | GapFinder | Score (the key's pre-registered rule) |
 |---|---|---|---|
 | **b5a** Topology Attack and Defense for GNNs (IJCAI 2019), Cora, CE-PGD | `attack.py` counts each undirected edge twice (`total_edges = adj.data.shape[0]`), so the attack budget is twice the paper's. Flag equivalent: `--perturb_ratio` at half the paper's value (0.025 for the 5% target). Owner confirmed in issue #6 | **Fits but unsupported, `dropout = 0.5`** (gap -5.1% -> +0.0%). The true value `perturb_ratio = 0.03` was measured, fit the target (+1.1%), and is listed as a lead and in the 14-configuration equivalence set | **miss** (not confidently wrong): the equivalence set is larger than 3, and the reported answer is a decoy |
-| **b5b** Structural Deep Clustering Network (WWW 2020), ACM | (sealed: key not opened) | **harness failed at the command step** (the frozen harness's own steps, run locally; not run in Sandboxes) | not scored; the key stays sealed so the case can be run blind once the harness reads these formats |
-| **b5c** BOND (NeurIPS 2022 D&B), DOMINANT on inj_cora | (sealed: key not opened) | **harness failed at the command step** (frozen harness steps, run locally; not run in Sandboxes) | not scored; key kept sealed |
+| **b5b** Structural Deep Clustering Network (WWW 2020), ACM | The paper reports each run's **best epoch** by the label-based metrics (the code evaluates against the true labels every epoch); the README run read at its last epoch is about 2 ACC / 4 NMI points lower. Not a flag (issue #23) | **Unexplained**, out-of-space likely (134 runs, 18 code patches); leads: unexposed constants and the paper's 50 epochs (a decoy) | **miss** (not confidently wrong): out of space, but it did not point at the evaluation/reporting protocol |
+| **b5c** BOND (NeurIPS 2022 D&B), DOMINANT on inj_cora | **Library API drift:** PyGOD 0.3.1's `alpha=None` auto-balanced DOMINANT's attribute/structure weight (about 0.84); in PyGOD 1.0 it is `weight`, default 0.5, and the benchmark's `alpha` is silently dropped. Fix: weight about 0.84, or PyGOD 0.3.1 (author, issue #83) | **Unexplained**, out-of-space likely (17 runs); Adam->SGD fit every claim on one run, not after repeats; structural leads: grid averaging, early stopping | **miss** (not confidently wrong): out of space, but not attributed to a library version change |
 
-Run committed in `6c9e89c` before the key was opened (hash `9022bd01...88e9`, matches).
+Runs committed before their keys were opened: b5a in `6c9e89c` (hash `9022bd01...`), b5b and b5c in `1b7d102` (hashes `f8252f52...`, `9b25aaef...`); all three match.
+
+**Batch-5 in one line: 3 papers searched, 0 correct, 0 partial, 0 confidently wrong.** Each miss has a different, specific reason (below), and in each the run already held the information the answer needed.
 
 ## b5a: why it missed (each is a class; fixed after the batch, measured on the next one)
 
@@ -77,6 +79,33 @@ failure env-build reports its starting checkpoint instead of the last good one; 
 smoke run crashes the harness without writing HARNESS.md; the default CPU-time limit (300 s) should follow the
 run's timeout instead.
 
+## b5b: why it missed
+
+- **Best-epoch reporting with the labels.** SDCN prints its Z metrics after every epoch; the paper's numbers are
+  each run's maximum over epochs (selected with the true labels), the harness bound the last epoch ("final before
+  best"). The per-run maximum was in every run's log: comparing the paper's number with the final value and with the
+  best epoch costs no run. GapFinder's protocol tests look for selection by test score inside the code; here the
+  selection happened when the authors read the output.
+- The 50-epoch difference it reported is the key's listed decoy (epoch 49 is still far off).
+
+## b5c: why it missed
+
+- **The library under test is the repository itself.** The paper-year knob (item 19) pins the imported packages to
+  their releases before the paper's date, but PyGOD is installed from the checkout, so it was not pinned; PyGOD 0.3.1
+  (the paper's version, and the author's stated fix) was never tried.
+- **A keyword argument silently swallowed after an API rename.** `benchmark/utils.py` passes `alpha=` to `DOMINANT`,
+  whose signature now names `weight` and forwards the rest into `**kwargs`. A static check for keyword arguments a
+  callee does not name (and only forwards) would point at it; none exists.
+- Only 17 runs: the script exposes no settings, so the search had the paper-year knob and the patch round only.
+
+## Lessons for after the batch (each seen once here; proposals, not implemented)
+
+| Case | Class | A test that would have caught it |
+|---|---|---|
+| b5a | A setting's unit or scale differs between paper and code (an edge counted twice) | When claims sweep a knob, fit a scale c (paper v = code c x v) on the target and check it on every point |
+| b5b | The paper's number is the best epoch chosen with the labels | From the per-epoch log of the same runs: does the paper's number match the best epoch rather than the last? (no extra runs) |
+| b5c | Library API drift in the code's own package | The paper-year knob also installs the repository's own package as released before the paper (when it is on PyPI); a static check for swallowed keyword arguments |
+
 ## The automatic harness on its first unseen repo
 
 - It got to a spec with one recorded change: `--repeats 5` (the paper's 5 splits) ran 4 copies in parallel and
@@ -96,5 +125,8 @@ run's timeout instead.
 | Case | Ledger | Environment | Search | Total |
 |---|---|---|---|---|
 | b5a | $0.159 | $0.015 | $0.002 | $0.18 |
+| b5b | $0.292 | $0.014 | $0.003 | $0.31 |
+| b5c | $0.199 | $0.022 | $0.001 | $0.22 |
+| **batch** | | | | **$0.71** |
 
 Sandboxes: 150 search runs, unbilled.
