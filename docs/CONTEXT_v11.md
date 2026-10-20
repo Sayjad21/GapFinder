@@ -155,9 +155,13 @@ agent has no say in what the search tests.**
 | **Variational Fair Clustering** (batch-3) | `92b1faa` | the paper's λ=10 is wrong; the authors' value is 100 | **λ=100**, all four K-means claims exact | **correct** (labelled Fits but unsupported) |
 | SparseTSF (batch-3) | `92b1faa` | `drop_last=True` in the test loader | Reproduced (-0.4%) | missed (correct abstention) |
 | **RippleNet** (batch-4) | `bae25f4` | README runs MovieLens settings; needs lr 1e-3 and l2_weight 1e-5 | **lr=0.001**; l2 missed (budget) | **partial** |
+| GCN topology attack (b5a, batch-5) | `0586e5c` | the attack budget counts each edge twice (`--perturb_ratio` at half) | Fits but unsupported, dropout=0.5 (the true value was a lead) | missed |
+| SDCN (b5b, batch-5) | `74b1fd1`, `e925a0f` | the paper reports the best epoch by the labels | Unexplained, out of space | missed |
+| BOND / DOMINANT (b5c, batch-5) | `74b1fd1`, `e925a0f` | PyGOD API drift: the auto-balanced `alpha` silently dropped | Unexplained, out of space | missed |
 
-**1 correct, 1 partial, 2 missed, 1 confidently wrong.** Nothing has been confidently wrong since the confidence cap
-went in. The last three blind papers give 1.5 causes found.
+**1 correct, 1 partial, 5 missed, 1 confidently wrong** (8 papers). Nothing has been confidently wrong since the
+confidence cap went in. Batch-5 (the first blind cases with the automatic harness) found none of 3; each miss is a
+different class whose answer was already in the run's data (eval/external/batch5/RESULT.md).
 
 ### 5.2 Frozen dev batches (known causes, not shown to the harness writers)
 
