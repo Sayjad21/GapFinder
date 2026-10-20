@@ -287,6 +287,7 @@ def _find_bash() -> str:
 # ===================================================================== contree
 
 POLL_RETRIES = 12  # status polls retried on a server or transport error, about 6 minutes in all
+VCPUS = 4  # a Sandboxes VM
 
 
 def _retry_status_polls(sdk) -> None:
@@ -362,7 +363,9 @@ class ContreeBackend(SandboxBackend):
         budget.check(0.0, "sandbox run", kind="sandbox")  # cost isn't known up front: refuse at the guard
         # The cap can't stop a run already executing, and billing is per CPU-second, so every
         # process in the run gets a CPU-time limit: a runaway gets killed instead of draining credits.
-        cpu_limit = int(os.environ.get("GF_SANDBOX_CPU_LIMIT_S", "300"))
+        # Unset, the limit follows the run's own timeout (4 vCPUs fully busy, plus 20%): a fixed 300 s killed every
+        # multi-threaded run longer than about 75 s (batch-5: SDCN at epoch 45 of 200, with 3.4 GB free)
+        cpu_limit = int(os.environ.get("GF_SANDBOX_CPU_LIMIT_S") or max(300, int(timeout * VCPUS * 1.2)))
         shell = f"ulimit -t {cpu_limit}; {shell}"
         res = await self._run(parent, shell, env=env, timeout=timeout, disposable=disposable, files=files)
         if res.resources.cost_usd:

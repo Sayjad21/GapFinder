@@ -117,3 +117,42 @@ def test_readme_prose_after_a_command_is_dropped_and_a_cd_line_kept(tmp_path):
     assert readme_command(tmp_path) == "cd src && python preprocess.py --dataset movie"
     (tmp_path / "README.md").write_text("Run:\n\n    python run.py --lr 0.1  # the default\n", encoding="utf-8")
     assert readme_command(tmp_path) == "python run.py --lr 0.1"
+
+
+async def test_every_step_runs_with_the_cpu_shim_and_no_pip_cache(tmp_path):
+    """Plan D6.1/D7.5: the model's own steps see the shim's environment and hook (b5b's env-build gave up on a
+    `.cuda()` error the shim removes), and pip runs without a wheel cache."""
+    root = _repo(tmp_path)
+    answers = iter([NextStep(command='env > seen.txt; ls .gf_runtime >> seen.txt; '
+                                     'mkdir -p src/toylib && touch src/toylib/__init__.py src/toylib/core.py')])
+
+    class FakeRouter:
+        meter = type("Meter", (), {"total_cost": lambda self: 0.0})()
+
+        async def structured(self, tier, messages, schema):
+            assert "CPU shim" in messages[0]["content"]  # the model is told
+            return next(answers)
+
+    res = await build_env(FakeRouter(), LocalBackend(tmp_path / "sbx"), root, image="python:3.12-slim", max_steps=3)
+    assert res.ok, res.reason
+    seen = (tmp_path / "sbx" / "images" / res.checkpoint / "seen.txt").read_text(encoding="utf-8")
+    assert "PIP_NO_CACHE_DIR=1" in seen and "MALLOC_ARENA_MAX=2" in seen and "sitecustomize.py" in seen
+    assert ".gf_runtime" in seen.split("PYTHONPATH=")[1].split("\n")[0]
+    assert res.recipe == ['env > seen.txt; ls .gf_runtime >> seen.txt; '
+                          'mkdir -p src/toylib && touch src/toylib/__init__.py src/toylib/core.py']  # without the prefix
+
+
+async def test_a_failed_build_keeps_its_last_good_checkpoint(tmp_path):
+    """Plan D6.2: on failure the result holds the last checkpoint that a step built, not the fresh checkout."""
+    root = _repo(tmp_path)
+    answers = iter([NextStep(command="touch made_by_step_1.txt"), NextStep(give_up="stop here")])
+
+    class FakeRouter:
+        meter = type("Meter", (), {"total_cost": lambda self: 0.0})()
+
+        async def structured(self, tier, messages, schema):
+            return next(answers)
+
+    res = await build_env(FakeRouter(), LocalBackend(tmp_path / "sbx"), root, image="python:3.12-slim", max_steps=4)
+    assert not res.ok and "stop here" in res.reason
+    assert (tmp_path / "sbx" / "images" / res.checkpoint / "made_by_step_1.txt").exists()

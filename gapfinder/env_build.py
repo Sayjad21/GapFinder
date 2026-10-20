@@ -73,7 +73,9 @@ Give ONE next shell command (it may chain a few steps with &&). Pin versions tha
 when the build files don't (e.g. tensorflow==1.15.5 for a 2018 TensorFlow 1 repo); prefer pip wheels over
 compiling; use `pip install --no-cache-dir`. You are root: system packages and tools come from
 `apt-get update && apt-get install -y --no-install-recommends <packages>` (a missing command such as `free`,
-`wget` or `unzip`, or a library a wheel needs). Do not edit the repository's source files. If the goal can't be
+`wget` or `unzip`, or a library a wheel needs). Every command and check runs with a CPU shim: `.cuda()` on tensors
+and modules is a no-op when there is no GPU and `torch.load` maps to the CPU, so a `.cuda()` call in the code is not a
+reason to give up. Do not edit the repository's source files. If the goal can't be
 reached in this VM (e.g. it needs a GPU-only package), set "give_up" with the reason. If the base image itself is
 the problem (its Python version can't install what the code needs), set "switch_image" to another image from
 this list instead: {images}. The VM then restarts from a fresh checkout on that image; this history is kept."""
@@ -404,7 +406,8 @@ async def _start(backend, root: Path, image: str, fetch: str | None) -> tuple[st
 
 async def build_env(router, backend, root: str | Path, *, fetch: str | None = None, image: str | None = None,
                     date: str | None = None, max_steps: int = 12, goal: str | None = None,
-                    goal_timeout: float = 1800, goal_files: dict[str, bytes] | None = None) -> EnvResult:
+                    goal_timeout: float = 1800, goal_files: dict[str, bytes] | None = None,
+                    shim: bool = True) -> EnvResult:
     """`root`: a local checkout (read for imports and build files). `fetch`: a shell command that puts the repo
     at /work in the VM (None: the backend's base is the checkout itself, as on the local backend). `goal`: a
     command that must also exit 0 once the imports load (e.g. a short run of the experiment), so system tools
@@ -413,8 +416,23 @@ async def build_env(router, backend, root: str | Path, *, fetch: str | None = No
 
     The model may ask for another base image when the first can't work (VGAE and GAT in the first env bench:
     TensorFlow 1 has no wheels for the Python it picked, and the loop could only give up). The VM restarts from a
-    fresh checkout on that image, at most MAX_IMAGE_SWITCHES times; the history goes along."""
+    fresh checkout on that image, at most MAX_IMAGE_SWITCHES times; the history goes along.
+
+    `shim`: every command (the import check, the goal and each step) runs with the CPU shim, as the searches' runs
+    do. Without it the model's own test steps saw `.cuda()` fail and gave up on a repo that runs on the CPU under
+    the shim (batch-5 b5b). On failure the result holds the last good checkpoint, not the starting one."""
     root = Path(root)
+    senv, sfiles, sprefix = {}, {}, ""
+    if shim:
+        from gapfinder.sandbox import runtime_shim
+
+        senv, sfiles, sprefix = runtime_shim.run_parts()
+    senv = {**senv, "PIP_NO_CACHE_DIR": "1"}  # no wheel cache: a 700 MB torch wheel twice over fills a 3.9 GB VM
+
+    async def run_shimmed(at, command, **kw):
+        files = {**sfiles, **(kw.pop("files", None) or {})}
+        return await _run(backend, at, sprefix + command, env=senv or None, files=files or None, **kw)
+
     date = date or commit_date(root)
     scripts = entry_scripts(root)
     modules = third_party_imports(root, scripts)
@@ -432,11 +450,11 @@ async def build_env(router, backend, root: str | Path, *, fetch: str | None = No
     tried = [image]
     check = check_command(modules, dirs)
     for _ in range(max_steps + MAX_IMAGE_SWITCHES + 1):
-        c = await _run(backend, ckpt, check, timeout=600, disposable=True)
+        c = await run_shimmed(ckpt, check, timeout=600, disposable=True)
         out = _tail((c.stdout or "") + (c.stderr or ""))
         if c.exit_code == 0 and goal:
             # imports load; the run's own command must work too (PatchTST's smoke needed `free`, a system tool)
-            g = await _run(backend, ckpt, goal, timeout=goal_timeout, disposable=True, files=goal_files)
+            g = await run_shimmed(ckpt, goal, timeout=goal_timeout, disposable=True, files=goal_files)
             if g.exit_code != 0:
                 c = g
                 out = "the imports load, but the goal command failed (exit %d):\n%s" % (
@@ -468,12 +486,14 @@ async def build_env(router, backend, root: str | Path, *, fetch: str | None = No
             res.reason = f"the model gave up: {step.give_up or 'no command'}"
             break
         t = time.monotonic()
-        r = await _run(backend, ckpt, step.command, timeout=STEP_TIMEOUT_S, disposable=False)
+        r = await run_shimmed(ckpt, step.command, timeout=STEP_TIMEOUT_S, disposable=False)
         ok = r.exit_code == 0 and bool(r.checkpoint)
         res.steps.append(StepRecord(step.command, r.exit_code, ok, _tail((r.stdout or "") + (r.stderr or ""), 1500),
                                     round(time.monotonic() - t, 1), step.why, image=image))
         if ok:
             ckpt = r.checkpoint
+    if not res.ok:
+        res.checkpoint = ckpt  # the last good one (the steps that worked are kept), not the fresh checkout
     res.cost_usd = (router.meter.total_cost() - before) if router is not None else 0.0
     return res
 

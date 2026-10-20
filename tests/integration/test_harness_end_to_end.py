@@ -131,3 +131,28 @@ async def test_shard_mean_averages_repeats_run_as_shards(tmp_path):
     spec = HarnessSpec.load_yaml(tmp_path / "s.yaml")
     branch = await Orchestrator(LocalBackend(tmp_path / "sbx"), spec, EventLog(tmp_path / "ev.jsonl")).run_branch({})
     assert abs(branch.parsed_metrics["acc"] - 0.3) < 1e-9 and branch.parsed_metrics["f1"] == 0.5
+
+
+async def test_an_infrastructure_error_writes_harness_md_with_the_step(tmp_path):
+    """Plan D6.2: a Sandboxes failure mid-harness (b5c: HTTP 500 in the smoke run) leaves a HARNESS.md that names
+    the step, instead of a crash with no record."""
+    from gapfinder.sandbox.backend import InfraError
+
+    repo = _toy(tmp_path / "toy")
+    backend = LocalBackend(tmp_path / "sbx")
+    env = await backend.base("local:" + str(repo))
+    real = backend.run
+    calls = {"n": 0}
+
+    async def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 2:  # the data step passes, the smoke run fails
+            raise InfraError("ApiStatusCodeError(status=500, error='Internal Server Error')")
+        return await real(*a, **k)
+
+    backend.run = flaky
+    out = tmp_path / "h"
+    r = await build_harness(None, backend, repo=None, commit=None, local=repo, ledger=LEDGER, target="C1", out=out,
+                            repeats=1, smoke_timeout=60, env_checkpoint=env)
+    md = (out / "HARNESS.md").read_text(encoding="utf-8")
+    assert not r.ok and r.stage == "smoke" and "infrastructure error" in r.reason and "status=500" in md

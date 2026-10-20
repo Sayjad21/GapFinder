@@ -772,7 +772,7 @@ def harness_markdown(r: HarnessResult) -> str:
               "value on top of each candidate; a learning-curve point is read from the same run's per-epoch log.", ""]
         L += [f"- {p['claim_id']}: {p['metric']} {p['paper_value']:g} at "
               + ", ".join(f"`{k}={v}`" for k, v in p["at"].items()) for p in r.points]
-        L += [f"- {c['claim_id']}: {c['metric']} {c['paper_value']:g} at epoch {c['epoch']} (`{c['name']}`)"
+        L += [f"- {c['claim_id']}: {c['metric']} {c['paper_value']:g} at epoch {c['epoch']}" + (f" (`{c['name']}`)" if c.get("name") else " (not bound yet)")
               for c in r.curves]
         if r.unmapped:
             L += ["", "Not used (the setting's name maps to no knob; add `at` in targets.json by hand if it is one):"]
@@ -887,187 +887,205 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
         (out / "HARNESS.md").write_text(harness_markdown(r), encoding="utf-8")
         return r
 
-    if r.blockers and not force:
-        return finish("blockers", "the repo can't run on a CPU-only 3.9 GB VM (--force to try anyway)")
+    from gapfinder.sandbox.backend import InfraError
+
+    step = {"at": "blockers"}
+
+    async def run() -> HarnessResult:
+        nonlocal env_checkpoint
+        if r.blockers and not force:
+            return finish("blockers", "the repo can't run on a CPU-only 3.9 GB VM (--force to try anyway)")
+        try:
+            step["at"] = "claims"
+            r.claims = select_claims(ledger, target)
+        except (KeyError, ValueError) as e:
+            return finish("claims", str(e))
+        cmds = [Command(command, "given by the runner")] if command else \
+            [c for c in pick_commands(root, r.claims, limit=12) if re.match(r"^(cd [\w./-]+ *(&&|;) *)?python", c.cmd)]
+        # a data-preparation script is a data step, not the experiment (RippleNet's preprocess.py comes first)
+        experiments = [c for c in cmds if not _PREP.search(next((a for a in _split_command(c.cmd)[1] if a.endswith(".py")), ""))]
+        cmds = (experiments or cmds)[:5]
+        r.commands = cmds
+        if command:
+            r.notes.append(f"command given by the runner: `{command}`")
+        for cid, label in (bind or {}).items():
+            r.notes.append(f"{cid} bound to the printed label `{label}` by the runner")
+        if not cmds:
+            return finish("command", "no python command in the README or shell scripts")
+        if len(cmds) > 1 and cmds[0].score == cmds[1].score and cmds[0].score > 0 and \
+                _split_command(cmds[0].cmd)[1][:2] != _split_command(cmds[1].cmd)[1][:2]:
+            return finish("command", "two commands with different scripts match the claims equally well; pick one "
+                                     "with --command")
+        try:
+            r.templated = t = template_command(root, cmds[0].cmd, r.claims)
+        except ValueError as e:
+            return finish("template", str(e))
+        r.points, r.curves, r.unmapped = extra_claims(ledger, target, t.knobs)
+        r.downloads, r.prep = download_steps(root), prep_commands(root, cmds[0], r.claims)
+        data_steps = [d.replace("cd /work && ", "").replace("cd /work/", "cd ") for d in r.downloads] + r.prep
+        data_sh = " && ".join(f"({d})" for d in data_steps)
+        senv, sfiles, sprefix = runtime_shim.run_parts()
+        shim_env = "export " + " ".join(f"{k}={v}" for k, v in senv.items()) + "; " + sprefix
+        if env_checkpoint is None:
+            naive_one = SEED_PREFIX + t.naive.replace("$GF_SEED", "$((GF_SEED + 1))")
+            goal = shim_env + (f"cd /work && {data_sh} && " if data_sh else "") + short_run_goal(naive_one)
+            step["at"] = "env"
+            env = await build_env(router, backend, root, fetch=fetch_cmd or (fetch(repo, commit, root) if repo else None),
+                                  image=image, max_steps=max_steps, goal=goal, goal_files=sfiles)
+            r.env = env.to_dict()
+            from gapfinder.env_build import write_result
+
+            write_result(env, out / "env_build.json")  # the recipe, every step and its output, failed or not
+            if not env.ok:
+                return finish("env", env.reason)
+            env_checkpoint = env.checkpoint
+        else:
+            r.env = {"image": image or "(given)", "checkpoint": env_checkpoint, "recipe": []}
+        files = {**sfiles, f"{HARNESS_DIR}/keep_data.py": KEEP_DATA.encode(),
+                 f"{HARNESS_DIR}/emit.py": emit_script({}).encode()}
+        from gapfinder import env_year
+
+        step_a = (f'"${{PYTHON:-python}}" {HARNESS_DIR}/keep_data.py before' + (f" && {sprefix}{data_sh}" if data_sh else "")
+                  + (f"; {env_year.FREEZE}" if paper_date else ""))
+        step["at"] = "data"
+        a = await backend.run(env_checkpoint, step_a, env=senv, timeout=OPERATION_S - 100, disposable=False, files=files)
+        if a.exit_code != 0 or not a.checkpoint:
+            return finish("data", f"the data steps failed (exit {a.exit_code}): {((a.stdout or '') + (a.stderr or ''))[-800:]}")
+        one = sprefix + t.naive.replace("$GF_SEED", "$((GF_SEED + r))")
+
+        async def smoke_run(copies: int):
+            threads = "export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1; " if copies > 1 else ""
+            # `copies` runs at once (the cell's own pattern), each stopped at the smoke timeout (`timeout` exits 124)
+            smoke = (f"mkdir -p out; {threads}{SEED_PREFIX}s0=$(date +%s); pids=''; for r in $(seq 1 {copies}); do "
+                     f"(export r GF_SEED; timeout {int(smoke_timeout)} bash -c {shlex.quote(one)}) > out/run$r.log 2>&1 & "
+                     f"pids=\"$pids $!\"; done; rc=0; for p in $pids; do wait $p || rc=$?; done; echo GF_SMOKE_RC=$rc; "
+                     f"echo GF_SMOKE_S=$(( $(date +%s) - s0 )); for r in $(seq 1 {copies}); do echo GF_LOG_$r; "
+                     f"tail -c 20000 out/run$r.log; echo; done; \"${{PYTHON:-python}}\" {HARNESS_DIR}/keep_data.py after")
+            b = await backend.run(a.checkpoint, smoke, env={**senv, "RUN_TAG": "gf-harness-smoke"},
+                                  timeout=OPERATION_S - 60, disposable=False, files=None)
+            so = b.stdout or ""
+            rc = int((re.search(r"GF_SMOKE_RC=(\d+)", so) or [0, 1])[1])
+            secs = float((re.search(r"GF_SMOKE_S=(\d+)", so) or [0, 0])[1])
+            logs = re.split(r"(?m)^GF_LOG_\d+\s*$", so.split("GF_DATA_MANIFEST")[0])[1:]
+            return b, so, rc, secs, logs
+
+        step["at"] = "smoke"
+        parallel = copies = max(1, min(repeats, PARALLEL))
+        b, so, rc, secs, logs = await smoke_run(copies)
+        if copies > 1 and (not b.checkpoint or not logs or rc not in (0, 124)):
+            # copies in parallel failed (b5a: 4 TensorFlow attacks on dense 2708 x 2708 matrices, exit 120, while one
+            # copy runs): one at a time, and the cell runs its repeats one at a time too
+            failed_rc, parallel = rc, 1
+            b, so, rc, secs, logs = await smoke_run(1)
+            copies = 1
+            r.notes.append(f"{min(repeats, PARALLEL)} copies in parallel failed (exit {failed_rc}); one copy passed, so "
+                           "the cell runs its repeats one at a time")
+        r.manifest = _manifest(so)
+        r.smoke = {"copies": copies, "rc": rc, "seconds": secs, "timed_out": rc == 124}
+        if not b.checkpoint or not logs or (rc not in (0, 124)):
+            return finish("smoke", f"the smoke run failed (exit {rc}): {(logs[0] if logs else so + (b.stderr or ''))[-1200:]}")
+        r.bindings = bind_metrics(logs[0], [{"claim_id": c["claim_id"], "metric": c["metric"],
+                                             "paper_value": c["paper_value"]} for c in r.claims])
+        if bind:
+            from gapfinder.harness_auto import labelled_numbers as _ln
+
+            printed = _ln(logs[0])
+            for cid, label in bind.items():
+                if label not in printed:
+                    return finish("metrics", f"--bind {cid}={label!r}: the run printed no such label; it printed "
+                                             + ", ".join(repr(k) for k in printed))
+                c = next((x for x in r.claims if x["claim_id"] == cid), None)
+                if c is None:
+                    return finish("metrics", f"--bind {cid}: no such claim")
+                v = printed[label]
+                ratio = abs(c["paper_value"]) / abs(v) if v else 1.0
+                scale = 100.0 if 30 < ratio < 300 else 0.01 if 0.003 < ratio < 0.03 else 1.0
+                old = next((x for x in r.bindings if x.claim_id == cid), None)
+                r.bindings = [x for x in r.bindings if x.claim_id != cid] + [Binding(
+                    cid, label, v, scale, alternatives=old.alternatives if old else [],
+                    refused=f"(given by the runner{'; the binder had refused: ' + old.refused if old and old.refused else ''})")]
+        bound = {bb.claim_id: bb for bb in r.bindings if bb.label}
+        if r.claims[0]["claim_id"] not in bound:
+            return finish("metrics", "the target's number can't be bound: "
+                          + next(bb.refused for bb in r.bindings if bb.claim_id == r.claims[0]["claim_id"]))
+        from gapfinder.harness_auto import labelled_numbers
+
+        per = {}
+        for log in logs:
+            found = labelled_numbers(log)
+            for c in r.claims:
+                if c["claim_id"] in bound and bound[c["claim_id"]].label in found:
+                    per.setdefault(c["name"], []).append(found[bound[c["claim_id"]].label] * bound[c["claim_id"]].scale)
+        r.smoke["per_run_values"] = per
+        # claims at fixed knob values and learning-curve points read the label of the row claim with their metric
+        by_fam = {_family(c["metric"]): (c, bound[c["claim_id"]]) for c in reversed(r.claims) if c["claim_id"] in bound}
+        for p in r.points:
+            hit = by_fam.get(_family(p["metric"]))
+            p["name"] = hit[0]["name"] if hit else None
+        r.points = [p for p in r.points if p["name"]]
+        logged = _per_epoch(logs[0])
+        off = 1 if logged and min(logged) == 0 else 0
+        for c in r.curves:
+            hit = by_fam.get(_family(c["metric"]))
+            c["label"], c["scale"] = (hit[1].label, hit[1].scale) if hit else (None, 1.0)
+            c["name"] = f"{hit[0]['name']}_e{c['epoch']}" if hit else None
+            c["logged"] = bool(hit) and hit[1].label in logged.get(c["epoch"] - off, {})
+        r.curves = [c for c in r.curves if c["logged"]]
+        r.smoke["seeds_vary"] = any(len(set(v)) > 1 for v in per.values()) if copies > 1 else None
+        per_run = secs if rc == 0 else progress_estimate(logs[0], secs, int(t.knobs[t.epochs_knob]["default"])
+                                                         if t.epochs_knob else None)
+        if per_run is None:
+            return finish("smoke", f"the run didn't finish in {int(smoke_timeout)} s and its length can't be estimated "
+                                   "(no epoch counter in its output); set the scale by hand")
+        # in one VM the cell runs PARALLEL at a time (the smoke run measured exactly that); as shards, each repeat is a job
+        cell = per_run * math.ceil(repeats / parallel)
+        r.plan = shrink_plan(cell) if cell <= OPERATION_S * 0.8 or repeats == 1 else \
+            shrink_plan(per_run * repeats, independent_jobs=repeats)
+        if r.plan.action == "shrink" and not t.epochs_knob:
+            return finish("smoke", f"one run takes about {per_run:.0f} s, more than an operation allows, and the script "
+                                   "has no epochs or steps flag to shrink")
+        # the base checkpoint: the smoke run's, with the data kept and its outputs deleted; the emitter bound now
+        em = emit_script(bindings_for_emit(r.claims, bound, r.curves))
+        final = "rm -rf out; ls gf_harness"
+        if paper_date:
+            from gapfinder.env_build import third_party_imports
+
+            py, installed = env_year.parse_freeze(a.stdout or "")
+            mods = third_party_imports(root)
+            pins, why = env_year.paper_year_pins(mods, installed, paper_date, py or "3.10",
+                                                 cache=Path(".gf_cache") / "pypi")
+            r.paper_year = {"date": str(paper_date), "python": py, "pins": pins, "skipped": why, "used": False}
+            if pins:
+                final += ("; " + env_year.install_command(pins) + f'; PYTHONPATH="{env_year.TARGET_DIR}" "${{PYTHON:-python}}" '
+                          f'-c "import {", ".join(m for m in mods if m not in env_year.SKIP)}" >/dev/null 2>&1; '
+                          "echo GF_YEAR_IMPORT=$?")
+        w = await backend.run(b.checkpoint, final, timeout=OPERATION_S - 100, disposable=False,
+                              files={f"{HARNESS_DIR}/emit.py": em.encode()})
+        if w.exit_code != 0 or not w.checkpoint:
+            return finish("data", "writing the emitter into the base checkpoint failed")
+        if r.paper_year and r.paper_year["pins"]:
+            failed = re.findall(r"GF_PIN_FAIL (\S+)", w.stdout or "")
+            r.paper_year["failed"] = failed
+            r.paper_year["used"] = "GF_YEAR_IMPORT=0" in (w.stdout or "") and len(failed) < len(r.paper_year["pins"])
+            if not r.paper_year["used"]:
+                r.paper_year["why_not"] = ("the old versions don't import together" if not failed
+                                           else f"{len(failed)} of {len(r.paper_year['pins'])} pins failed to install")
+        (out / HARNESS_DIR).mkdir(exist_ok=True)
+        (out / HARNESS_DIR / "emit.py").write_text(em, encoding="utf-8")
+        r.spec = spec_dict(out.name, w.checkpoint, str(root.resolve()), t, r.claims, bound, repeats, r.plan, per_run,
+                           r.curves, parallel)
+        if r.paper_year and r.paper_year["used"]:
+            r.spec["run"]["command"] = env_year.run_prefix() + r.spec["run"]["command"]
+            r.spec["knobs"][env_year.KNOB] = {"layer": "environment", "default": "0", "choices": ["0", "1"]}
+        import yaml
+
+        (out / "spec.yaml").write_text("# written by `gapfinder harness`; read HARNESS.md and approve the commands\n"
+                                       + yaml.safe_dump(r.spec, sort_keys=False, width=200), encoding="utf-8")
+        (out / "targets.json").write_text(json.dumps(targets_json(r.claims, bound, r.points, r.curves), indent=1), encoding="utf-8")
+        r.ok = True
+        return finish("done")
+
     try:
-        r.claims = select_claims(ledger, target)
-    except (KeyError, ValueError) as e:
-        return finish("claims", str(e))
-    cmds = [Command(command, "given by the runner")] if command else \
-        [c for c in pick_commands(root, r.claims, limit=12) if re.match(r"^(cd [\w./-]+ *(&&|;) *)?python", c.cmd)]
-    # a data-preparation script is a data step, not the experiment (RippleNet's preprocess.py comes first)
-    experiments = [c for c in cmds if not _PREP.search(next((a for a in _split_command(c.cmd)[1] if a.endswith(".py")), ""))]
-    cmds = (experiments or cmds)[:5]
-    r.commands = cmds
-    if command:
-        r.notes.append(f"command given by the runner: `{command}`")
-    for cid, label in (bind or {}).items():
-        r.notes.append(f"{cid} bound to the printed label `{label}` by the runner")
-    if not cmds:
-        return finish("command", "no python command in the README or shell scripts")
-    if len(cmds) > 1 and cmds[0].score == cmds[1].score and cmds[0].score > 0 and \
-            _split_command(cmds[0].cmd)[1][:2] != _split_command(cmds[1].cmd)[1][:2]:
-        return finish("command", "two commands with different scripts match the claims equally well; pick one "
-                                 "with --command")
-    try:
-        r.templated = t = template_command(root, cmds[0].cmd, r.claims)
-    except ValueError as e:
-        return finish("template", str(e))
-    r.points, r.curves, r.unmapped = extra_claims(ledger, target, t.knobs)
-    r.downloads, r.prep = download_steps(root), prep_commands(root, cmds[0], r.claims)
-    data_steps = [d.replace("cd /work && ", "").replace("cd /work/", "cd ") for d in r.downloads] + r.prep
-    data_sh = " && ".join(f"({d})" for d in data_steps)
-    senv, sfiles, sprefix = runtime_shim.run_parts()
-    shim_env = "export " + " ".join(f"{k}={v}" for k, v in senv.items()) + "; " + sprefix
-    if env_checkpoint is None:
-        naive_one = SEED_PREFIX + t.naive.replace("$GF_SEED", "$((GF_SEED + 1))")
-        goal = shim_env + (f"cd /work && {data_sh} && " if data_sh else "") + short_run_goal(naive_one)
-        env = await build_env(router, backend, root, fetch=fetch_cmd or (fetch(repo, commit, root) if repo else None),
-                              image=image, max_steps=max_steps, goal=goal, goal_files=sfiles)
-        r.env = env.to_dict()
-        if not env.ok:
-            return finish("env", env.reason)
-        env_checkpoint = env.checkpoint
-    else:
-        r.env = {"image": image or "(given)", "checkpoint": env_checkpoint, "recipe": []}
-    files = {**sfiles, f"{HARNESS_DIR}/keep_data.py": KEEP_DATA.encode(),
-             f"{HARNESS_DIR}/emit.py": emit_script({}).encode()}
-    from gapfinder import env_year
-
-    step_a = (f'"${{PYTHON:-python}}" {HARNESS_DIR}/keep_data.py before' + (f" && {sprefix}{data_sh}" if data_sh else "")
-              + (f"; {env_year.FREEZE}" if paper_date else ""))
-    a = await backend.run(env_checkpoint, step_a, env=senv, timeout=OPERATION_S - 100, disposable=False, files=files)
-    if a.exit_code != 0 or not a.checkpoint:
-        return finish("data", f"the data steps failed (exit {a.exit_code}): {((a.stdout or '') + (a.stderr or ''))[-800:]}")
-    one = sprefix + t.naive.replace("$GF_SEED", "$((GF_SEED + r))")
-
-    async def smoke_run(copies: int):
-        threads = "export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1; " if copies > 1 else ""
-        # `copies` runs at once (the cell's own pattern), each stopped at the smoke timeout (`timeout` exits 124)
-        smoke = (f"mkdir -p out; {threads}{SEED_PREFIX}s0=$(date +%s); pids=''; for r in $(seq 1 {copies}); do "
-                 f"(export r GF_SEED; timeout {int(smoke_timeout)} bash -c {shlex.quote(one)}) > out/run$r.log 2>&1 & "
-                 f"pids=\"$pids $!\"; done; rc=0; for p in $pids; do wait $p || rc=$?; done; echo GF_SMOKE_RC=$rc; "
-                 f"echo GF_SMOKE_S=$(( $(date +%s) - s0 )); for r in $(seq 1 {copies}); do echo GF_LOG_$r; "
-                 f"tail -c 20000 out/run$r.log; echo; done; \"${{PYTHON:-python}}\" {HARNESS_DIR}/keep_data.py after")
-        b = await backend.run(a.checkpoint, smoke, env={**senv, "RUN_TAG": "gf-harness-smoke"},
-                              timeout=OPERATION_S - 60, disposable=False, files=None)
-        so = b.stdout or ""
-        rc = int((re.search(r"GF_SMOKE_RC=(\d+)", so) or [0, 1])[1])
-        secs = float((re.search(r"GF_SMOKE_S=(\d+)", so) or [0, 0])[1])
-        logs = re.split(r"(?m)^GF_LOG_\d+\s*$", so.split("GF_DATA_MANIFEST")[0])[1:]
-        return b, so, rc, secs, logs
-
-    parallel = copies = max(1, min(repeats, PARALLEL))
-    b, so, rc, secs, logs = await smoke_run(copies)
-    if copies > 1 and (not b.checkpoint or not logs or rc not in (0, 124)):
-        # copies in parallel failed (b5a: 4 TensorFlow attacks on dense 2708 x 2708 matrices, exit 120, while one
-        # copy runs): one at a time, and the cell runs its repeats one at a time too
-        failed_rc, parallel = rc, 1
-        b, so, rc, secs, logs = await smoke_run(1)
-        copies = 1
-        r.notes.append(f"{min(repeats, PARALLEL)} copies in parallel failed (exit {failed_rc}); one copy passed, so "
-                       "the cell runs its repeats one at a time")
-    r.manifest = _manifest(so)
-    r.smoke = {"copies": copies, "rc": rc, "seconds": secs, "timed_out": rc == 124}
-    if not b.checkpoint or not logs or (rc not in (0, 124)):
-        return finish("smoke", f"the smoke run failed (exit {rc}): {(logs[0] if logs else so + (b.stderr or ''))[-1200:]}")
-    r.bindings = bind_metrics(logs[0], [{"claim_id": c["claim_id"], "metric": c["metric"],
-                                         "paper_value": c["paper_value"]} for c in r.claims])
-    if bind:
-        from gapfinder.harness_auto import labelled_numbers as _ln
-
-        printed = _ln(logs[0])
-        for cid, label in bind.items():
-            if label not in printed:
-                return finish("metrics", f"--bind {cid}={label!r}: the run printed no such label; it printed "
-                                         + ", ".join(repr(k) for k in printed))
-            c = next((x for x in r.claims if x["claim_id"] == cid), None)
-            if c is None:
-                return finish("metrics", f"--bind {cid}: no such claim")
-            v = printed[label]
-            ratio = abs(c["paper_value"]) / abs(v) if v else 1.0
-            scale = 100.0 if 30 < ratio < 300 else 0.01 if 0.003 < ratio < 0.03 else 1.0
-            old = next((x for x in r.bindings if x.claim_id == cid), None)
-            r.bindings = [x for x in r.bindings if x.claim_id != cid] + [Binding(
-                cid, label, v, scale, alternatives=old.alternatives if old else [],
-                refused=f"(given by the runner{'; the binder had refused: ' + old.refused if old and old.refused else ''})")]
-    bound = {bb.claim_id: bb for bb in r.bindings if bb.label}
-    if r.claims[0]["claim_id"] not in bound:
-        return finish("metrics", "the target's number can't be bound: "
-                      + next(bb.refused for bb in r.bindings if bb.claim_id == r.claims[0]["claim_id"]))
-    from gapfinder.harness_auto import labelled_numbers
-
-    per = {}
-    for log in logs:
-        found = labelled_numbers(log)
-        for c in r.claims:
-            if c["claim_id"] in bound and bound[c["claim_id"]].label in found:
-                per.setdefault(c["name"], []).append(found[bound[c["claim_id"]].label] * bound[c["claim_id"]].scale)
-    r.smoke["per_run_values"] = per
-    # claims at fixed knob values and learning-curve points read the label of the row claim with their metric
-    by_fam = {_family(c["metric"]): (c, bound[c["claim_id"]]) for c in reversed(r.claims) if c["claim_id"] in bound}
-    for p in r.points:
-        hit = by_fam.get(_family(p["metric"]))
-        p["name"] = hit[0]["name"] if hit else None
-    r.points = [p for p in r.points if p["name"]]
-    logged = _per_epoch(logs[0])
-    off = 1 if logged and min(logged) == 0 else 0
-    for c in r.curves:
-        hit = by_fam.get(_family(c["metric"]))
-        c["label"], c["scale"] = (hit[1].label, hit[1].scale) if hit else (None, 1.0)
-        c["name"] = f"{hit[0]['name']}_e{c['epoch']}" if hit else None
-        c["logged"] = bool(hit) and hit[1].label in logged.get(c["epoch"] - off, {})
-    r.curves = [c for c in r.curves if c["logged"]]
-    r.smoke["seeds_vary"] = any(len(set(v)) > 1 for v in per.values()) if copies > 1 else None
-    per_run = secs if rc == 0 else progress_estimate(logs[0], secs, int(t.knobs[t.epochs_knob]["default"])
-                                                     if t.epochs_knob else None)
-    if per_run is None:
-        return finish("smoke", f"the run didn't finish in {int(smoke_timeout)} s and its length can't be estimated "
-                               "(no epoch counter in its output); set the scale by hand")
-    # in one VM the cell runs PARALLEL at a time (the smoke run measured exactly that); as shards, each repeat is a job
-    cell = per_run * math.ceil(repeats / parallel)
-    r.plan = shrink_plan(cell) if cell <= OPERATION_S * 0.8 or repeats == 1 else \
-        shrink_plan(per_run * repeats, independent_jobs=repeats)
-    if r.plan.action == "shrink" and not t.epochs_knob:
-        return finish("smoke", f"one run takes about {per_run:.0f} s, more than an operation allows, and the script "
-                               "has no epochs or steps flag to shrink")
-    # the base checkpoint: the smoke run's, with the data kept and its outputs deleted; the emitter bound now
-    em = emit_script(bindings_for_emit(r.claims, bound, r.curves))
-    final = "rm -rf out; ls gf_harness"
-    if paper_date:
-        from gapfinder.env_build import third_party_imports
-
-        py, installed = env_year.parse_freeze(a.stdout or "")
-        mods = third_party_imports(root)
-        pins, why = env_year.paper_year_pins(mods, installed, paper_date, py or "3.10",
-                                             cache=Path(".gf_cache") / "pypi")
-        r.paper_year = {"date": str(paper_date), "python": py, "pins": pins, "skipped": why, "used": False}
-        if pins:
-            final += ("; " + env_year.install_command(pins) + f'; PYTHONPATH="{env_year.TARGET_DIR}" "${{PYTHON:-python}}" '
-                      f'-c "import {", ".join(m for m in mods if m not in env_year.SKIP)}" >/dev/null 2>&1; '
-                      "echo GF_YEAR_IMPORT=$?")
-    w = await backend.run(b.checkpoint, final, timeout=OPERATION_S - 100, disposable=False,
-                          files={f"{HARNESS_DIR}/emit.py": em.encode()})
-    if w.exit_code != 0 or not w.checkpoint:
-        return finish("data", "writing the emitter into the base checkpoint failed")
-    if r.paper_year and r.paper_year["pins"]:
-        failed = re.findall(r"GF_PIN_FAIL (\S+)", w.stdout or "")
-        r.paper_year["failed"] = failed
-        r.paper_year["used"] = "GF_YEAR_IMPORT=0" in (w.stdout or "") and len(failed) < len(r.paper_year["pins"])
-        if not r.paper_year["used"]:
-            r.paper_year["why_not"] = ("the old versions don't import together" if not failed
-                                       else f"{len(failed)} of {len(r.paper_year['pins'])} pins failed to install")
-    (out / HARNESS_DIR).mkdir(exist_ok=True)
-    (out / HARNESS_DIR / "emit.py").write_text(em, encoding="utf-8")
-    r.spec = spec_dict(out.name, w.checkpoint, str(root.resolve()), t, r.claims, bound, repeats, r.plan, per_run,
-                       r.curves, parallel)
-    if r.paper_year and r.paper_year["used"]:
-        r.spec["run"]["command"] = env_year.run_prefix() + r.spec["run"]["command"]
-        r.spec["knobs"][env_year.KNOB] = {"layer": "environment", "default": "0", "choices": ["0", "1"]}
-    import yaml
-
-    (out / "spec.yaml").write_text("# written by `gapfinder harness`; read HARNESS.md and approve the commands\n"
-                                   + yaml.safe_dump(r.spec, sort_keys=False, width=200), encoding="utf-8")
-    (out / "targets.json").write_text(json.dumps(targets_json(r.claims, bound, r.points, r.curves), indent=1), encoding="utf-8")
-    r.ok = True
-    return finish("done")
+        return await run()
+    except InfraError as exc:  # a Sandboxes failure at any step: say where, keep what was built
+        return finish(step["at"], f"infrastructure error (re-run unchanged): {str(exc)[:300]}")
