@@ -135,6 +135,10 @@ class ConfidenceLabel(str, Enum):
     # the target can be matched, but no tested condition matches the target and its held-out claims
     # together (history matching): a partial finding plus a pointer to a cause outside the settings
     conflicts_held_out = "Explains target, conflicts with held-out"
+    # the paper's numbers are a different reading of the same runs (the best epoch, the best validation epoch, the
+    # best seed...): every claim fits under one reporting rule while the numbers as printed at the end do not
+    # (plan D1.2, diagnose/reporting.py). Measured from the runs, all claims at once: a confident label
+    reporting_rule = "Explained by the reporting rule"
 
 
 class Attribution(_Model):

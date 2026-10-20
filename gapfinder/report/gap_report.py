@@ -84,7 +84,8 @@ class GapReport:
                 plausibility={k: Plausibility(**p) for k, p in (c.get("plausibility") or {}).items()},
                 screen=c.get("screen") or [], hypotheses_tested=c.get("hypotheses_tested", 0),
                 replay=c.get("replay") or [], notes=c.get("notes") or [], value_sets=c.get("value_sets") or {},
-                diagnosis=c.get("diagnosis"), equivalent=c.get("equivalent") or [], relations=c.get("relations") or {})
+                diagnosis=c.get("diagnosis"), equivalent=c.get("equivalent") or [], relations=c.get("relations") or {},
+                differential=c.get("differential"), reporting=c.get("reporting"))
         claims = d.get("claims") or []
         return cls(paper=d.get("paper", "?"), artifact=d.get("artifact", "?"), results=[claim(c) for c in claims],
                    noise=d.get("noise") or {}, naive=d.get("naive") or {}, runs=d.get("runs", 0),
@@ -253,9 +254,14 @@ class GapReport:
                 "unmapped": list(self.unmapped_assumptions), "setup": self.setup_check,
                 "leads": leads, "alternatives": alts}
 
-    def _cause(self, r: ClaimResult) -> dict:
+    def _cause(self, r: ClaimResult) -> dict:  # noqa: C901
         """Confirmed cause, plausible explanation or interacting factors: three different claims to make."""
         label = r.attribution.confidence_label if r.attribution else "Reproduced"
+        if r.reporting:  # a reading of the same runs, not a setting
+            flaw = r.reporting.get("flaw")
+            return {"kind": "reporting_rule", "confirmed": True,
+                    "text": f"Reporting rule: {r.reporting['title']}. Every claim fits under it, from the runs already "
+                            "made" + (" (a flaw in the paper's evaluation)" if flaw else "")}
         if not r.changes or label in ("Reproduced", "Unexplained", "Inconclusive"):
             return {"kind": None, "text": None, "confirmed": None}
         confirmed = label in ("Explained", "Paper-artifact inconsistency")
@@ -283,7 +289,8 @@ class GapReport:
         out += ["", "| Claim | Label | Gap before | Gap after | Noise band | Explained by |", "|---|---|---|---|---|---|"]
         for r in self.results:
             label = r.attribution.confidence_label if r.attribution else "Reproduced"
-            by = ", ".join(f"`{k}={v}`" for k, v in r.changes.items()) or "—"
+            by = (f"reporting rule `{r.reporting['rule']}`" if r.reporting else
+                  ", ".join(f"`{k}={v}`" for k, v in r.changes.items()) or "—")
             out.append(f"| {r.target.claim_id} ({r.target.metric}) | {label} | {_pct(r.gap_before)} | "
                        f"{_pct(r.gap_after)} | ±{r.band * 100:.1f}% | {by} |")
         from gapfinder.search.audit import audit_markdown
@@ -375,6 +382,7 @@ class GapReport:
                     "within 2 log units, held-out claims no worse). The first is reported above, as the simplest:"]
             out += [f"- `{', '.join(f'{k}={v}' for k, v in sorted(e['config'].items()))}`"
                     + (" (reported)" if i == 0 else "") for i, e in enumerate(r.equivalent)]
+        out += _differential_lines(r.differential)
         if r.diagnosis:
             out += ["", "### History matching (every measured configuration, all claims together)",
                     f"- {r.diagnosis['text']}"]
@@ -621,4 +629,16 @@ def _unknown_lines(u: dict) -> list[str]:
                 f"{a['mean_abs_gap'] * 100:.1f}% ({a['runs']} runs)" for a in u["alternatives"]]
     else:
         out.append("- Near alternatives: none recorded")
+    return out
+
+
+def _differential_lines(d: dict | None, k: int = 3) -> list[str]:
+    """The ranked explanations of every class (diagnose.core), top k: what a person checks first."""
+    if not d or not d.get("ranked"):
+        return []
+    out = ["", "### Differential diagnosis (every class on one scale: the likelihood of all the claims)",
+           "| rank | explanation | class | posterior | worst claim | how to check |", "|---|---|---|---|---|---|"]
+    for i, h in enumerate(d["ranked"][:k], 1):
+        worst = "" if h.get("max_I") is None else f"{h['max_I']:.1f} sigma" + (" (fits every claim)" if h.get("fits_all") else "")
+        out.append(f"| {i} | {h['title']} | {h['class']} | {h['posterior']:.0%} | {worst} | {h.get('check', '')} |")
     return out

@@ -37,6 +37,7 @@ LL_EQUIVALENT = 2.0  # log-likelihood units: within this of the best, the target
 _LABEL_RANK = {
     ConfidenceLabel.explained.value: 0,
     ConfidenceLabel.inconsistency.value: 0,
+    ConfidenceLabel.reporting_rule.value: 0,
     ConfidenceLabel.fits_but_unsupported.value: 1,
     ConfidenceLabel.stated_value_refuted.value: 1,
     ConfidenceLabel.partially_explained.value: 2,
@@ -97,6 +98,12 @@ class SearchConfig:
     demote_stated: bool = False
     relation_repeats: int = 2  # runs at each end of a relation claim, per candidate checked
     point_repeats: int = 1  # runs of a claim at fixed knob values (Target.at), per configuration checked
+    # plan D1.2/D7.1: right after the naive runs, the zero-run reporting rules (best epoch, best validation epoch,
+    # best seed...) are scored on every claim; rules that fit them all (each within 2 sigma, at least two claims) and
+    # together hold gate_posterior of the posterior, against the numbers as printed, end the search there
+    reporting_gate: bool = True
+    gate_posterior: float = 0.8
+    differential: bool = True  # rank every class's explanations at the end (diagnose.core)
     max_points: int = 4  # such claims used per search (each costs runs for every configuration checked)
     point_configs: int = 3  # before history matching: the best joint fits also measured at those claims
     # out of space: one Super call compares the paper with the traced run (gapfinder/search/contrast.py);
@@ -261,6 +268,10 @@ class ClaimResult:
     # LL_EQUIVALENT of the answer's, held-out claims no worse), the answer first
     equivalent: list[dict] = field(default_factory=list)
     relations: dict[str, dict] = field(default_factory=dict)  # relation claim id -> check under the answer
+    # every explanation of every class, ranked by the likelihood of all the claims (diagnose.core): the top three are
+    # what a person checks first, whatever the headline label
+    differential: dict | None = None
+    reporting: dict | None = None  # the reporting rule that explains the claims, when one does
 
 
 def _norm_knob(k: str) -> str:
@@ -446,7 +457,8 @@ class GapSearch:
         self._include_stated = False  # the fallback round brings them back
         self.audit_report: dict | None = None  # gapfinder/search/audit.py, after the claims
         self.protocol_results: list[dict] = []
-        self.split_report: dict[str, dict] = {}  # claim -> noise band across seeds, and across seeds and splits  # protocol tests: a selection or label edit, switched off and measured
+        self.split_report: dict[str, dict] = {}  # claim -> noise band across seeds, and across seeds and splits
+        self.differentials: dict = {}  # claim id -> diagnose.Differential  # protocol tests: a selection or label edit, switched off and measured
         self.trace_records: list[dict] = []  # the raw dry-run records (for the paper-to-trace contrast)
         self.paper_text = paper_text
         if self.cfg.coverage and self.spec.code_root() is not None:  # a local base, or the spec's `source`
@@ -1045,6 +1057,12 @@ class GapSearch:
                                   label=res.attribution.confidence_label if res.attribution else None,
                                   changes={}, gap_before=g0, gap_after=g0)
             return res
+        gate = self._calibration_gate(t, res)
+        if gate is not None:
+            self.orch.events.emit("attribution", claim=t.claim_id, status=gate.status,
+                                  label=gate.attribution.confidence_label, changes={}, gap_before=g0,
+                                  gap_after=gate.gap_after, reporting=gate.reporting["rule"])
+            return gate
         tried: set[frozenset] = set()
         try:
             await self._search(t, res, tried)
@@ -1076,10 +1094,134 @@ class GapSearch:
         if res.attribution is not None:
             res.attribution.hypotheses_tested = len(tried)
         self._stated_value_notes(res)
+        self._finish_differential(t, res)
         self.orch.events.emit("attribution", claim=t.claim_id, status=res.status,
                               label=res.attribution.confidence_label if res.attribution else None,
                               changes=res.changes, gap_before=g0, gap_after=res.gap_after)
         return res
+
+    # ------------------------------------------------------------ the differential (plan D1)
+    def _diag_claims(self, t: Target) -> list[Target]:
+        return [t] + [h for h in self.targets if h.held_out and not h.tuned_separately and h.claim_id != t.claim_id
+                      and h.metric in self.bands]
+
+    def _new_differential(self, t: Target):
+        from gapfinder.diagnose import ClaimSpec, Differential
+
+        naive = self.measure_ok({})
+        specs = []
+        for c in self._diag_claims(t):
+            vals = [b.parsed_metrics[c.metric] for b in naive if c.metric in b.parsed_metrics]
+            if len(vals) < 2:
+                continue
+            sd = max(statistics.stdev(vals), self.cfg.noise_floor_frac * abs(c.paper_value))
+            specs.append(ClaimSpec(c.claim_id, c.metric, c.paper_value, statistics.fmean(vals), sd, target=c is t))
+        return Differential(specs, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc)
+
+    def _config_hypothesis(self, diff, changes: Changes, prior: float, title: str | None = None):
+        """A configuration as a hypothesis: its measured values on every claim (claims it wasn't measured on keep
+        the naive prediction)."""
+        from gapfinder.diagnose import Hypothesis, Prediction
+        from gapfinder.sandbox import ast_patch
+
+        preds = {}
+        for cid, c in diff.claims.items():
+            vals = [b.parsed_metrics[c.metric] for b in self.measure_ok(changes) if c.metric in b.parsed_metrics]
+            if vals:
+                preds[cid] = Prediction.from_values(vals, c.naive_sd)
+        code = any(ast_patch.is_patch(k) for k in changes)
+        cfg = ", ".join(f"{k}={v}" for k, v in sorted(changes.items()))
+        return Hypothesis(("code:" if code else "settings:") + cfg, "code" if code else "settings",
+                          title or (f"a code change: {cfg}" if code else f"the setting {cfg}"), prior, preds,
+                          detail={"changes": dict(changes)}, runs=len(self.measure_ok(changes)),
+                          check=f"run with {cfg}" + (" (an in-memory code patch)" if code else ""))
+
+    def _calibration_gate(self, t: Target, res: ClaimResult) -> ClaimResult | None:
+        """The zero-run reporting rules, right after the naive runs: does a different reading of the same runs fit
+        every claim? If so the settings search is not needed (b5b-type papers: the best epoch, 40 minutes a run)."""
+        if not self.cfg.reporting_gate:
+            return None
+        from gapfinder.diagnose import FIT_I, STRICT_I, Hypothesis, Prediction
+        from gapfinder.diagnose.reporting import reporting_hypotheses
+
+        diff = self._new_differential(t)
+        if t.claim_id not in diff.claims:
+            return None
+        self.differentials[t.claim_id] = diff
+        as_run = Hypothesis("as-run", "settings", "no difference in reporting: the numbers as printed at the end of the "
+                            "run", 0.3, {cid: Prediction(c.naive_mean, c.naive_sd, len(self.measure_ok({})))
+                                         for cid, c in diff.claims.items()},
+                            check="the settings search and the other classes")
+        diff.add(as_run)
+        hyps = reporting_hypotheses(self.measure_ok({}), [(c.claim_id, c.metric, c.target) for c in diff.claims.values()],
+                                    {cid: c.naive_sd for cid, c in diff.claims.items()})
+        for h in hyps:
+            diff.add(h)
+        if not hyps:
+            return None
+        self.orch.events.emit("note", msg=f"{t.claim_id}: reporting rules scored on {len(diff.claims)} claim(s): "
+                                          + "; ".join(f"{h.detail['rule']} (worst {h.max_I:.1f} sigma, "
+                                                      f"{h.posterior:.0%})" for h in hyps))
+        fitting = [h for h in hyps if h.max_I <= STRICT_I and len(h.predictions) == len(diff.claims)]
+        mass = sum(h.posterior for h in fitting)
+        # the comparison decides (the rules against the numbers as printed, in the posterior); the as-printed numbers
+        # fitting every claim would leave nothing to explain
+        if len(diff.claims) < 2 or not fitting or as_run.fits_all or mass < self.cfg.gate_posterior:
+            return None
+        top = max(fitting, key=lambda h: h.posterior)
+        pred = top.per_claim[t.claim_id]["pred"]
+        res.gap_after = (pred - t.paper_value) / abs(t.paper_value)
+        res.closes = True
+        res.attribution = self._attribution(t, {}, res.gap_after, ConfidenceLabel.reporting_rule, [])
+        flaws = {h.detail["flaw"] for h in fitting}
+        res.reporting = {"rule": top.detail["rule"], "title": top.title, "flaw": top.detail["flaw"],
+                         "equivalent": [h.detail["rule"] for h in fitting if h is not top],
+                         "statistics": top.detail["statistics"], "posterior": round(mass, 3),
+                         "per_claim": {cid: {"paper": v["paper"], "pred": v["pred"], "I": round(v["I"], 2)}
+                                       for cid, v in top.per_claim.items()}}
+        for cid, v in top.per_claim.items():
+            if cid != t.claim_id:
+                c = diff.claims[cid]
+                res.held_out[cid] = {"gap_before": (c.naive_mean - c.paper) / abs(c.paper),
+                                     "gap_after": (v["pred"] - c.paper) / abs(c.paper), "ok": v["I"] <= FIT_I}
+        fits = ", ".join("%s %.4g vs %.4g" % (cid, v["pred"], v["paper"]) for cid, v in top.per_claim.items())
+        res.notes.append(f"{top.title}: every claim fits within {STRICT_I:g} sigma under this reading of the naive "
+                         f"runs ({fits}), "
+                         f"while the numbers as printed at the end miss the target by "
+                         f"{as_run.per_claim[t.claim_id]['I']:.1f} sigma; no settings search was needed")
+        if len(fitting) > 1:
+            res.notes.append("equally good readings: " + "; ".join(h.title for h in fitting if h is not top))
+        if top.detail["flaw"]:
+            res.notes.append("a flaw in the paper's evaluation, not a reproduction error"
+                             + (" (or a legitimate protocol: the fitting rules include both)" if len(flaws) > 1 else ""))
+        res.differential = diff.to_dict()
+        return res
+
+    def _finish_differential(self, t: Target, res: ClaimResult) -> None:
+        """Every class's explanations on one scale at the end: the reporting rules (scored after the naive runs),
+        the settings search's answer and its equally good configurations, history matching's joint fits, and the
+        patch round's code changes."""
+        if not self.cfg.differential:
+            return
+        diff = self.differentials.get(t.claim_id) or self._new_differential(t)
+        if t.claim_id not in diff.claims:
+            return
+        self.differentials[t.claim_id] = diff
+        configs = []
+        if res.changes:
+            configs.append(dict(res.changes))
+        configs += [dict(e["config"]) for e in res.equivalent if e.get("config")]
+        configs += [dict(j["config"]) for j in (res.diagnosis or {}).get("joint") or [] if j.get("config")]
+        seen = set()
+        for i, c in enumerate(configs):
+            key = frozenset(c.items())
+            if key in seen or not self.measure_ok(c):
+                continue
+            seen.add(key)
+            diff.add(self._config_hypothesis(diff, c, prior=0.15 if i == 0 else 0.05))
+            if len(seen) >= 8:
+                break
+        res.differential = diff.to_dict()
 
     def _point_config(self, p: Target, changes: Changes) -> Changes:
         """`changes` with the claim's fixed values on top (a value equal to the default is left out)."""

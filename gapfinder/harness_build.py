@@ -452,6 +452,7 @@ EMIT_TEMPLATE = r'''# written by `gapfinder harness`: each claim's number from e
 from __future__ import print_function
 import glob, io, re
 BIND = %(bind)s
+TRAJ = %(traj)s  # claim metric -> {"label", "scale", "dir": 1 higher is better / -1 lower, "val": validation label}
 PAIR = re.compile(%(pair)r)
 QUAL = re.compile(%(qual)r)
 PREFIX = re.compile(%(prefix)r)
@@ -521,11 +522,53 @@ def per_epoch(log):
     return out
 
 
+def series(log):
+    """label -> every value it printed, in order (one per epoch when the program prints per epoch)."""
+    out = {}
+    for line in log.splitlines():
+        for k, v in labelled(line, 1).items():
+            out.setdefault(k, []).append(v)
+    return out
+
+
+def trajectory_stats(s, t):
+    """One run's trajectory of a claim's label: the final value, the best (in the metric's direction) and where,
+    the test value at the best validation value, the mean of the last five."""
+    xs = [v * t["scale"] for v in s.get(t["label"], [])]
+    if not xs:
+        return None
+    d = t["dir"]
+    i = max(range(len(xs)), key=lambda j: d * xs[j])
+    out = {"best": xs[i], "argbest": i + 1, "len": len(xs), "last5": sum(xs[-5:]) / len(xs[-5:]), "final": xs[-1],
+           "_xs": xs, "_i": i}
+    vs = s.get(t["val"] or "", [])
+    if t["val"] and len(vs) == len(xs) and len(xs) > 1:
+        k = max(range(len(vs)), key=lambda j: d * vs[j])
+        out["bestval"] = xs[k]
+        out["_k"] = k
+    return out
+
+
 vals = {}
+stats = {}
 runs = 0
 for f in sorted(glob.glob("out/run*.log")):
     text = io.open(f, encoding="utf-8", errors="replace").read()
     found = labelled(text)
+    if TRAJ:
+        ser = series(text)
+        got = dict((name, trajectory_stats(ser, TRAJ[name])) for name in TRAJ)
+        tname = [n for n in TRAJ if TRAJ[n].get("target")]
+        tst = got.get(tname[0]) if tname else None
+        for name in TRAJ:
+            st = got[name]
+            if st is None:
+                continue
+            if tst is not None and name != tname[0] and st["len"] == tst["len"] and st["len"] > 1:
+                st["attarget"] = st["_xs"][tst["_i"]]  # this claim at the epoch where the target is best
+                if "_k" in tst:  # ... and where the target's validation score is best (early stopping)
+                    st["atbestval"] = st["_xs"][tst["_k"]]
+            stats.setdefault(name, []).append(st)
     curve = None
     hit = False
     for name in sorted(BIND):
@@ -542,20 +585,34 @@ for f in sorted(glob.glob("out/run*.log")):
     runs += hit
 for name in sorted(vals):
     print("%%s=%%.6g" %% (name, sum(vals[name]) / len(vals[name])))
+for name in sorted(stats):  # reporting-rule statistics (plan D1.2): the cell's mean of each, and across its runs
+    rs = stats[name]
+    for key in ("best", "argbest", "len", "last5", "bestval", "attarget", "atbestval"):
+        xs = [r[key] for r in rs if key in r]
+        if xs:
+            print("%%s__x_%%s=%%.6g" %% (name, key, sum(xs) / len(xs)))
+    finals = sorted(r["final"] for r in rs)
+    print("%%s__x_maxrun=%%.6g" %% (name, finals[-1]))
+    print("%%s__x_minrun=%%.6g" %% (name, finals[0]))
+    m = len(finals)
+    print("%%s__x_medrun=%%.6g" %% (name, (finals[m // 2] + finals[(m - 1) // 2]) / 2.0))
 print("gf_runs=%%d" %% runs)
 '''
 
 
-def emit_script(bindings: dict[str, tuple]) -> str:
+def emit_script(bindings: dict[str, tuple], trajectories: dict[str, dict] | None = None) -> str:
     """`bindings`: metric name -> (printed label, scale to the paper's unit[, the paper's epoch for a point of a
-    learning curve, counted from 1])."""
+    learning curve, counted from 1]). `trajectories`: claim metric -> {"label", "scale", "dir", "val"}, for the
+    reporting-rule statistics (`<name>__x_best`, `__x_bestval`, `__x_last5`, `__x_maxrun`, `__x_medrun`, ...)."""
     bind = "{" + ", ".join(f"{k!r}: ({v[0]!r}, {float(v[1])!r}" + (f", {int(v[2])!r})" if len(v) > 2 else ")")
                            for k, v in sorted(bindings.items())) + "}"
     from gapfinder.harness_auto import _BARE, _LINE_TAG, _METRIC_SYNONYMS
 
     syn = "[" + ", ".join(f"({k!r}, {sorted(v)!r})" for k, v in _METRIC_SYNONYMS.items()) + "]"  # ordered
+    traj = repr({k: {"label": v["label"], "scale": float(v["scale"]), "dir": int(v["dir"]), "val": v.get("val"),
+                     "target": bool(v.get("target"))} for k, v in sorted((trajectories or {}).items())})
     return EMIT_TEMPLATE % {"bind": bind, "pair": _PAIR.pattern, "qual": _QUAL.pattern, "prefix": _PREFIX.pattern,
-                            "bare": _BARE.pattern, "line_tag": _LINE_TAG.pattern, "synonyms": syn}
+                            "bare": _BARE.pattern, "line_tag": _LINE_TAG.pattern, "synonyms": syn, "traj": traj}
 
 
 KEEP_DATA = r'''# written by `gapfinder harness` (plan item 7). `before`: list the work directory. `after` (once the data steps
@@ -673,7 +730,7 @@ def run_command(t: Templated, repeats: int, shards: bool, parallel: int = PARALL
 
 def spec_dict(name: str, base: str, source: str, t: Templated, claims: list[dict], bound: dict[str, Binding],
               repeats: int, plan: ShrinkPlan, per_run_s: float | None, curves: list[dict] = (),
-              parallel: int = PARALLEL) -> dict:
+              parallel: int = PARALLEL, trajectories: dict[str, dict] | None = None) -> dict:
     knobs = {k: {kk: vv for kk, vv in v.items() if kk in ("layer", "default", "choices")} for k, v in t.knobs.items()}
     shards = plan.action == "shards" or (plan.action == "shrink" and repeats > 1)
     if plan.action == "shrink" and t.epochs_knob:
@@ -690,7 +747,8 @@ def spec_dict(name: str, base: str, source: str, t: Templated, claims: list[dict
     spec = {"name": name, "base": base, "source": source, "run": run, "knobs": knobs, "allowed_paths": ["out/"],
             "metrics": [c["name"] for c in claims if c["claim_id"] in bound]
             + [f"{c['name']}__{i}" for c in claims if c["claim_id"] in bound
-               for i, _ in enumerate(bound[c["claim_id"]].alternatives[:3])] + [c["name"] for c in curves] + ["gf_runs"]}
+               for i, _ in enumerate(bound[c["claim_id"]].alternatives[:3])] + [c["name"] for c in curves]
+            + [f"{n}__x_{k}" for n in sorted(trajectories or {}) for k in TRAJECTORY_STATS] + ["gf_runs"]}
     if plan.discrepancy is not None:
         spec["discrepancy"] = plan.discrepancy
     return spec
@@ -710,6 +768,31 @@ def bindings_for_emit(claims: list[dict], bound: dict[str, Binding], curves: lis
         out[c["name"]] = (b.label, b.scale)
         for i, alt in enumerate(b.alternatives[:3]):
             out[f"{c['name']}__{i}"] = (alt, b.scale)
+    return out
+
+
+LOWER_IS_BETTER = {"loss", "mse", "mae", "rmse", "ppl"}
+TRAJECTORY_STATS = ("best", "argbest", "len", "last5", "bestval", "attarget", "atbestval", "maxrun", "minrun", "medrun")
+
+
+def trajectories_for_emit(claims: list[dict], bound: dict[str, Binding], log: str) -> dict[str, dict]:
+    """claim metric -> what the emitter needs to summarise its trajectory: the label, the scale, the direction (from
+    the metric family) and the validation label printed alongside a test label ("test acc" -> "val acc"), if any."""
+    from gapfinder.harness_auto import labelled_numbers
+
+    printed = labelled_numbers(log, tail_lines=10 ** 9)
+    out = {}
+    for c in claims:
+        b = bound.get(c["claim_id"])
+        if b is None:
+            continue
+        words = b.label.split()
+        val = None
+        if "test" in words:
+            cand = " ".join("val" if w == "test" else w for w in words)
+            val = cand if cand in printed else None
+        out[c["name"]] = {"label": b.label, "scale": b.scale, "val": val, "target": c is claims[0],
+                          "dir": -1 if _family(c["metric"]) in LOWER_IS_BETTER else 1}
     return out
 
 
@@ -1045,7 +1128,8 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
             return finish("smoke", f"one run takes about {per_run:.0f} s, more than an operation allows, and the script "
                                    "has no epochs or steps flag to shrink")
         # the base checkpoint: the smoke run's, with the data kept and its outputs deleted; the emitter bound now
-        em = emit_script(bindings_for_emit(r.claims, bound, r.curves))
+        traj = trajectories_for_emit(r.claims, bound, logs[0])
+        em = emit_script(bindings_for_emit(r.claims, bound, r.curves), traj)
         final = "rm -rf out; ls gf_harness"
         if paper_date:
             from gapfinder.env_build import third_party_imports
@@ -1073,7 +1157,7 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
         (out / HARNESS_DIR).mkdir(exist_ok=True)
         (out / HARNESS_DIR / "emit.py").write_text(em, encoding="utf-8")
         r.spec = spec_dict(out.name, w.checkpoint, str(root.resolve()), t, r.claims, bound, repeats, r.plan, per_run,
-                           r.curves, parallel)
+                           r.curves, parallel, traj)
         if r.paper_year and r.paper_year["used"]:
             r.spec["run"]["command"] = env_year.run_prefix() + r.spec["run"]["command"]
             r.spec["knobs"][env_year.KNOB] = {"layer": "environment", "default": "0", "choices": ["0", "1"]}
