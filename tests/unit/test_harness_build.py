@@ -102,3 +102,19 @@ def test_emitter_matches_the_binder_on_bare_metrics_and_line_tags(tmp_path):
     out = subprocess.run([sys.executable, "emit.py"], cwd=tmp_path, capture_output=True, text=True).stdout
     vals = dict(line.split("=", 1) for line in out.splitlines())
     assert [float(vals[f"m{i}"]) for i in range(len(labels))] == [found[k] for k in labels]
+
+
+def test_short_options_and_the_repo_root(tmp_path):
+    """`-d Synthetic` stays `-d` (not `--d`, which argparse rejects as ambiguous with --dataset and --data_dir); a
+    script in a subfolder gets the repository's root on its import path (pygcn/train.py imports pygcn.utils)."""
+    from gapfinder.harness_build import template_command
+
+    (tmp_path / "pk").mkdir()
+    (tmp_path / "pk" / "main.py").write_text(
+        "import argparse\np = argparse.ArgumentParser()\np.add_argument('-d', '--dataset', default='Adult')\n"
+        "p.add_argument('--data_dir', default='x')\np.add_argument('--seed', type=int, default=0)\na = p.parse_args()\n",
+        encoding="utf-8")
+    t = template_command(tmp_path, "cd pk && python main.py -d Synthetic --seed 0",
+                         [{"metric": "acc", "conditions": {"dataset": "Synthetic"}}])
+    assert "--dataset Synthetic" in t.naive and "--d " not in t.naive
+    assert t.naive.startswith('cd pk && PYTHONPATH="$OLDPWD')

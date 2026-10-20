@@ -84,20 +84,81 @@ def _python_ok(spec: str | None, python: str) -> bool:
         return True
 
 
-def version_at(releases: dict, when: date, python: str, spec=None) -> str | None:
-    """The newest final release first uploaded before `when` with a file that supports `python` (and inside the
-    specifier `spec`, a packaging SpecifierSet, when given)."""
-    best = None
+def installable(f: dict, python: str) -> bool:
+    """A release file pip could install on Linux x86_64 under `python`: its requires_python allows it, and a wheel's
+    tags match (cpXY, py3, abi3; any or manylinux x86_64), or it is a source archive. Old wheels often declare no
+    requires_python (tensorflow 1.7 has cp27-cp36 wheels and none for 3.7, yet no metadata says so)."""
+    if not _python_ok(f.get("requires_python"), python):
+        return False
+    name = f.get("filename")
+    if not name:
+        return True  # no file name recorded: nothing to judge by
+    if not name.endswith(".whl"):
+        return name.endswith((".tar.gz", ".zip", ".tar.bz2"))
+    tag = "cp" + "".join(python.split(".")[:2])
+    parts = name[:-4].split("-")
+    if len(parts) < 5:
+        return True
+    py_tags, abi_tags, plat = parts[-3].split("."), parts[-2].split("."), parts[-1]
+    py_ok = tag in py_tags or "py3" in py_tags or (any(t.startswith("cp3") and t <= tag for t in py_tags)
+                                                    and "abi3" in abi_tags)
+    plat_ok = plat == "any" or ("linux" in plat and "x86_64" in plat)
+    return py_ok and plat_ok
+
+
+def compiled(releases: dict) -> bool:
+    """The distribution has C extensions: some release, of any date, ships a platform wheel (a tag other than `any`).
+    Pre-wheel installers (.exe, .egg) don't tell: pure packages shipped them too (networkx 1.0)."""
+    return any(str(f.get("filename", "")).endswith(".whl") and not str(f["filename"])[:-4].endswith("-any")
+               for files in releases.values() for f in files)
+
+
+def release_installable(files: list[dict], python: str, is_compiled: bool = False) -> bool:
+    """A release pip could install under `python` without building a C extension: a matching file, where a compiled
+    distribution (compiled()) needs a matching wheel; its source archive would be compiled against this Python,
+    which an old extension's source rarely survives (numpy 1.11.1 on Python 3.10 and numpy 1.14.2 on 3.7 both failed
+    to build). A pure package's source archive counts."""
+    return any(installable(f, python) and not (is_compiled and f.get("filename") and not f["filename"].endswith(".whl"))
+               for f in files)
+
+
+def _finals(releases: dict, spec=None):
+    """(version, first upload date, files) for each final release (inside `spec`, when given)."""
     for v, files in releases.items():
         if not files or re.search(r"[a-zA-Z]", v.replace("post", "")):  # pre-releases, dev builds
             continue
         if spec is not None and not spec.contains(v, prereleases=False):
             continue
-        first = min(datetime.fromisoformat(f["upload_time"][:19]).date() for f in files)
-        if first >= when or not any(_python_ok(f.get("requires_python"), python) for f in files):
+        yield v, min(datetime.fromisoformat(f["upload_time"][:19]).date() for f in files), files
+
+
+def version_at(releases: dict, when: date, python: str, spec=None) -> str | None:
+    """The newest final release first uploaded before `when` that installs under `python` (release_installable),
+    inside the specifier `spec` (a packaging SpecifierSet) when given."""
+    best, c = None, compiled(releases)
+    for v, first, files in _finals(releases, spec):
+        if first >= when or not release_installable(files, python, c):
             continue
         if best is None or _ver_key(v) > _ver_key(best):
             best = v
+    return best
+
+
+# A compiled package ships wheels for a new Python some months after that Python's release, so a paper written just
+# before then has no installable release from its date: the first one after it, within this window, is that era's
+# package for this Python (RippleNet, 2018-04-01, on Python 3.7: numpy 1.14.5 of 2018-06-12). Beyond it, not pinned.
+NEAREST_DAYS = 183
+
+
+def first_after(releases: dict, when: date, python: str, spec=None, days: int = NEAREST_DAYS) -> tuple[str, date] | None:
+    """(version, upload date) of the oldest final release uploaded on or after `when`, within `days`, that installs
+    under `python`; None when there is none."""
+    best, c = None, compiled(releases)
+    for v, first, files in _finals(releases, spec):
+        if not (when <= first and (first - when).days <= days) or not release_installable(files, python, c):
+            continue
+        if best is None or _ver_key(v) < _ver_key(best[0]):
+            best = (v, first)
     return best
 
 
@@ -176,7 +237,8 @@ def own_package(root: str | Path) -> dict | None:
 def paper_year_pins(modules: list[str], installed: dict[str, str], when: date, python: str,
                     cache: Path | None = None, own: dict | None = None,
                     releases: dict[str, list[str]] | None = None) -> tuple[dict[str, str], dict[str, str]]:
-    """(dist -> version to install, dist -> why not pinned) for the imported modules, and for the repository's own
+    """(dist -> version to install, dist -> why not pinned, or why a pin is from after the date: first_after) for
+    the imported modules, and for the repository's own
     package (`own`, from own_package) when it is on PyPI: a library-benchmark repo (PyGOD, PyG, RecBole) runs the
     library as it is now, while the paper ran a release from its time (batch-5 b5c: PyGOD 1.0 against 0.3.1).
     `releases`, when given, receives each pinned package's releases from the pin to the installed one."""
@@ -200,6 +262,11 @@ def paper_year_pins(modules: list[str], installed: dict[str, str], when: date, p
             skipped[dist] = "not on PyPI"
             continue
         v = version_at(d.get("releases", {}), when, python)
+        near = first_after(d.get("releases", {}), when, python) if v is None else None
+        if near:
+            v = near[0]
+            skipped[dist] = (f"{v} ({near[1]}, {(near[1] - when).days} days after the date): no release before it "
+                             f"installs on Python {python}")
         if v is None:
             skipped[dist] = f"no release before {when} for Python {python}"
         elif have != "local" and _ver_key(v) >= _ver_key(have):
@@ -276,6 +343,8 @@ def dependency_pins(pins: dict[str, str], installed: dict[str, str], when: date,
                 continue
             d = _fetch(req.name, cache)
             v = version_at(d.get("releases", {}), when, python, spec) if d else None
+            near = first_after(d.get("releases", {}), when, python, spec) if d and v is None else None
+            v = near[0] if near else v
             if v is None:
                 why[req.name] = f"needed by {dist}=={ver} as {req.name}{spec}; no release before {when} fits"
                 continue
@@ -284,7 +353,8 @@ def dependency_pins(pins: dict[str, str], installed: dict[str, str], when: date,
                 why[req.name] = f"needed by {dist}=={ver} as {req.name}{spec}; {v} is {mb:.0f} MB, too large"
                 continue
             extra[req.name] = v
-            why[req.name] = f"needed by {dist}=={ver} as {req.name}{spec or ''} (installed: {have or 'none'})"
+            why[req.name] = (f"needed by {dist}=={ver} as {req.name}{spec or ''} (installed: {have or 'none'})"
+                             + (f"; {near[1]}, the first release after the date that installs" if near else ""))
             brought.setdefault(root, []).append(req.name)
             if level + 1 < depth:
                 todo.append((req.name, v, root, level + 1))

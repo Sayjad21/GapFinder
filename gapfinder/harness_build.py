@@ -219,6 +219,7 @@ class ScriptFlag:
     kind: str  # value | store_true | store_false | bool_type | expr
     choices: list[str] = field(default_factory=list)
     line: int = 0
+    aliases: list[str] = field(default_factory=list)  # every option string (-d and --dataset)
 
 
 def _literal(src: str, node: ast.AST) -> str | None:
@@ -284,7 +285,8 @@ def script_flags(path: str | Path) -> list[ScriptFlag]:
         if name in seen:
             continue
         seen.add(name)
-        out.append(ScriptFlag(name, opt, default, kind, choices, n.lineno))
+        out.append(ScriptFlag(name, opt, default, kind, choices, n.lineno,
+                              opts if n.func.attr == "add_argument" else [opt]))
     return out
 
 
@@ -389,7 +391,11 @@ def template_command(root: str | Path, cmd: str, claims: list[dict]) -> Template
     if not (root / script).is_file():
         raise ValueError(f"the command's script {script} is not in the repo")
     flags = {f.name: f for f in script_flags(root / script)}
-    passed = {k.lstrip("-").replace("-", "_"): v for k, v in _parse_args(argv[i + 1:])}
+    # an option as passed (-d Synthetic) is the flag of any of its spellings (dest `dataset`): written back as the
+    # script declares it, never as `--d`, which argparse rejects as ambiguous (Fair Clustering: --dataset, --data_dir)
+    alias = {o.lstrip("-").replace("-", "_"): f.name for f in flags.values() for o in f.aliases}
+    passed = {alias.get(k.lstrip("-").replace("-", "_"), k.lstrip("-").replace("-", "_")): v
+              for k, v in _parse_args(argv[i + 1:])}
     words = set().union(*(claim_words(c) for c in claims[:1]))
     t = Templated("", "", script)
     parts, naive = [], []
@@ -497,8 +503,11 @@ def template_command(root: str | Path, cmd: str, claims: list[dict]) -> Template
         naive.append(f"{opt} {_q(str(value))}")
     # `python` is the environment's interpreter in a VM; the local backend sets $PYTHON to its own
     head = " ".join((['"${PYTHON:-python}"'] if argv[0] == "python" else [argv[0]]) + argv[1: i + 1])
-    t.command = (f"cd {cd} && " if cd else "") + " ".join([head] + parts)
-    t.naive = (f"cd {cd} && " if cd else "") + " ".join([head] + naive)
+    # the repository's root on the import path: a script in a subfolder that imports its own package
+    # (pygcn/train.py: `from pygcn.utils import ...`) runs as the README's `cd pygcn && python train.py` intends
+    root_path = 'PYTHONPATH="$OLDPWD${PYTHONPATH:+${GF_PATHSEP:-:}$PYTHONPATH}" ' if cd else ""
+    t.command = (f"cd {cd} && {root_path}" if cd else "") + " ".join([head] + parts)
+    t.naive = (f"cd {cd} && {root_path}" if cd else "") + " ".join([head] + naive)
     return t
 
 
