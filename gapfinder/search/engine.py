@@ -130,6 +130,15 @@ class SearchConfig:
     # (claims at fixed values, other datasets) chosen by expected information per run (gapfinder/diagnose/
     # discriminate.py), in batches, until one holds discriminate_stop of the posterior; within
     # discriminate_budget_frac of the run budget
+    # plan D7.7: multi-fidelity screening (successive halving, Hyperband/ASHA) for runs longer than mf_min_seconds
+    # whose spec can cut a run in time: most candidates are screened at mf_fraction of the as-run time and dropped
+    # when behind the as-run curve at the same epoch by mf_bands noise bands (away from the paper); the strongest
+    # mf_full_bracket of them always run at full length, so late effects (schedules, regularisers) are not lost
+    multi_fidelity: bool = True
+    mf_min_seconds: float = 600.0
+    mf_fraction: float = 0.25
+    mf_full_bracket: float = 0.25
+    mf_bands: float = 2.0
     discriminate: bool = True
     discriminate_rounds: int = 4
     discriminate_batch: int = 4
@@ -497,6 +506,8 @@ class GapSearch:
         self.differentials: dict = {}  # claim id -> diagnose.Differential
         self.scale_relations: list[dict] = []  # verified "the code's knob is g(the paper's)" (feeds the mutation round)
         self.code_leads: dict[str, list[dict]] = {}  # claim id -> the mutation round's fitting groups
+        self.mf_dropped: list = []  # candidates the multi-fidelity screen dropped (plan D7.7)
+        self.mf_runs: list = []  # its runs cut in time (not measurements of a configuration: kept apart)
         self._library_out: dict[str, dict] = {}  # claim id -> the library probe's findings and notes  # protocol tests: a selection or label edit, switched off and measured
         self.trace_records: list[dict] = []  # the raw dry-run records (for the paper-to-trace contrast)
         self.paper_text = paper_text
@@ -2153,6 +2164,7 @@ class GapSearch:
                 by_knob.setdefault(h.knob, []).append(h)
             rr = [lst[i] for i in range(max(map(len, by_knob.values()))) for lst in by_knob.values() if i < len(lst)]
             hyps = done_already + rr[: room // max(1, self.cfg.screen_repeats)]
+        hyps = await self._low_fidelity_screen(t, hyps)  # plan D7.7: before any full-length screening run
         if self.cfg.coarse_stop_bands > 0 and any((h.knob, h.value) in self._fine for h in hyps):
             first = [h for h in hyps if (h.knob, h.value) not in self._fine]
             await _all(*(self.measure(h.changes, self.cfg.screen_repeats, f"screen {h.knob}={h.value}")
@@ -2904,6 +2916,57 @@ class GapSearch:
         if discrepancy:
             v += (self.cfg.hm_disc * t.paper_value) ** 2
         return -0.5 * (t.paper_value - m) ** 2 / v - 0.5 * math.log(2 * math.pi * v)
+
+    def _series(self, branch: Branch, metric: str) -> dict[int, float]:
+        """The target metric per epoch, as the harness's emitter writes it (`<metric>__x_e<k>`)."""
+        out = {}
+        pre = f"{metric}__x_e"
+        for k, v in (branch.parsed_metrics or {}).items():
+            if k.startswith(pre) and k[len(pre):].isdigit():
+                out[int(k[len(pre):])] = v
+        return out
+
+    async def _low_fidelity_screen(self, t: Target, hyps: list[Hypothesis]) -> list[Hypothesis]:
+        """Plan D7.7: screen at a fraction of the run's time, drop what is behind the as-run curve (see SearchConfig)."""
+        if not self.cfg.multi_fidelity or not getattr(self.spec.run, "time_cut", False) or len(hyps) < 4:
+            return hyps
+        naive = self.measure_ok({})
+        times = [b.resources.elapsed_s for b in naive if b.resources and b.resources.elapsed_s]
+        curves = [self._series(b, t.metric) for b in naive]
+        if not times or statistics.fmean(times) < self.cfg.mf_min_seconds or not all(curves) or t.metric not in self.bands:
+            return hyps
+        fresh = [h for h in hyps if not self.measure_ok(h.changes)]
+        n_full = max(1, math.ceil(len(fresh) * self.cfg.mf_full_bracket))
+        full, low = fresh[:n_full], fresh[n_full:]  # the strongest (they come ordered by prior and score) run in full
+        if not low:
+            return hyps
+        cut = max(1, int(statistics.fmean(times) * self.cfg.mf_fraction))
+        self.runs_used += len(low)
+        branches = await self.orch.fanout([h.changes for h in low], [f"screen (cut at {cut} s) {h.knob}={h.value}"
+                                                                       for h in low], extra_env={"GF_TIME_CUT": str(cut)})
+        self.mf_runs.extend(branches)
+        direction = 1.0 if t.paper_value > (self.naive.get(t.metric) or 0.0) else -1.0
+        band = self.bands[t.metric].band
+        dropped, kept = [], []
+        for h, b in zip(low, branches):
+            curve = self._series(b, t.metric) if b.status == BranchStatus.succeeded else {}
+            if not curve:
+                kept.append(h)  # no curve to judge: screened in full
+                continue
+            e = max(curve)
+            ref = [c[e] for c in curves if e in c]
+            if not ref:
+                kept.append(h)
+                continue
+            behind = (curve[e] - statistics.fmean(ref)) * direction < -self.cfg.mf_bands * band
+            (dropped if behind else kept).append(h)
+        if dropped:
+            self.orch.events.emit("note", msg=f"{t.claim_id}: multi-fidelity screen: {len(dropped)} of {len(low)} "
+                                              f"candidates were behind the as-run curve after {cut} s and were not run "
+                                              f"in full: " + ", ".join(f"{h.knob}={h.value}" for h in dropped[:10]))
+            self.mf_dropped.extend(dropped)
+        drop = {id(h) for h in dropped}
+        return [h for h in hyps if id(h) not in drop]
 
     def _tied_on_target(self, t: Target, a: ClaimResult, b: ClaimResult) -> bool:
         """Plan D2.3 at verification: two verified answers with the same label whose target fits are equally likely

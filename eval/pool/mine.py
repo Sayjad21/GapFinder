@@ -26,6 +26,7 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -114,6 +115,87 @@ def _readme_arxiv(repo: str, ref: str) -> str | None:
     return None
 
 
+# ------------------------------------------------------------------ the pre-filter (plan D7.6)
+
+BIG_MB = 100
+CPU_FRIENDLY = {"torch": 2, "sklearn": 2, "scikit-learn": 2, "numpy": 1, "pandas": 1, "torch_geometric": 2,
+                "torch-geometric": 2, "dgl": 1, "networkx": 1, "lightgbm": 1, "xgboost": 1, "tensorflow": 0,
+                "jax": 0, "transformers": -1, "mmcv": -2, "mmdet": -2, "detectron2": -2}
+
+
+def _raw(repo: str, sha: str, path: str) -> str:
+    b = _get(f"https://raw.githubusercontent.com/{repo}/{sha}/{path}", timeout=30)
+    return b.decode("utf-8", "replace") if b else ""
+
+
+def tree_prefilter(repo: str, sha: str) -> dict:
+    """The free check's static rules (gapfinder/harness_auto.py's compute_blockers and README commands) before any
+    download: GitHub's recursive tree (one API call: every path and size), then the requirement files and the README
+    from raw.githubusercontent.com (not the API). A blocker is a CUDA extension (.cu sources and a CUDAExtension
+    setup), a GPU-only requirement, a file over BIG_MB, or no python command in any README; the rest are ranked by how
+    CPU-friendly their stack is (a score, higher first)."""
+    from gapfinder.harness_auto import GPU_ONLY, _commands_in
+
+    data = _get(f"https://api.github.com/repos/{repo}/git/trees/{sha}?recursive=1", api=True)
+    if not data:
+        return {"ok": None, "why": ["the tree could not be read"], "score": 0.0}
+    tree = [x for x in json.loads(data).get("tree", []) if x.get("type") == "blob"]
+    paths = {x["path"]: x.get("size", 0) for x in tree}
+    why = []
+    big = [f"{p} is {n / 2**20:.0f} MB" for p, n in paths.items() if n > BIG_MB * 2**20]
+    why += big
+    cu = [p for p in paths if p.endswith(".cu")]
+    if cu:
+        setups = [p for p in paths if p.endswith("setup.py")][:5]
+        if any("CUDAExtension(" in _raw(repo, sha, sp) for sp in setups):
+            why.append(f"builds a CUDA extension ({len(cu)} .cu file(s))")
+    reqs = [p for p in paths if "/" not in p and re.match(r"(requirements.*\.txt|environment.*\.ya?ml)$", p)]
+    stack = 0
+    for rq in reqs:
+        text = _raw(repo, sha, rq).lower()
+        for pkg in sorted(GPU_ONLY):
+            if re.search(rf"(?m)^\s*-?\s*{re.escape(pkg)}\b", text):
+                why.append(f"requires {pkg} ({rq})")
+        stack += sum(v for k, v in CPU_FRIENDLY.items() if re.search(rf"(?m)^\s*-?\s*{re.escape(k)}\b", text))
+    readmes = [p for p in paths if re.search(r"(?i)(^|/)readme[^/]*$", p) and p.count("/") <= 2]
+    has_cmd = False
+    for rd in readmes[:4]:
+        tmp = Path(tempfile.gettempdir()) / "gf_prefilter_readme.md"  # _commands_in reads a file
+        tmp.write_text(_raw(repo, sha, rd), encoding="utf-8")
+        has_cmd = has_cmd or any(re.search(r"python", c.cmd) for c in _commands_in(tmp, rd))
+    if not has_cmd:
+        why.append("no experiment command in the README")
+    total = sum(paths.values()) / 2**20
+    score = stack - total / 500 - len(big)
+    return {"ok": not why, "why": why, "size_mb": round(total, 1), "big": big, "cu": len(cu), "score": round(score, 2)}
+
+
+def prefilter_check() -> None:
+    """Plan D7.6's acceptance: the pre-filter against the pool's free check (eval/pool/verified.json "_dry")."""
+    public = {c["id"]: c for c in json.loads(PUBLIC.read_text(encoding="utf-8"))}
+    dry = json.loads((ROOT / "eval" / "pool" / "verified.json").read_text(encoding="utf-8")).get("_dry", {})
+    agree = disagree = 0
+    rows = []
+    for cid, v in dry.items():
+        c = public.get(cid)
+        if c is None:
+            continue
+        pf = tree_prefilter(c["repo"].removeprefix("https://github.com/"), c["commit"])
+        if pf["ok"] is None:
+            continue
+        free_ok = v["verdict"] == "ready"
+        same = free_ok == pf["ok"]
+        agree += same
+        disagree += not same
+        rows.append({"id": cid, "free_check": v["verdict"], "prefilter": "ready" if pf["ok"] else "blocked",
+                     "why": pf["why"][:3], "free_why": v.get("why", "")[:120], "score": pf["score"]})
+        print(f"{'=' if same else 'X'} {cid} free={v['verdict']:10s} pre={'ready' if pf['ok'] else 'blocked':8s} "
+              f"{'; '.join(pf['why'][:2])[:90]}", flush=True)
+    (ROOT / "eval" / "results").mkdir(parents=True, exist_ok=True)
+    (ROOT / "eval" / "results" / "prefilter_check.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
+    print(f"\nagree {agree}, disagree {disagree}")
+
+
 def mine(per_query: int = 100) -> None:
     """Cheapest checks first: the search result (single parent, not a fork, repo not seen), then the README at the
     parent for an arXiv link (raw.githubusercontent.com), and only then the diff (github.com throttles diffs)."""
@@ -147,6 +229,10 @@ def mine(per_query: int = 100) -> None:
                 continue
             seen.add(sha)
             parent = it["parents"][0]["sha"]
+            pf = tree_prefilter(repo, parent)  # plan D7.6: no download for a repo the VM can't run
+            if pf["ok"] is False:
+                counts["prefiltered"] = counts.get("prefiltered", 0) + 1
+                continue
             arxiv = _readme_arxiv(repo, parent)
             if not arxiv:
                 no_arxiv.add(repo)
@@ -189,9 +275,12 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("mine")
     sub.add_parser("list")
+    sub.add_parser("prefilter-check", help="the pre-filter against the free check on the public candidates")
     a = ap.parse_args()
     if a.cmd == "mine":
         mine()
+    elif a.cmd == "prefilter-check":
+        prefilter_check()
     else:
         for c in json.loads(PUBLIC.read_text(encoding="utf-8")):
             print(c["id"], c["repo"], c["commit"][:10], "arXiv", c["arxiv"])

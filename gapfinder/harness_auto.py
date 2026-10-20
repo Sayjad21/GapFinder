@@ -197,6 +197,8 @@ class Binding:
     scale: float = 1.0  # multiply the printed number by this to get the paper's unit (0-1 printed, % in the paper: 100)
     alternatives: list[str] = field(default_factory=list)
     refused: str = ""
+    tied: list[str] = field(default_factory=list)  # the labels that fit equally well (a refusal)
+    quote: str | None = None  # the paper's sentence that settled a tie (plan D6.6)
 
 
 def bind_metrics(log: str, claims: list[dict], tail_lines: int = 40) -> list[Binding]:
@@ -230,11 +232,47 @@ def bind_metrics(log: str, claims: list[dict], tail_lines: int = 40) -> list[Bin
         top = [x for x in cands if (x[0], x[1]) == (cands[0][0], cands[0][1])]
         if len(top) > 1:
             out.append(Binding(c["claim_id"], None, alternatives=[x[2] for x in cands],
-                               refused="several printed numbers fit equally well: " + ", ".join(x[2] for x in top)))
+                               refused="several printed numbers fit equally well: " + ", ".join(x[2] for x in top),
+                               tied=[x[2] for x in top]))
             continue
         _, _, label, v, scale = top[0]
         out.append(Binding(c["claim_id"], label, v, scale, alternatives=[x[2] for x in cands if x is not top[0]]))
     return out
+
+
+_REPORT_VERB = re.compile(r"(?i)\b(report|reported|reports|use|uses|used|adopt|adopted|choose|chose|chosen|select|"
+                          r"selected|evaluate|evaluated|present|presented|show|shown|measure|measured|compute|computed|"
+                          r"take|taken|follow|followed)\b")
+
+
+def bind_by_quote(b: Binding, log: str, paper_text: str) -> Binding | None:
+    """Plan D6.6: a tie between printed labels settled by the paper's own sentence, never by closeness to its
+    number. The words that tell the tied labels apart (`Z acc` and `Q acc`: Z, Q) are looked for in the paper's
+    sentences that report, use or choose something; exactly one label so named binds, with that sentence as the
+    evidence. No sentence, or sentences for several labels: still a refusal."""
+    if len(b.tied) < 2 or not paper_text:
+        return None
+    toks = {lab: set(re.findall(r"[A-Za-z0-9@]+", lab.lower())) for lab in b.tied}
+    common = set.intersection(*toks.values())
+    sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+", paper_text) if _REPORT_VERB.search(x)]
+    hits = {}
+    for lab, t in toks.items():
+        own = t - common
+        if not own:
+            continue
+        found = [x for x in sentences if all(re.search(rf"(?i)(?<![A-Za-z0-9]){re.escape(w)}(?![A-Za-z0-9])", x)
+                                             for w in own)]
+        if found:
+            hits[lab] = found[0]
+    if len(hits) != 1:
+        return None
+    (label, quote), = hits.items()
+    found = labelled_numbers(log)
+    if label not in found:
+        return None
+    v = found[label]
+    return Binding(b.claim_id, label, v, 1.0, alternatives=[x for x in b.alternatives if x != label],
+                   refused=f"(a tie, settled by the paper: \"{quote[:200]}\")", quote=quote)
 
 
 # ------------------------------------------------------------------------ fitting the Sandbox

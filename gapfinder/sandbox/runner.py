@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import re
 import uuid as uuidlib
 
 from gapfinder.ledger.schemas import Branch, BranchStatus, Layer
@@ -120,7 +121,8 @@ class Orchestrator:
 
     # ------------------------------------------------------------ branches
     async def run_branch(self, changes: dict[str, str], *, label: str | None = None,
-                         files: dict[str, bytes] | None = None, fresh_setup: bool = False) -> Branch:
+                         files: dict[str, bytes] | None = None, fresh_setup: bool = False,
+                         extra_env: dict[str, str] | None = None) -> Branch:
         """Run one branch. `files` (e.g. a config fix proposed by a model) pass the diff guard first:
         anything outside the spec's allowed_paths is algorithm code and the branch is rejected unrun."""
         bid = f"B{next(self._ids):04d}"
@@ -149,7 +151,7 @@ class Orchestrator:
         self.events.emit("branch_created", branch=branch.model_dump())
         self.events.emit("branch_started", id=bid)
         try:
-            res = await self._run_cell(parent, cmd, {**env, "RUN_TAG": run_tag}, files)
+            res = await self._run_cell(parent, cmd, {**env, **(extra_env or {}), "RUN_TAG": run_tag}, files)
         except InfraError as exc:
             branch.status, branch.note = BranchStatus.infra_error, _note(label, str(exc))
             self.events.emit("branch_finished", branch=branch.model_dump())
@@ -174,8 +176,9 @@ class Orchestrator:
                 metrics = ground_values(parse_metrics(raw, self.spec.run.format), raw)
             except UngroundedValueError as exc:
                 metrics, branch.note = {}, _note(label, str(exc))
-            if self.spec.metrics:
-                metrics = {k: v for k, v in metrics.items() if k in self.spec.metrics}
+            if self.spec.metrics:  # a listed metric's per-epoch series stays too (plan D7.7: `<metric>__x_e<k>`)
+                metrics = {k: v for k, v in metrics.items() if k in self.spec.metrics
+                           or (re.fullmatch(r".+__x_e\d+", k) and k.rsplit("__x_e", 1)[0] in self.spec.metrics)}
             if not metrics:
                 branch.status = BranchStatus.failed
                 if branch.note == label:
@@ -273,10 +276,11 @@ class Orchestrator:
         return merged
 
     async def fanout(self, change_sets: list[dict[str, str]], labels: list[str] | None = None,
-                     fresh_setup: bool = False) -> list[Branch]:
-        """`fresh_setup`: each branch gets its own new build/load instead of forking the shared one."""
+                     fresh_setup: bool = False, extra_env: dict[str, str] | None = None) -> list[Branch]:
+        """`fresh_setup`: each branch gets its own new build/load instead of forking the shared one. `extra_env`: set
+        for these runs only (a time cut, plan D7.7)."""
         labels = labels or [None] * len(change_sets)
-        return list(await asyncio.gather(*(self.run_branch(c, label=l, fresh_setup=fresh_setup)
+        return list(await asyncio.gather(*(self.run_branch(c, label=l, fresh_setup=fresh_setup, extra_env=extra_env)
                                            for c, l in zip(change_sets, labels))))
 
     async def calibrate_noise(self, n: int = 5, changes: dict[str, str] | None = None,

@@ -392,12 +392,18 @@ async def cmd_harness(args) -> int:
         from gapfinder.models.router import Router
 
         router = Router()
+    paper_text = None  # for the binder's ties (plan D6.6): the ledger's paper, when its PDF is still there
+    if ledger.get("paper") and Path(ledger["paper"]).is_file():
+        from gapfinder.ingest.pdf import load_paper
+
+        paper_text = load_paper(ledger["paper"]).full_text
     r = await build_harness(router, ContreeBackend(), repo=args.repo, commit=args.commit, local=args.local,
                             ledger=ledger, target=args.target, out=args.out, repeats=args.repeats,
                             smoke_timeout=args.smoke_timeout, max_steps=args.max_steps, image=args.image,
                             force=args.force, env_checkpoint=args.env_checkpoint,
                             paper_date=paper_date(args.arxiv, args.paper_date) if (args.arxiv or args.paper_date) else None,
-                            command=args.command, bind=dict(b.split("=", 1) for b in args.bind or []))
+                            command=args.command, bind=dict(b.split("=", 1) for b in args.bind or []),
+                            paper_text=paper_text)
     print(f"{'ready for approval' if r.ok else 'stopped at ' + r.stage}" + (f": {r.reason[:300]}" if r.reason else ""))
     print(f"wrote {Path(args.out) / 'HARNESS.md'}" + (f", {Path(args.out) / 'spec.yaml'}, "
                                                        f"{Path(args.out) / 'targets.json'}" if r.ok else ""))

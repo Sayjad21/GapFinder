@@ -159,7 +159,7 @@ class LocalBackend(SandboxBackend):
             p.write_bytes(data)
         # GF_PATHSEP: the separator the local interpreter splits PYTHONPATH on (";" on Windows); a VM's is ":"
         full_env = {**os.environ, **env, "WORK": str(dest), "PYTHON": Path(sys.executable).as_posix(),
-                    "GF_PATHSEP": os.pathsep}
+                    "GF_PATHSEP": os.pathsep, "GF_BASH": str(self.shell)}  # the shell a wrapper should call
         argv, container = [self.shell, "-c", shell], None
         if self.docker_image:
             container = f"gf-{cid}"

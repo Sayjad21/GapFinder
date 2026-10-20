@@ -52,6 +52,10 @@ class RunStage(Stage):
     # shards that are repeats of one cell (seeds): each shard's metrics are parsed alone and averaged, instead of
     # the joined output's last value of each metric (output "stdout" only)
     shard_mean: bool = False
+    # plan D7.7: each run of the cell is wrapped in `timeout ${GF_TIME_CUT:-0}` and the emitter still runs after a
+    # cut, writing the target metric per epoch (`<metric>__x_e<k>`): a screening run can stop early and be compared
+    # with the as-run curve at the same epoch
+    time_cut: bool = False
 
 
 class Knob(BaseModel):

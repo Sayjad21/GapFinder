@@ -37,6 +37,24 @@ from gapfinder.harness_auto import (_PAIR, _PREFIX, _QUAL, Binding, Command, Shr
 
 HARNESS_DIR = "gf_harness"
 PARALLEL = 4  # runs of one cell at once in a 4-vCPU VM, one thread each
+VM_MB = 3900  # the Sandboxes VM's memory (3.9 GB, no swap)
+# plan D6.4: a smoke copy's peak memory (the largest descendant's resident set; Python 2 and 3)
+PEAK = r'''import subprocess, sys
+rc = subprocess.call(sys.argv[1:])
+try:
+    import resource  # Linux (the VMs); a local Windows run has no peak to report
+    print("GF_PEAK_KB=%d" % resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
+except Exception:
+    pass
+sys.exit(rc)
+'''
+
+
+def memory_parallel(peak_mb: float | None, cap: int = PARALLEL) -> int:
+    """Copies of a run that fit the VM at once: 80% of its memory over one copy's peak (at least one)."""
+    if not peak_mb or peak_mb <= 0:
+        return cap
+    return max(1, min(cap, int(0.8 * VM_MB / peak_mb)))
 
 # ------------------------------------------------------------------------ claims
 
@@ -484,6 +502,91 @@ def template_command(root: str | Path, cmd: str, claims: list[dict]) -> Template
     return t
 
 
+_EVAL_SCRIPT = re.compile(r"(?i)(^|/)(eval\w*|test\w*|infer\w*|predict\w*|attack\w*|inference\w*|score\w*|"
+                          r"benchmark\w*|robust\w*)\.py$")
+_TRAIN_SCRIPT = re.compile(r"(?i)(^|/)(train\w*|main\w*|run\w*|fit\w*|pretrain\w*|finetune\w*|learn\w*)\.py$")
+_PATH_FLAG = re.compile(r"(?i)(save|ckpt|checkpoint|model_?path|model_?dir|out(put)?_?(dir|path)?|load|resume|weights?|"
+                        r"pretrained|restore|log_?dir|exp_?dir)")
+
+
+def _script_of(cmd: str) -> str:
+    cd, argv = _split_command(cmd)
+    s = next((a for a in argv if a.endswith(".py")), "")
+    return ((Path(cd) / s) if cd else Path(s)).as_posix() if s else ""
+
+
+def _paths(cmd: str) -> set[str]:
+    """The file paths a command passes (checkpoints, output directories): what links one step to the next."""
+    _, argv = _split_command(cmd)
+    i = next((j for j, a in enumerate(argv) if a.endswith(".py")), None)
+    out = set()
+    for k, v in _parse_args(argv[i + 1:] if i is not None else []):
+        if v and (_PATH_FLAG.search(k) or re.search(r"[/\\]|\.(pt|pth|ckpt|h5|pkl|bin|npz|model)$", v)):
+            out.add(v.rstrip("/").split("/")[-1])
+    return out
+
+
+def chain_steps(root: str | Path, picked: Command) -> list[Command]:
+    """Plan D6.5: the README's procedure up to the picked command. When the picked command evaluates or attacks a
+    model (by its script's name) or reads a checkpoint, the nearest earlier README command that trains one (by name,
+    or by writing the path the picked one reads) runs first in the same cell. Data preparation stays a data step."""
+    from gapfinder.harness_auto import _commands_in
+
+    root = Path(root)
+    rel, _, line = picked.source.rpartition(":")
+    p = root / rel
+    if not p.is_file() or not line.isdigit():
+        return [picked]
+    script = _script_of(picked.cmd)
+    reads = _paths(picked.cmd)
+    if not (_EVAL_SCRIPT.search(script) or reads):
+        return [picked]
+    before = [c for c in _commands_in(p, rel) if int(c.source.rpartition(":")[2]) < int(line)
+              and re.match(r"^(cd [\w./-]+ *(&&|;) *)?python", c.cmd)]
+    for c in reversed(before):
+        s2 = _script_of(c.cmd)
+        if not s2 or s2 == script or _PREP.search(s2):
+            continue
+        linked = bool(reads & _paths(c.cmd))
+        if linked or (_EVAL_SCRIPT.search(script) and _TRAIN_SCRIPT.search(s2)):
+            return [c, picked]
+    return [picked]
+
+
+def template_chain(root: str | Path, steps: list[Command], claims: list[dict]) -> "Templated":
+    """The steps as one cell: each templated, run in order (`&&`); a flag both scripts take with the same default is
+    one knob (a hidden size the checkpoint must match), one with different defaults is two (prefixed by script)."""
+    ts = [template_command(root, c.cmd, claims) for c in steps]
+    if len(ts) == 1:
+        return ts[0]
+    last = ts[-1]
+    merged = Templated("", "", last.script)
+    commands, naives = [], []
+    for t in ts:
+        stem = Path(t.script).stem
+        cmd = t.command
+        for k, v in t.knobs.items():
+            other = next((u.knobs[k] for u in ts if u is not t and k in u.knobs), None)
+            if other is not None and str(other["default"]) != str(v["default"]):
+                new = f"{stem}_{k}"
+                cmd = cmd.replace("{" + k + "}", "{" + new + "}")
+                merged.knobs[new] = v
+            else:
+                merged.knobs.setdefault(k, v)
+        commands.append(cmd)
+        naives.append(t.naive)
+        merged.fixed.update({f"{stem}:{k}": why for k, why in t.fixed.items()})
+        merged.seed_flag = merged.seed_flag or t.seed_flag
+        merged.epochs_knob = merged.epochs_knob or (t.epochs_knob if t.epochs_knob in merged.knobs else None)
+        merged.repeats_flag = merged.repeats_flag or t.repeats_flag
+        merged.note += t.note
+        merged.dataset = merged.dataset or t.dataset
+    merged.command = " && ".join(commands)
+    merged.naive = " && ".join(naives)
+    merged.note += f"the cell runs {' then '.join(t.script for t in ts)} (the README's procedure); "
+    return merged
+
+
 _PREP = re.compile(r"(?i)(^|/)(pre_?process\w*|prepare\w*|process_?data\w*|build_?(data|dataset|graph)\w*|"
                    r"make_?(data|dataset)\w*|split\w*|gen(erate)?_?data\w*|download\w*|setup_?data\w*)\.py$")
 
@@ -621,6 +724,7 @@ def trajectory_stats(s, t):
 
 vals = {}
 stats = {}
+curve_acc = {}
 runs = 0
 for f in sorted(glob.glob("out/run*.log")):
     text = io.open(f, encoding="utf-8", errors="replace").read()
@@ -639,6 +743,10 @@ for f in sorted(glob.glob("out/run*.log")):
                 if "_k" in tst:  # ... and where the target's validation score is best (early stopping)
                     st["atbestval"] = st["_xs"][tst["_k"]]
             stats.setdefault(name, []).append(st)
+            if TRAJ[name].get("target"):  # the target per epoch (plan D7.7)
+                for e, x in enumerate(st["_xs"], 1):
+                    if e <= 100 or (e <= 1000 and e %% 10 == 0) or e %% 100 == 0:
+                        curve_acc.setdefault((name, e), []).append(x)
     curve = None
     hit = False
     for name in sorted(BIND):
@@ -666,6 +774,9 @@ for name in sorted(stats):  # reporting-rule statistics (plan D1.2): the cell's 
     print("%%s__x_minrun=%%.6g" %% (name, finals[0]))
     m = len(finals)
     print("%%s__x_medrun=%%.6g" %% (name, (finals[m // 2] + finals[(m - 1) // 2]) / 2.0))
+for (name, e) in sorted(curve_acc):  # a run cut early is compared with the as-run curve at its last epoch
+    xs = curve_acc[(name, e)]
+    print("%%s__x_e%%d=%%.6g" %% (name, e, sum(xs) / len(xs)))
 print("gf_runs=%%d" %% runs)
 '''
 
@@ -788,6 +899,8 @@ def run_command(t: Templated, repeats: int, shards: bool, parallel: int = PARALL
     threads = "export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 TF_NUM_INTRAOP_THREADS=1 " \
               "TF_NUM_INTEROP_THREADS=1; " if repeats > 1 and not shards and parallel > 1 else ""
     one = t.command.replace("$GF_SEED", "$((GF_SEED + r))")
+    # plan D7.7: a screening run may be cut at GF_TIME_CUT seconds (0: never); the emitter runs after it either way
+    one = f'timeout ${{GF_TIME_CUT:-0}} "${{GF_BASH:-bash}}" -c {shlex.quote(one)}'
     if shards:
         body = f"r={{shard}}; ({one}) > out/run{{shard}}.log 2>&1"
     elif repeats == 1:
@@ -815,6 +928,8 @@ def spec_dict(name: str, base: str, source: str, t: Templated, claims: list[dict
     if shards:
         run["shards"] = [str(i) for i in range(1, repeats + 1)]
         run["shard_mean"] = True
+    if any(v.get("target") for v in (trajectories or {}).values()):
+        run["time_cut"] = True  # the emitter writes the target per epoch: a cut run can be compared (plan D7.7)
     spec = {"name": name, "base": base, "source": source, "run": run, "knobs": knobs, "allowed_paths": ["out/"],
             "metrics": [c["name"] for c in claims if c["claim_id"] in bound]
             + [f"{c['name']}__{i}" for c in claims if c["claim_id"] in bound
@@ -906,6 +1021,39 @@ class HarnessResult:
     notes: list[str] = field(default_factory=list)
 
 
+_HYPER = re.compile(r"(?i)^(lr|learning_rate|.*_lr|weight_decay|wd|l2.*|.*dropout.*|drop_?rate|.*epochs?|n_?iters?|"
+                    r"max_?iter.*|steps|max_steps|batch_?size|bs|hidden.*|.*_dim|dim|n_?layers?|num_layers|layers|"
+                    r"n_?heads|num_heads|heads|momentum|alpha|beta\d?|gamma|lambda_?\w*|lam\w*|tau|temperature|"
+                    r"eps(ilon)?|patience|.*_rate|k|top_?k|n_?neighbors|window\w*|seq_len|.*_size)$")
+
+
+def literal_knobs(root: Path, t: "Templated", command: str, few: int = 3, limit: int = 12) -> dict[str, dict]:
+    """Plan D6.7: when the script exposes fewer than `few` flags, the named literals that look like settings (lr,
+    epochs, hidden, dropout, batch size ...) in the files the run imports become patch knobs (the in-memory hook;
+    the entry script only when the command runs it directly). Their defaults are the literals as written."""
+    if len(t.knobs) >= few:
+        return {}
+    from gapfinder.harness_auto import _import_closure
+    from gapfinder.ingest.code_checks import named_literals
+    from gapfinder.sandbox import ast_patch
+
+    files = {p.relative_to(root.resolve()).as_posix() for p, _ in _import_closure(root.resolve())
+             if p.is_relative_to(root.resolve())}
+    out = {}
+    for x in named_literals(root):
+        if x.file not in files or not _HYPER.match(x.name or "") or x.name in t.knobs:
+            continue
+        if "add_argument" in x.detail or "DEFINE_" in x.detail or x.name == "default":
+            continue
+        if ast_patch.entry_script(root / x.file) and not ast_patch.direct_entry(command, x.file):
+            continue
+        k = ast_patch.knob_name(x.file, x.line, x.name)
+        out.setdefault(k, {"layer": "environment", "default": str(x.value), "env": True})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def harness_markdown(r: HarnessResult) -> str:
     L = ["# HARNESS.md (written by `gapfinder harness`)", "",
          f"**Status:** {'ready for approval' if r.ok else 'stopped at ' + r.stage}" + (f": {r.reason}" if r.reason else ""),
@@ -968,7 +1116,9 @@ def harness_markdown(r: HarnessResult) -> str:
     if r.smoke:
         s = r.smoke
         L += ["## Smoke run", "", f"{s['copies']} run(s) in parallel; exit {s['rc']} after {s['seconds']} s"
-              + (" (stopped at the smoke timeout)" if s.get("timed_out") else ""), ""]
+              + (" (stopped at the smoke timeout)" if s.get("timed_out") else "")
+              + (f"; peak memory {s['peak_mb']:.0f} MB a run, {s.get('parallel')} at a time in the cell"
+                 if s.get("peak_mb") else ""), ""]
         if s.get("per_run_values"):
             L += [f"- `{k}`: {', '.join(f'{x:.4g}' for x in v)}" for k, v in s["per_run_values"].items()]
             L += ["", "Seeds vary: " + ("unknown (one copy)" if s.get("seeds_vary") is None else "yes"
@@ -1046,7 +1196,7 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
                         max_steps: int = 12, image: str | None = None, force: bool = False,
                         fetch_cmd: str | None = None, env_checkpoint: str | None = None,
                         paper_date=None, command: str | None = None,
-                        bind: dict[str, str] | None = None) -> HarnessResult:
+                        bind: dict[str, str] | None = None, paper_text: str | None = None) -> HarnessResult:
     """Steps 0-8 of the module docstring. `env_checkpoint`: an environment already built (skips env-build).
     `paper_date` (a date): also install the imported packages as they were then, behind one knob (item 19).
     The two choices a person approving the harness makes, given up front (recorded in HARNESS.md): `command`, the
@@ -1095,10 +1245,13 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
                 _split_command(cmds[0].cmd)[1][:2] != _split_command(cmds[1].cmd)[1][:2]:
             return finish("command", "two commands with different scripts match the claims equally well; pick one "
                                      "with --command")
+        steps = chain_steps(root, cmds[0])
         try:
-            r.templated = t = template_command(root, cmds[0].cmd, r.claims)
+            r.templated = t = template_chain(root, steps, r.claims)
         except ValueError as e:
             return finish("template", str(e))
+        if len(steps) > 1:
+            r.notes.append("procedure: " + " then ".join(f"`{c.cmd}` ({c.source})" for c in steps))
         r.points, r.curves, r.unmapped = extra_claims(ledger, target, t.knobs)
         conds, not_used = condition_points(ledger, target, t, root)
         r.unmapped += not_used
@@ -1128,7 +1281,7 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
             env_checkpoint = env.checkpoint
         else:
             r.env = {"image": image or "(given)", "checkpoint": env_checkpoint, "recipe": []}
-        files = {**sfiles, f"{HARNESS_DIR}/keep_data.py": KEEP_DATA.encode(),
+        files = {**sfiles, f"{HARNESS_DIR}/keep_data.py": KEEP_DATA.encode(), f"{HARNESS_DIR}/peak.py": PEAK.encode(),
                  f"{HARNESS_DIR}/emit.py": emit_script({}).encode()}
         from gapfinder import env_year
 
@@ -1144,7 +1297,8 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
             threads = "export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1; " if copies > 1 else ""
             # `copies` runs at once (the cell's own pattern), each stopped at the smoke timeout (`timeout` exits 124)
             smoke = (f"mkdir -p out; {threads}{SEED_PREFIX}s0=$(date +%s); pids=''; for r in $(seq 1 {copies}); do "
-                     f"(export r GF_SEED; timeout {int(smoke_timeout)} bash -c {shlex.quote(one)}) > out/run$r.log 2>&1 & "
+                     f"(export r GF_SEED; timeout {int(smoke_timeout)} \"${{PYTHON:-python}}\" {HARNESS_DIR}/peak.py "
+                     f"\"${{GF_BASH:-bash}}\" -c {shlex.quote(one)}) > out/run$r.log 2>&1 & "
                      f"pids=\"$pids $!\"; done; rc=0; for p in $pids; do wait $p || rc=$?; done; echo GF_SMOKE_RC=$rc; "
                      f"echo GF_SMOKE_S=$(( $(date +%s) - s0 )); for r in $(seq 1 {copies}); do echo GF_LOG_$r; "
                      f"tail -c 20000 out/run$r.log; echo; done; \"${{PYTHON:-python}}\" {HARNESS_DIR}/keep_data.py after")
@@ -1154,9 +1308,12 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
             rc = int((re.search(r"GF_SMOKE_RC=(\d+)", so) or [0, 1])[1])
             secs = float((re.search(r"GF_SMOKE_S=(\d+)", so) or [0, 0])[1])
             logs = re.split(r"(?m)^GF_LOG_\d+\s*$", so.split("GF_DATA_MANIFEST")[0])[1:]
+            peaks = [int(x) / 1024 for x in re.findall(r"GF_PEAK_KB=(\d+)", so)]
+            smoke_peak["mb"] = max(peaks) if peaks else None
             return b, so, rc, secs, logs
 
         step["at"] = "smoke"
+        smoke_peak: dict = {}
         parallel = copies = max(1, min(repeats, PARALLEL))
         b, so, rc, secs, logs = await smoke_run(copies)
         if copies > 1 and (not b.checkpoint or not logs or rc not in (0, 124)):
@@ -1168,11 +1325,30 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
             r.notes.append(f"{min(repeats, PARALLEL)} copies in parallel failed (exit {failed_rc}); one copy passed, so "
                            "the cell runs its repeats one at a time")
         r.manifest = _manifest(so)
-        r.smoke = {"copies": copies, "rc": rc, "seconds": secs, "timed_out": rc == 124}
+        r.smoke = {"copies": copies, "rc": rc, "seconds": secs, "timed_out": rc == 124, "peak_mb": smoke_peak.get("mb")}
+        fit = memory_parallel(smoke_peak.get("mb"))
+        if smoke_peak.get("mb") and fit < parallel:  # plan D6.4: what fits the VM's memory, not the vCPU count
+            r.notes.append(f"one run peaks at {smoke_peak['mb']:.0f} MB: {fit} fit the VM's {VM_MB} MB at once (not "
+                           f"{parallel}), so the cell runs its repeats {fit} at a time")
+            parallel = fit
+        r.smoke["parallel"] = parallel
         if not b.checkpoint or not logs or (rc not in (0, 124)):
             return finish("smoke", f"the smoke run failed (exit {rc}): {(logs[0] if logs else so + (b.stderr or ''))[-1200:]}")
         r.bindings = bind_metrics(logs[0], [{"claim_id": c["claim_id"], "metric": c["metric"],
                                              "paper_value": c["paper_value"]} for c in r.claims])
+        if paper_text:  # plan D6.6: a tie settled by the paper's own sentence, never by closeness to its number
+            from gapfinder.harness_auto import bind_by_quote
+
+            for i, bb in enumerate(r.bindings):
+                if bb.label is None and bb.tied:
+                    q = bind_by_quote(bb, logs[0], paper_text)
+                    if q is not None:
+                        c = next(x for x in r.claims if x["claim_id"] == bb.claim_id)
+                        ratio = abs(c["paper_value"]) / abs(q.value) if q.value else 1.0
+                        q.scale = 100.0 if 30 < ratio < 300 else 0.01 if 0.003 < ratio < 0.03 else 1.0
+                        r.bindings[i] = q
+                        r.notes.append(f"{bb.claim_id}: the tie {', '.join(bb.tied)} settled by the paper: "
+                                       f"\"{q.quote[:160]}\"")
         if bind:
             from gapfinder.harness_auto import labelled_numbers as _ln
 
@@ -1290,6 +1466,11 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
         (out / HARNESS_DIR / "emit.py").write_text(em, encoding="utf-8")
         r.spec = spec_dict(out.name, w.checkpoint, str(root.resolve()), t, r.claims, bound, repeats, r.plan, per_run,
                            r.curves, parallel, traj)
+        lits = literal_knobs(root, t, r.spec["run"]["command"])
+        if lits:  # plan D6.7: a script with few flags has its settings in the code
+            r.spec["knobs"].update(lits)
+            r.notes.append(f"the script exposes {len(t.knobs)} flag(s): {len(lits)} named literal(s) it runs became "
+                           "patch knobs (in memory, no file edited): " + ", ".join(k.split(":", 3)[-1] for k in lits))
         library: dict = {}
         if r.paper_year and r.paper_year["used"]:
             y = r.paper_year
