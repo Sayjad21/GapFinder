@@ -119,6 +119,15 @@ class SearchConfig:
     mutation_max: int = 24
     mutation_keep: int = 6
     mutation_budget_frac: float = 0.35
+    # the code rounds' shares, kept out of the settings exploration (screening, combining, the secant step) from the
+    # start of each claim when the code has leads: literals for the patch round, mutation sites for the mutation
+    # round. Confirmation and verification may still use them (a settings answer that fits is worth confirming).
+    # The settings exploration spent them first: planted curriculum c1 (2026-10-22), 4 of 6 level-1 misses, VGAE's
+    # patch round one run short of the planted constant (twice) and the RippleNet and FastGCN mutation rounds never
+    # run. An unsupported fit also opens the mutation round, as it does the patch round; a mutant found then is an
+    # alternative code lead beside the settings answer, never in its place (an equally unsupported mutant would
+    # otherwise displace a right setting).
+    code_hold: bool = True
     # plans D1.3-D1.5, D7.2: when the paper-year packages (or the paper-era code) change the numbers, which package
     # (delta debugging), which release or commit (binary search) and which call site (API and source diff); at most
     # library_budget_frac of the run budget; two configurations give "the same numbers" within library_z standard
@@ -571,6 +580,8 @@ class GapSearch:
         self._runs: dict[frozenset, list[Branch]] = {}
         self.untestable: list[tuple[str, str]] = []  # (knob, value) above the spec's cost limit
         self._patch_reserve = 0  # runs held back for the patch round (set after the combine round)
+        self._code_hold = 0  # runs kept out of the settings exploration for the code rounds (code_hold)
+        self._mutation_alt = False  # the mutation round runs only because the settings answer is unsupported
         self._coarse: set[tuple[str, str]] = set()  # coarse ladder rungs (screened first)
         self._fine: set[tuple[str, str]] = set()  # finer rungs (screened only if the coarse ones move the metric)
         self.runs_used = 0
@@ -1146,7 +1157,7 @@ class GapSearch:
         """Runs screening and combining may still use before reaching the confirmation escrow."""
         if self.cfg.max_runs is None or not self.cfg.escrow_frac:
             return None
-        return max(0, int(self.cfg.max_runs * (1 - self.cfg.escrow_frac)) - self.runs_used)
+        return max(0, int(self.cfg.max_runs * (1 - self.cfg.escrow_frac)) - self.runs_used - self._code_hold)
 
     def _per_knob_cap(self, n_open: int) -> int:
         """Values per knob: at least coverage_candidates, more when the budget spread over the open knobs
@@ -1224,6 +1235,8 @@ class GapSearch:
                     await self._patch_round(t, res)
                 except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
                     res.notes.append(f"patch round stopped early: {exc}")
+        if self.cfg.code_hold:
+            self._patch_reserve = 0  # what the patch round left goes on to the mutation round
         if self.cfg.history_matching and self.cfg.mutations:
             try:
                 await self._mutation_round(t, res)
@@ -1563,8 +1576,12 @@ class GapSearch:
         rel = [r for r in self.scale_relations if r.get("verified")]
         label = res.attribution.confidence_label if res.attribution else ConfidenceLabel.unexplained.value
         out_of_space = (res.diagnosis or {}).get("kind", "").startswith("out_of_space")
-        return bool(rel) or out_of_space or label in (ConfidenceLabel.unexplained.value,
-                                                      ConfidenceLabel.conflicts_held_out.value)
+        self._mutation_alt = False
+        if bool(rel) or out_of_space or label in (ConfidenceLabel.unexplained.value,
+                                                  ConfidenceLabel.conflicts_held_out.value):
+            return True
+        self._mutation_alt = self.cfg.code_hold and label == ConfidenceLabel.fits_but_unsupported.value
+        return self._mutation_alt
 
     async def _mutation_round(self, t: Target, res: ClaimResult) -> None:
         """Small code edits at sites on the data flow of the knobs the claims depend on, scored on every claim.
@@ -1673,6 +1690,10 @@ class GapSearch:
             k.startswith("@") for k in res.changes)
         if keep_scale:  # the scale relation is the answer; the mutant is where it lives in the code
             res.notes.append(f"the code site of that relation: {origin.describe()}")
+            return
+        if self._mutation_alt and res.changes:  # opened by an unsupported fit: an alternative, not the answer
+            res.notes.append(f"an alternative to {res.changes}: a code change fits every claim as well: "
+                             f"{origin.describe()}; a code lead, not a confirmed cause")
             return
         if _rank(res) <= _LABEL_RANK[label.value] and current != ConfidenceLabel.unexplained.value and res.changes:
             return
@@ -2178,7 +2199,7 @@ class GapSearch:
                         continue
                     new.append(Hypothesis(knob, v, getattr(self.assumptions.get(knob), "id", None)))
             if self.cfg.max_runs is not None:
-                room = (self.cfg.max_runs - self.runs_used - self._patch_reserve
+                room = (self.cfg.max_runs - self.runs_used - self._patch_reserve - self._code_hold
                         - int(self.cfg.escrow_frac * self.cfg.max_runs))
                 new = new[: max(0, room // max(1, self.cfg.screen_repeats))]
             if not new:
@@ -2219,6 +2240,7 @@ class GapSearch:
     async def _search(self, t: Target, res: ClaimResult, tried: set[frozenset]) -> None:
         thr = self.cfg.effect_threshold
         hyps = [h for h in self.hypotheses() if self._renderable(h, res)]
+        self._hold_for_code(t)
 
         # 1. screen: one knob per branch, one run each (within the exploration share of the budget)
         room = self._exploration_room()
@@ -2640,6 +2662,46 @@ class GapSearch:
                                       f"screen {h.knob}={h.value} (retry after infra failure)") for h in again))
             tried.update(frozenset(h.changes.items()) for h in retry)
         return retry  # the same-value retries are already in the caller's list
+
+    def _hold_for_code(self, t: Target) -> None:
+        """code_hold: before screening, keep out of the settings exploration the patch round's share
+        (patch_budget_frac) when the code has literal leads, and the mutation round's minimum when it has mutation
+        sites on the data flow of the spec's knobs: `mutation_keep` one-run screens plus, for each kept mutant, the
+        runs of its follow-up stages (the target and every claim's condition, twice), within mutation_budget_frac."""
+        self._code_hold = 0
+        if not self.cfg.code_hold or not self.cfg.max_runs:
+            return
+        root = self.spec.code_root()
+        if root is None:
+            return
+        from gapfinder.ingest.code_checks import code_checks
+        from gapfinder.sandbox import ast_patch
+
+        try:
+            leads = [x for x in code_checks(root, set(self.spec.knobs)) if x.family == "unexposed_setting" and x.value
+                     and (not ast_patch.entry_script(root / x.file)
+                          or ast_patch.direct_entry(self.spec.run.command, x.file))]
+        except Exception:  # noqa: BLE001 (no leads read: nothing held for them)
+            leads = []
+        patch = int(self.cfg.max_runs * self.cfg.patch_budget_frac) if leads and self.cfg.patch_knobs else 0
+        mut = 0
+        if self.cfg.mutations and self.cfg.history_matching:
+            from gapfinder.search.mutation import find_mutants
+
+            try:
+                ms = find_mutants(root, sorted(k for k in self.spec.knobs if not k.startswith("@")), None,
+                                  self.scale_relations, limit=self.cfg.mutation_max)
+            except Exception:  # noqa: BLE001
+                ms = []
+            if ms:
+                keep = min(self.cfg.mutation_keep, len(ms))
+                mut = min(keep + keep * (1 + len(self._usable_points())) * 2,
+                          int(self.cfg.max_runs * self.cfg.mutation_budget_frac))
+        self._code_hold = patch + mut
+        if self._code_hold:
+            self.orch.events.emit("note", msg=f"{t.claim_id}: code hold: {self._code_hold} runs kept out of the settings "
+                                              f"exploration ({patch} for the patch round, {len(leads)} literal leads; "
+                                              f"{mut} for the mutation round)")
 
     def _reserve_for_patches(self, t: Target) -> None:
         """If the claims already look out of space and the code has literal leads, hold patch_budget_frac of

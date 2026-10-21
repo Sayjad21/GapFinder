@@ -21,7 +21,8 @@ Levels (each mixes in gap-free controls, about one task in five):
 5. adversarial: a cause outside every family GapFinder searches (a string choice in the code: `relu` -> `tanh`,
    `mean` -> `sum`), alone (the right answer is to say it can't explain it) or with a setting (the right answer is
    the setting and "partially explained"); and gap-free controls.
-A level opens only when the previous one reaches `--pass` correct (0.7) with no confidently wrong answer.
+A level opens only when the previous one's gap tasks reach `--pass` correct (0.7), with no confidently wrong answer
+on a gap task or a control (controls are scored apart: saying nothing is right on them).
 
 Verdicts: correct (every planted part found), partial (some), missed, confidently wrong (Explained, Paper-artifact
 inconsistency or a reporting rule without the planted parts; for a control or an outside cause, any of those).
@@ -49,6 +50,9 @@ import plant  # noqa: E402  (the draws, the scorer's matching)
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(os.environ.get("GF_CURRICULUM_DIR") or HERE_ROOT / "curriculum")
 TASKS, SEALED, WORK = HERE / "tasks", HERE / "sealed", HERE / "work"
+# each task's search output folder; another name keeps a second engine version's searches of the same tasks apart
+# (`--run run-c2`: two frozen versions compared on one fresh batch)
+RUN = os.environ.get("GF_CURRICULUM_RUN", "run")
 SCRATCH = os.environ.get("GF_SCRATCH", "")
 EXT = ROOT / "eval" / "external"
 CASES = {  # name -> (spec, a recorded run whose events hold the base checkpoint and the local source)
@@ -513,6 +517,10 @@ def _write(tag: str, case: str, level: int, targets: list[dict], answer: dict) -
 
 # ------------------------------------------------------------------ searching
 
+def _sfx() -> str:
+    return "" if RUN == "run" else "-" + RUN
+
+
 def search_one(tag: str, code: Path, max_runs: int, concurrency: int) -> int:
     """One task's search; a search that ended on a Sandboxes or network error (InfraError) is started again from
     scratch, up to four times, once the API's name resolves."""
@@ -523,32 +531,48 @@ def search_one(tag: str, code: Path, max_runs: int, concurrency: int) -> int:
         while not _online():
             time.sleep(30)
         rc = _search_once(tag, code, max_runs, concurrency)
-        err = (TASKS / tag / "search.err").read_text(encoding="utf-8", errors="replace")[-4000:]
+        err = (TASKS / tag / f"search{_sfx()}.err").read_text(encoding="utf-8", errors="replace")[-4000:]
         if rc == 0 or "InfraError" not in err:
             return rc
-        shutil.copy(TASKS / tag / "search.err", TASKS / tag / f"search.err.infra{attempt + 1}")
-        shutil.rmtree(TASKS / tag / "run", ignore_errors=True)
-        time.sleep(120 * (attempt + 1))
+        shutil.copy(TASKS / tag / f"search{_sfx()}.err", TASKS / tag / f"search{_sfx()}.err.infra{attempt + 1}")
+        time.sleep(120 * (attempt + 1))  # the next attempt resumes from this one's runs (_search_once)
     return rc
 
 
 def _search_once(tag: str, code: Path, max_runs: int, concurrency: int) -> int:
+    """A search cut off before its report (a lost machine, a Sandboxes error) is kept as `run.cut<k>`, and the new
+    one resumes from every such event log (`--resume`: its succeeded, failed and timed-out runs are reused and count
+    toward the run budget; infrastructure errors are not)."""
     t = json.loads((TASKS / tag / "task.json").read_text(encoding="utf-8"))
     spec_p = resolved_spec(t["case"])
+    run = TASKS / tag / RUN
+    cut = f"{RUN}.cut"
+    if (run / "events.jsonl").exists() and not (run / "gap_report.json").exists():
+        k = 1 + max((int(x.name[len(cut):]) for x in TASKS.joinpath(tag).glob(cut + "*")
+                     if x.name[len(cut):].isdigit()), default=0)
+        run.rename(TASKS / tag / f"{cut}{k}")
+    elif run.exists() and not (run / "gap_report.json").exists():
+        import shutil
+
+        shutil.rmtree(run, ignore_errors=True)  # nothing ran in it
+    resume = []
+    for c in sorted(TASKS.joinpath(tag).glob(cut + "*")):
+        if (c / "events.jsonl").exists():
+            resume += ["--resume", str(c / "events.jsonl")]
     env = {**os.environ, "PYTHONPATH": str(code), "PYTHONIOENCODING": "utf-8"}
     py = str(ROOT / ".venv" / "Scripts" / "python.exe") if os.name == "nt" else sys.executable
     cmd = [py, "-P", "-m", "gapfinder.cli", "search", "--spec", str(spec_p), "--targets",
            str(TASKS / tag / "targets.json"), "--hypotheses", "repomap", "--backend", "contree", "--concurrency",
-           str(concurrency), "--max-runs", str(max_runs), "--paper", f"planted {tag}", "--out", str(TASKS / tag / "run")]
-    with open(TASKS / tag / "search.log", "w", encoding="utf-8") as out, \
-            open(TASKS / tag / "search.err", "w", encoding="utf-8") as err:
+           str(concurrency), "--max-runs", str(max_runs), "--paper", f"planted {tag}", "--out", str(run)] + resume
+    with open(TASKS / tag / f"search{_sfx()}.log", "w", encoding="utf-8") as out, \
+            open(TASKS / tag / f"search{_sfx()}.err", "w", encoding="utf-8") as err:
         return subprocess.call(cmd, env=env, cwd=str(code), stdout=out, stderr=err)
 
 
 def _unsearched(level: int | None, started: set[str]) -> list[str]:
     return [d.name for d in sorted(TASKS.iterdir()) if (level is None or d.name.startswith(f"L{level}-"))
             and (d / "task.json").exists() and d.name not in started
-            and not (d / "run" / "gap_report.json").exists()] if TASKS.exists() else []
+            and not (d / RUN / "gap_report.json").exists()] if TASKS.exists() else []
 
 
 def search(level: int | None, code: Path, max_runs: int, concurrency: int, parallel: int,
@@ -620,19 +644,37 @@ def verdict(a: dict, res: dict) -> str:
     return "confidently wrong" if label in CONFIDENT else "missed"
 
 
+def _tied(a: dict, res: dict) -> bool:
+    """A planted knob is among the configurations GapFinder says the target can't tell apart from its answer
+    (`equivalent`): the search reached the cause and one number couldn't single it out. Reported beside the
+    verdict, never counted as correct."""
+    eq = [c.get("config") or {} for c in res.get("equivalent") or []]
+    return any(plant._knob_matches(k, p["knob"]) for p in a["parts"] if p["family"] not in ("reporting", "outside")
+               for c in eq for k in c)
+
+
+def _knob_named(a: dict, res: dict) -> bool:
+    """Every planted setting, scale or code knob is in GapFinder's answer, whatever value it gives (FastGCN:
+    hidden1=160 for a planted hidden1=4, both lowering the target alike). Reported beside the verdict."""
+    parts = [p for p in a["parts"] if p["family"] not in ("reporting", "outside")]
+    changes = res.get("changes") or {}
+    return bool(parts) and all(any(plant._knob_matches(k, p["knob"]) for k in changes) for p in parts)
+
+
 def score(level: int | None = None) -> dict:
     rows = []
     for d in sorted(TASKS.iterdir()) if TASKS.exists() else []:
         if level is not None and not d.name.startswith(f"L{level}-"):
             continue
-        rep, ans = d / "run" / "gap_report.json", SEALED / f"{d.name}.json"
+        rep, ans = d / RUN / "gap_report.json", SEALED / f"{d.name}.json"
         if not rep.exists() or not ans.exists():
             continue
         a = json.loads(ans.read_text(encoding="utf-8"))
         r = json.loads(rep.read_text(encoding="utf-8"))
         res = (r.get("results") or r.get("claims") or [{}])[0]
         rows.append({"task": d.name, "level": a["level"], "case": a["case"], "kind": a["kind"],
-                     "verdict": verdict(a, res), "label": (res.get("attribution") or {}).get("confidence_label"),
+                     "verdict": verdict(a, res), "tied": _tied(a, res), "knob": _knob_named(a, res),
+                     "label": (res.get("attribution") or {}).get("confidence_label"),
                      "found": res.get("changes") or {}, "planted": [f"{p['family']}: {p['desc']}" for p in a["parts"]]})
     by = {}
     for x in rows:
@@ -640,17 +682,68 @@ def score(level: int | None = None) -> dict:
     for (lv, kind), vs in sorted(by.items()):
         print(f"L{lv} {kind:22s} " + ", ".join(f"{v} {vs.count(v)}" for v in
                                               ("correct", "partial", "missed", "confidently wrong") if vs.count(v)))
+    # gap tasks and controls apart: a control is easier (saying nothing is right), so a level's pass rate is the
+    # gap tasks' alone, and the controls only have to stay free of confident answers
     lv_sum = {}
     for x in rows:
-        s = lv_sum.setdefault(x["level"], {"n": 0, "correct": 0, "partial": 0, "missed": 0, "confidently wrong": 0})
-        s["n"] += 1
-        s[x["verdict"]] += 1
+        blank = {"n": 0, "correct": 0, "partial": 0, "missed": 0, "confidently wrong": 0, "tied": 0, "knob": 0}
+        s = lv_sum.setdefault(x["level"], {**blank, "controls": dict(blank)})
+        t = s["controls"] if x["kind"] == "control" else s
+        t["n"] += 1
+        t[x["verdict"]] += 1
+        t["tied"] += x["verdict"] != "correct" and x["tied"]
+        t["knob"] += x["verdict"] != "correct" and x["knob"]
     for lv, s in sorted(lv_sum.items()):
-        print(f"level {lv}: {s['correct']}/{s['n']} correct, {s['partial']} partial, {s['missed']} missed, "
-              f"{s['confidently wrong']} confidently wrong")
+        c = s["controls"]
+        print(f"level {lv}: gap tasks {s['correct']}/{s['n']} correct, {s['partial']} partial, {s['missed']} missed, "
+              f"{s['confidently wrong']} confidently wrong; of the rest, {s['knob']} name the planted knob at "
+              f"another value, {s['tied']} have it among the configurations the target can't tell apart; "
+              f"controls {c['correct']}/{c['n']} correct, "
+              f"{c['confidently wrong']} confidently wrong")
     HERE.mkdir(parents=True, exist_ok=True)
-    (HERE / "scores.json").write_text(json.dumps({"rows": rows, "levels": lv_sum}, indent=1), encoding="utf-8")
+    (HERE / f"scores{'' if RUN == 'run' else '-' + RUN}.json").write_text(
+        json.dumps({"rows": rows, "levels": lv_sum, "run": RUN}, indent=1), encoding="utf-8")
     return lv_sum
+
+
+def report(out: Path) -> None:
+    """eval/results/planted_curriculum.md from the scorer's rows: per level and family, the verdicts, how many of
+    the rest name the planted knob or tie it, and each task's line (planted cause, GapFinder's answer, label)."""
+    data = json.loads((HERE / f"scores{'' if RUN == 'run' else '-' + RUN}.json").read_text(encoding="utf-8"))
+    rows = data["rows"]
+    L = ["# Planted-gap curriculum: results", "",
+         "Generated by `eval/planted/curriculum.py report` from the scorer's output (eval/planted/curriculum/"
+         "scores.json). Development measurements on papers GapFinder already reproduces: the builder knows every "
+         "family, so these are never blind evidence, and no engine change is judged on them.", "",
+         "Verdicts: correct (every planted part found, at the planted value within 10%), partial, missed, "
+         "confidently wrong (a confident label without the planted cause; on a control, any confident label). "
+         "\"Right knob\": GapFinder's answer changes the planted knob, at another value. \"Tied\": the planted "
+         "knob is among the configurations GapFinder reports the target can't tell apart from its answer.", ""]
+    for lv in sorted({x["level"] for x in rows}):
+        rs = [x for x in rows if x["level"] == lv]
+        gaps, ctl = [x for x in rs if x["kind"] != "control"], [x for x in rs if x["kind"] == "control"]
+        L += [f"## Level {lv}", "",
+              f"Gap tasks: {sum(x['verdict'] == 'correct' for x in gaps)}/{len(gaps)} correct, "
+              f"{sum(x['verdict'] == 'confidently wrong' for x in gaps)} confidently wrong. Controls: "
+              f"{sum(x['verdict'] == 'correct' for x in ctl)}/{len(ctl)} correct, "
+              f"{sum(x['verdict'] == 'confidently wrong' for x in ctl)} confidently wrong.", "",
+              "| Family | Tasks | Correct | Partial | Missed | Confidently wrong | Right knob, other value | Tied |",
+              "|---|---|---|---|---|---|---|---|"]
+        for kind in sorted({x["kind"] for x in rs}):
+            k = [x for x in rs if x["kind"] == kind]
+            bad = [x for x in k if x["verdict"] != "correct"]
+            L.append(f"| {kind} | {len(k)} | " + " | ".join(str(sum(x["verdict"] == v for x in k)) for v in
+                     ("correct", "partial", "missed", "confidently wrong"))
+                     + f" | {sum(bool(x.get('knob')) for x in bad)} | {sum(bool(x.get('tied')) for x in bad)} |")
+        L += ["", "| Task | Planted | GapFinder's answer | Label | Verdict |", "|---|---|---|---|---|"]
+        for x in rs:
+            ans = ", ".join(f"`{k}={v}`" for k, v in (x.get("found") or {}).items()) or "none"
+            L.append(f"| {x['task']} | {'; '.join(x['planted']) or 'nothing (control)'} | {ans} | "
+                     f"{x.get('label') or '-'} | {x['verdict']} |")
+        L.append("")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(L), encoding="utf-8")
+    print(f"wrote {out}")
 
 
 def main() -> None:
@@ -665,6 +758,7 @@ def main() -> None:
         p.add_argument("--concurrency", type=int, default=8)
         p.add_argument("--tries", type=int, default=10)
         p.add_argument("--case-parallel", type=int, default=3)
+        p.add_argument("--control-rate", type=float, default=0.2, help="0: gap tasks only (controls made earlier)")
         if name == "make":
             p.add_argument("--level", type=int, required=True)
         else:
@@ -680,23 +774,27 @@ def main() -> None:
     ps.add_argument("--concurrency", type=int, default=8)
     ps.add_argument("--parallel", type=int, default=3)
     ps.add_argument("--watch", type=Path, help="keep searching new tasks until this file exists")
+    pr = sub.add_parser("report")
+    pr.add_argument("--out", type=Path, default=ROOT / "eval" / "results" / "planted_curriculum.md")
     pc = sub.add_parser("score")
     pc.add_argument("--level", type=int)
     a = ap.parse_args()
     if a.cmd == "make":
         asyncio.run(make(a.level, a.cases.split(","), a.per_case, a.seed, a.repeats, a.tries, a.concurrency,
-                         parallel=a.case_parallel))
+                         control_rate=a.control_rate, parallel=a.case_parallel))
     elif a.cmd == "search":
         search(a.level, a.code.resolve(), a.max_runs, a.concurrency, a.parallel, a.watch)
+    elif a.cmd == "report":
+        report(a.out)
     elif a.cmd == "score":
         score(a.level)
     else:
         for level in range(a.start, 6):
             asyncio.run(make(level, a.cases.split(","), a.per_case, a.seed, a.repeats, a.tries, a.concurrency,
-                             parallel=a.case_parallel))
+                             control_rate=a.control_rate, parallel=a.case_parallel))
             search(level, a.code.resolve(), a.max_runs, a.concurrency, a.parallel)
-            s = score(level).get(level) or {"n": 0}
-            if not s["n"] or s["correct"] / s["n"] < a.pass_rate or s["confidently wrong"]:
+            s = score(level).get(level) or {"n": 0, "controls": {"confidently wrong": 0}}
+            if not s["n"] or s["correct"] / s["n"] < a.pass_rate or s["confidently wrong"]                     or s["controls"]["confidently wrong"]:
                 print(f"level {level} not passed: the curriculum stops here", flush=True)
                 break
             print(f"level {level} passed: next level", flush=True)
