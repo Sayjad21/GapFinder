@@ -1611,7 +1611,8 @@ class GapSearch:
                     hints.setdefault(x.file, set()).add(x.line)
         except Exception:  # noqa: BLE001 (a hint only)
             hints = {}
-        ms = find_mutants(root, knobs, executed, self.scale_relations, limit=self.cfg.mutation_max, hints=hints)
+        ms = find_mutants(root, knobs, executed, self.scale_relations, limit=self.cfg.mutation_max, hints=hints,
+                          metrics=sorted({c.metric for c in self.targets}))
         if not ms:
             return
         room = (self.cfg.max_runs or 10 ** 6) - self.runs_used

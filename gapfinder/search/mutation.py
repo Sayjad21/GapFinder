@@ -12,6 +12,10 @@ Mutation-based fault localisation (MUSE, Metallaxis) ranks sites by how mutants 
   function that receives the knob's value (an intraprocedural slice plus one interprocedural step);
 - **metric code** (functions named like accuracy, f1, auc, evaluate, test) and the run's **loop bounds**
   (`range()` constants);
+- **the metric's output slice** (plan F1): a backward slice from the statements that print or log the claims'
+  metric (`print("test auc", np.mean(auc_list))`, a value returned by the function that computes it), so the code
+  that computes the reported number ranks above sites that are merely near a knob, wherever it lives and whatever
+  its function is called;
 - **the data pipeline** (plan D1.6): data loaders' switches, also where the call leaves them at their default
   (`drop_last`, `shuffle`); split fractions (a keyword like `test_size=0.2`, or `0.8 * len(x)`): the complement first,
   then the common fractions; what a scaler, normaliser or encoder is fit on (`fit(X)` against `fit(X_train)`, both
@@ -38,6 +42,10 @@ METRIC_FN = re.compile(r"(?i)(acc|accuracy|f1|auc|ndcg|recall|precision|hit|mrr|
 SKIP_CALLS = {"print", "format", "write", "info", "debug", "warning", "error", "log", "tqdm", "set_description",
               "add_scalar", "dump", "save"}
 LOADER_BOOLS = {"shuffle", "drop_last", "normalize", "bias", "pin_memory", "replacement"}
+# calls that emit a number the harness can read, and words that name a metric in what they print
+OUTPUT_CALLS = {"print", "write", "info", "log", "add_scalar", "set_postfix", "dump", "logger"}
+METRIC_WORD = re.compile(r"(?i)(acc|accuracy|f1|auc|roc|ndcg|recall|precision|hits?|mrr|map|mse|mae|rmse|smape|mape|"
+                         r"nmi|ari|objective|error|score|bleu|rouge|ppl|perplexity|loss|purity|balance)")
 LOADERS = re.compile(r"(DataLoader|Loader|loader|data_loader|DataListLoader|NeighborLoader|batch_iter|BatchSampler)$")
 SPLIT_KW = re.compile(r"(?i)^(test|val|valid|validation|train|dev|holdout|eval)?_?(size|ratio|frac|fraction|split|portion|"
                       r"percent|pct|prop|proportion)$|^(train|test|val|split|holdout)_?\w*(ratio|frac|size|percent|portion)$")
@@ -157,6 +165,54 @@ def _slice(stmts: list[ast.stmt], seeds: list[ast.stmt], depth: int = 2) -> dict
                     nxt.append(t)
         frontier = nxt
     return dist
+
+
+def _comp_bound(stmt: ast.stmt) -> set[str]:
+    """Names a comprehension or a lambda in the statement binds (`s` in `[f(s) for s in xs]`): local to it, never a
+    use of the scope's variable of that name."""
+    out = set()
+    for n in ast.walk(stmt):
+        if isinstance(n, ast.comprehension):
+            out |= _names(n.target, ast.Store)
+        elif isinstance(n, ast.Lambda):
+            out |= {a.arg for a in n.args.args}
+    return out
+
+
+def _back_slice(stmts: list[ast.stmt], seeds: list[ast.stmt], depth: int = 3) -> dict[int, int]:
+    """id(statement) -> distance from the seeds, backward only: the definitions of what they use, then of what those
+    use (within one scope)."""
+    dist = {id(s): 0 for s in seeds}
+    frontier = list(seeds)
+    for d in range(1, depth + 1):
+        nxt = []
+        for s in frontier:
+            u_in = _uses(s) - {"self", "args", "FLAGS", "opt", "cfg", "config", "flags"} - _comp_bound(s)
+            for t in stmts:
+                if id(t) not in dist and u_in & _defs(t):
+                    dist[id(t)] = d
+                    nxt.append(t)
+        frontier = nxt
+    return dist
+
+
+def _emits(stmt: ast.stmt, words: re.Pattern) -> list[ast.Call]:
+    """The output calls in a statement that print a metric (its words in the call's text) with a value that is not a
+    constant."""
+    out = []
+    for n in ast.walk(stmt):
+        if isinstance(n, ast.Call) and _call_name(n) in OUTPUT_CALLS and words.search(_unparse(n)):
+            vals = list(n.args) + [k.value for k in n.keywords]
+            if any(not isinstance(v, ast.Constant) for v in vals):
+                out.append(n)
+    return out
+
+
+def metric_words(metrics: list[str] | None) -> re.Pattern:
+    """A pattern for the claims' metric names as a program prints them: the metric-like tokens of the harness's
+    names (`book_auc` -> auc, `etth2_336_mse` -> mse), else every common metric word."""
+    toks = sorted({t for m in metrics or [] for t in re.split(r"[^a-zA-Z0-9]+", m) if t and METRIC_WORD.fullmatch(t)})
+    return re.compile(r"(?i)(" + "|".join(map(re.escape, toks)) + r")") if toks else METRIC_WORD
 
 
 def _calls_into(stmt: ast.stmt, names_in_slice: set[str], knobs: set[str]) -> list[tuple[str, int]]:
@@ -375,11 +431,12 @@ def _data_mutants(rel: str, tree: ast.Module, add, parents, hints: set[int]) -> 
 
 def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[int]] | None = None,
                  relations: list[dict] | None = None, files: list[Path] | None = None, limit: int = 40,
-                 hints: dict[str, set[int]] | None = None) -> list[Mutant]:
+                 hints: dict[str, set[int]] | None = None, metrics: list[str] | None = None) -> list[Mutant]:
     """Candidate mutants, best first. `knobs`: the knobs the claims depend on (their slices are searched).
     `executed`: repo file -> executed lines (from the runtime trace). `relations`: verified scale relations
     ({"knob", "family", "c"}): their factor's operators on that knob's slice come first. `hints`: repo file ->
-    lines a static check flagged (their data-pipeline mutants come first)."""
+    lines a static check flagged (their data-pipeline mutants come first). `metrics`: the claims' metric names; the
+    statements that compute what is printed under them get a bonus (the output slice, plan F1)."""
     from gapfinder.harness_auto import _import_closure
 
     root = Path(root).resolve()
@@ -390,7 +447,8 @@ def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[in
         if r.get("verified"):
             rel_by_knob.setdefault(_norm(r["knob"]), []).append(r)
     out: list[Mutant] = []
-    seen = set()
+    seen: dict[tuple, Mutant] = {}
+    words = metric_words(metrics)
     funcs: dict[str, tuple[ast.AST, list[ast.stmt], str]] = {}
     trees = []
     for path, tree in pairs:
@@ -407,17 +465,23 @@ def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[in
             return None
         return line in set(executed.get(rel, []))
 
-    def add(rel, node, kind, op, dist, knob, tags, parents):
+    def add(rel, node, kind, op, dist, knob, tags, parents, bonus: float = 0.0, in_output: bool = False):
         key = (rel, node.lineno, node.col_offset, kind, op)
-        if key in seen or _skip(node, parents):
+        if key in seen:  # reached again (a knob's slice and the output slice): the better priority, both tags
+            m0 = seen[key]
+            m0.priority = max(m0.priority, 3 - dist + (1 if executed_line(rel, node.lineno) else 0) + bonus)
+            m0.tags += [t for t in tags if t not in m0.tags]
             return
-        seen.add(key)
+        if _skip(node, parents) and not in_output:
+            return
         before = _unparse(node)
-        m = Mutant(rel, node.lineno, node.col_offset, kind, op, dist, knob, before, _after(op, before, node), tags=tags)
+        m = Mutant(rel, node.lineno, node.col_offset, kind, op, dist, knob, before, _after(op, before, node),
+                   tags=list(tags))
         ex = executed_line(rel, node.lineno)
         if ex is False:
             return
-        m.priority = 3 - dist + (1 if ex else 0)
+        seen[key] = m
+        m.priority = 3 - dist + (1 if ex else 0) + bonus
         for r in rel_by_knob.get(knob or "", []):
             c, fam = r["c"], r["family"]
             want = ({"xdiv2", "div2"} if fam == "x" and abs(c - 0.5) < 1e-9 else {"xmul2", "mul2"} if fam == "x" and abs(c - 2) < 1e-9
@@ -426,7 +490,6 @@ def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[in
             if op in want:
                 m.priority += 6
                 m.tags.append(f"implied by the verified relation on {r['knob']}")
-        out.append(m)
 
     for rel, tree in trees:
         parents = {id(c): p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
@@ -485,6 +548,46 @@ def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[in
                                 add(rel, kw.value, "bool", "not", 2, None, ["data pipeline", kw.arg], parents)
                     if metric and isinstance(n, ast.Compare) and len(n.ops) == 1 and isinstance(n.ops[0], (ast.Lt, ast.LtE, ast.Gt, ast.GtE)):
                         add(rel, n, "Compare", "cmpflip", 1, None, ["metric code"], parents)
+        # the output slice: what the statements printing the claims' metric are computed from (plan F1)
+        for name, stmts, node in _scopes(tree):
+            emits = [s for s in stmts if _emits(s, words)]
+            if not emits:
+                continue
+            dists = _back_slice(stmts, emits)
+            for s in stmts:
+                if id(s) not in dists:
+                    continue
+                d = dists[id(s)]
+                bonus = 2.0 if d <= 2 else 1.0
+
+                def addm(rel_, n_, kind_, op_, dist_, knob_, tags_, parents_, _b=bonus):
+                    add(rel_, n_, kind_, op_, dist_, knob_, tags_ + ["metric output"], parents_, bonus=_b)
+                if d == 0:  # the printed expression itself: its reductions and arithmetic
+                    for call in _emits(s, words):
+                        for v in list(call.args) + [k.value for k in call.keywords]:
+                            for n in ast.walk(v):
+                                if isinstance(n, ast.Call) and _call_name(n) in REDUCTIONS:
+                                    add(rel, n, "Call", "red." + REDUCTIONS[_call_name(n)], 0, None,
+                                        ["metric output"], parents, bonus=bonus, in_output=True)
+                                elif isinstance(n, ast.BinOp) and isinstance(n.op, ARITH) and n is v:
+                                    for op in EXPR_OPS[:2]:
+                                        add(rel, n, "BinOp", op, 0, None, ["metric output"], parents, bonus=bonus,
+                                            in_output=True)
+                    continue
+                _mutants_of(s, d, None, rel, addm, parents, kset)
+                for fname in _result_calls(s):  # into the repo function that returns the printed value
+                    if fname in funcs and fname != name:
+                        # that function computes the reported number: metric code found by data flow rather than
+                        # by its name, so its distance counts from its own return statement (as metric code's is 0)
+                        fnode, fstmts, frel = funcs[fname]
+                        rets = [t for t in fstmts if isinstance(t, ast.Return) and t.value is not None]
+                        d2 = _back_slice(fstmts, rets, depth=1)
+                        fparents = next((({id(c): p for p in ast.walk(t2) for c in ast.iter_child_nodes(p)})
+                                         for r2, t2 in trees if r2 == frel), parents)
+                        for t in fstmts:
+                            if id(t) in d2:
+                                _mutants_of(t, d2[id(t)], None, frel, addm, fparents, kset)
+    out = list(seen.values())
     out.sort(key=lambda m: (-m.priority, m.dist, m.file, m.line, m.col, m.op))
     return out[:limit]
 
