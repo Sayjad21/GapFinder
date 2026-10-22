@@ -122,12 +122,14 @@ class Orchestrator:
     # ------------------------------------------------------------ branches
     async def run_branch(self, changes: dict[str, str], *, label: str | None = None,
                          files: dict[str, bytes] | None = None, fresh_setup: bool = False,
-                         extra_env: dict[str, str] | None = None) -> Branch:
+                         extra_env: dict[str, str] | None = None, run_tag: str | None = None) -> Branch:
         """Run one branch. `files` (e.g. a config fix proposed by a model) pass the diff guard first:
-        anything outside the spec's allowed_paths is algorithm code and the branch is rejected unrun."""
+        anything outside the spec's allowed_paths is algorithm code and the branch is rejected unrun. `run_tag`:
+        the run's RUN_TAG (harnesses derive the seed from it); given, the j-th runs of different configurations can
+        share their seeds (paired comparison, plan F4); unique otherwise."""
         bid = f"B{next(self._ids):04d}"
         self.spec.values(changes)  # validates knob names
-        run_tag = _tag()
+        run_tag = run_tag or _tag()
         if files and (bad := diff_guard(list(files), self.spec.allowed_paths)):
             branch = Branch(id=bid, parent_checkpoint="-", knob_changes=changes, command="-", run_tag=run_tag,
                             status=BranchStatus.rejected, note=f"diff guard: edits outside allowed paths: {bad}")
@@ -277,12 +279,15 @@ class Orchestrator:
         return merged
 
     async def fanout(self, change_sets: list[dict[str, str]], labels: list[str] | None = None,
-                     fresh_setup: bool = False, extra_env: dict[str, str] | None = None) -> list[Branch]:
+                     fresh_setup: bool = False, extra_env: dict[str, str] | None = None,
+                     run_tags: list[str] | None = None) -> list[Branch]:
         """`fresh_setup`: each branch gets its own new build/load instead of forking the shared one. `extra_env`: set
-        for these runs only (a time cut, plan D7.7)."""
+        for these runs only (a time cut, plan D7.7). `run_tags`: one RUN_TAG per branch (paired seeds, plan F4)."""
         labels = labels or [None] * len(change_sets)
-        return list(await asyncio.gather(*(self.run_branch(c, label=l, fresh_setup=fresh_setup, extra_env=extra_env)
-                                           for c, l in zip(change_sets, labels))))
+        tags = run_tags or [None] * len(change_sets)
+        return list(await asyncio.gather(*(self.run_branch(c, label=l, fresh_setup=fresh_setup, extra_env=extra_env,
+                                                           run_tag=tg)
+                                           for c, l, tg in zip(change_sets, labels, tags))))
 
     async def calibrate_noise(self, n: int = 5, changes: dict[str, str] | None = None,
                               floor_frac: float = 0.0) -> tuple[dict[str, NoiseBand], list[Branch]]:

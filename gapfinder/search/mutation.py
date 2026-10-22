@@ -588,7 +588,10 @@ def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[in
                             if id(t) in d2:
                                 _mutants_of(t, d2[id(t)], None, frel, addm, fparents, kset)
     out = list(seen.values())
-    out.sort(key=lambda m: (-m.priority, m.dist, m.file, m.line, m.col, m.op))
+    # the operators a verified scale relation implies come first, all of them (they are few, and the deepest of them
+    # is the relation's origin); then by priority (the output slice's bonus cannot push them out of the first stage)
+    out.sort(key=lambda m: (not any(t.startswith("implied by the verified relation") for t in m.tags), -m.priority,
+                            m.dist, m.file, m.line, m.col, m.op))
     return out[:limit]
 
 

@@ -18,6 +18,7 @@ import math
 import random
 import re
 import statistics
+import zlib
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
@@ -144,6 +145,29 @@ class SearchConfig:
     # runs are kept out of the settings exploration (2 x interval_steps).
     value_interval: bool = True
     interval_steps: int = 3
+    # plan F4: paired seeds (common random numbers): the j-th run of every configuration gets the same RUN_TAG, so
+    # the seeds harnesses derive from it pair the candidate's runs with the naive run's, and a candidate's effect is
+    # judged on the paired differences (smaller spread when runs correlate by seed). Then adaptive repeats: a
+    # candidate whose effect clears the threshold but is not yet significant gets up to adaptive_repeats more runs,
+    # one at a time, the significance level divided by the number of looks (a union bound: peeking can't manufacture
+    # significance). The planted curriculum's E6: effects of 3-5 sd called Inconclusive at 3 repeats.
+    # Measured on test_paired_seeds.py's toy (effects of 3 and 3.5 sd, 16 noise draws per variant): as before 13
+    # correct and 0 confidently wrong; adaptive repeats 12 and 0; paired 11 and 1, with or without them. Pairing
+    # within a condition still correlates every candidate's runs with the same few seeds, and selection over many
+    # candidates rewards the luck those seeds share; adaptive repeats showed no gain. Both stay behind their flags,
+    # off. (The toy found two confidently wrong paths, fixed for good: the scale probe's label needs claims that were
+    # off as run, and _cap_undetectable.)
+    paired_seeds: bool = False
+    adaptive_repeats: int = 0
+    # plan F7: group screening of mutation sites. When none of the mutation round's first mutants moves the target,
+    # the rest of the candidates (up to group_max, one mutant per code site: all of them, in practice) are applied in groups, several edits in
+    # one run; a group that moves the target toward the paper (or crashes) is halved until the mutant is isolated
+    # (sequential bifurcation, Bettonvil & Kleijnen 1997; probabilistic delta debugging, FSE'21). At most
+    # group_budget_frac of the run budget. The planted curriculum's E2: the planted site ranked 37th to 289th, and
+    # 24 are tried one by one.
+    group_screen: bool = True
+    group_budget_frac: float = 0.15
+    group_max: int = 2000
     # plans D1.3-D1.5, D7.2: when the paper-year packages (or the paper-era code) change the numbers, which package
     # (delta debugging), which release or commit (binary search) and which call site (API and source diff); at most
     # library_budget_frac of the run budget; two configurations give "the same numbers" within library_z standard
@@ -601,6 +625,8 @@ class GapSearch:
         self._patch_reserve = 0  # runs held back for the patch round (set after the combine round)
         self._code_hold = 0  # runs kept out of the settings exploration for the code rounds (code_hold)
         self._early_screened: set[str] = set()  # claims whose code rounds' first tests already ran (plan F2)
+        self._looks: dict[frozenset, int] = {}  # extra looks per configuration (adaptive repeats, plan F4)
+        self._condition_knobs = {k for x in targets for k in (x.at or {})}  # knobs that define a claim's condition
         self._mutation_alt = False  # the mutation round runs only because the settings answer is unsupported
         self._coarse: set[tuple[str, str]] = set()  # coarse ladder rungs (screened first)
         self._fine: set[tuple[str, str]] = set()  # finer rungs (screened only if the coarse ones move the metric)
@@ -626,7 +652,8 @@ class GapSearch:
                 raise RunBudgetExceeded(f"run budget of {self.cfg.max_runs} reached "
                                         f"(wanted {need} more run(s) of {dict(changes) or 'naive'} for {label!r})")
             self.runs_used += need
-            new = await self.orch.fanout([changes] * need, [label] * need, fresh_setup=fresh)
+            new = await self.orch.fanout([changes] * need, [label] * need, fresh_setup=fresh,
+                                         run_tags=self._pair_tags(len(have), need, changes))
             have.extend(new)
             from gapfinder.search.triage import looks_like_infra
 
@@ -636,7 +663,8 @@ class GapSearch:
                 self.runs_used += len(flaky)
                 have.extend(await self.orch.fanout([changes] * len(flaky),
                                                    [f"{label} (retry after infra failure)"] * len(flaky),
-                                                   fresh_setup=fresh))
+                                                   fresh_setup=fresh,
+                                                   run_tags=self._pair_tags(len(have), len(flaky), changes)))
             ok = [b for b in have if b.status == BranchStatus.succeeded]
         return ok
 
@@ -645,9 +673,20 @@ class GapSearch:
         return [b for b in self._runs.get(frozenset(changes.items()), []) if b.status == BranchStatus.succeeded]
 
     def value(self, changes: Changes, metric: str) -> float | None:
-        vals = [b.parsed_metrics[metric] for b in self._runs.get(frozenset(changes.items()), [])
+        runs = [b for b in self._runs.get(frozenset(changes.items()), [])
                 if b.status == BranchStatus.succeeded and metric in b.parsed_metrics]
-        return statistics.median(vals) if vals else None
+        if not runs:
+            return None
+        if self.cfg.paired_seeds and changes and self.naive.get(metric) is not None:
+            # paired seeds (plan F4): the naive median plus the median of the seed-matched differences (the control
+            # variate of common random numbers), so one unlucky shared seed moves the naive run and the candidate
+            # alike instead of every candidate screened on it; unpaired runs (another condition) keep their median
+            base = {b.run_tag: b.parsed_metrics[metric] for b in self._runs.get(frozenset(), [])
+                    if b.status == BranchStatus.succeeded and metric in b.parsed_metrics}
+            diffs = [b.parsed_metrics[metric] - base[b.run_tag] for b in runs if b.run_tag in base]
+            if len(diffs) == len(runs):
+                return self.naive[metric] + statistics.median(diffs)
+        return statistics.median(b.parsed_metrics[metric] for b in runs)
 
     def gap(self, t: Target, changes: Changes) -> float | None:
         v = self.naive.get(t.metric) if not changes else self.value(changes, t.metric)
@@ -686,6 +725,13 @@ class GapSearch:
         alpha = self.cfg.effect_alpha or 0.05
         if self.cfg.strict_confirm:
             alpha /= self._family  # Bonferroni over the hypotheses confirmed together
+        alpha /= 1 + self._looks.get(frozenset(changes.items()), 0)  # adaptive repeats: each extra look (plan F4)
+        if self.cfg.paired_seeds:  # the candidate's runs against the naive runs with the same seed
+            by_tag = {b.run_tag: b.parsed_metrics[t.metric] for b in self.measure_ok({}) if t.metric in b.parsed_metrics}
+            diffs = [b.parsed_metrics[t.metric] - by_tag[b.run_tag] for b in runs
+                     if t.metric in b.parsed_metrics and b.run_tag in by_tag]
+            if len(diffs) >= 2:
+                return bootstrap_diff_ci([0.0] * len(diffs), diffs, alpha=alpha)  # the mean paired difference
         return bootstrap_diff_ci(base, cand, alpha=alpha)
 
     def _significant(self, t: Target, changes: Changes) -> bool:
@@ -1274,6 +1320,7 @@ class GapSearch:
                 await self._value_intervals(t, res)
             except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
                 res.notes.append(f"value interval stopped early: {exc}")
+        self._cap_undetectable(t, res)
         if res.attribution is not None:
             res.attribution.hypotheses_tested = len(tried)
         lib_out = self._library_out.get(t.claim_id)
@@ -1587,18 +1634,29 @@ class GapSearch:
                              f"after {h.runs} runs at g(v) (" + ", ".join(
                                  f"{claim.claim_id} at {knob}={cfg.get(knob, self.spec.knobs[knob].default)}"
                                  for claim, cfg in configs) + ")")
-            if fits and len(sweep) >= 3 and _rank(res) > _LABEL_RANK[ConfidenceLabel.inconsistency.value]:
+            # the confident label needs swept claims that were off as run (beyond FIT_I, at least two): when the naive
+            # run is itself within reach of every claim, one factor fitting them is no evidence of a convention (plan
+            # F4's toy: a 10x factor on a weakly acting knob "fit" three claims the naive run nearly fitted too); the
+            # factor is then at most an unsupported fit
+            n0 = max(1, len(self.measure_ok({})))
+            off = sum(1 for cid in swept if cid in diff.claims and diff.claim_loglik(
+                diff.claims[cid], Prediction(diff.claims[cid].naive_mean, diff.claims[cid].naive_sd, n0))[0] > FIT_I)
+            label_s = ConfidenceLabel.inconsistency if off >= 2 else ConfidenceLabel.fits_but_unsupported
+            if fits and len(sweep) >= 3 and off < 2:
+                res.notes.append(f"scale probe: only {off} of the {len(sweep)} swept claims were off as run, so the "
+                                 "factor is at most an unsupported fit")
+            if fits and len(sweep) >= 3 and _rank(res) > _LABEL_RANK[label_s.value]:
                 old = dict(res.changes)
                 res.changes, res.gap_after = dict(v_target), self.gap(t, v_target)
                 res.closes = True
-                res.attribution = self._attribution(t, v_target, res.gap_after, ConfidenceLabel.inconsistency,
+                res.attribution = self._attribution(t, v_target, res.gap_after, label_s,
                                                     [b.result_checkpoint for b in self.measure_ok(v_target)
                                                      if b.result_checkpoint])
                 res.held_out = {claim.claim_id: {"gap_before": self.gap(claim, {}) if claim is t else None,
                                                  "gap_after": (self.value(cfg, t.metric) - claim.paper_value)
                                                  / abs(claim.paper_value), "ok": True, "at": {knob: cfg.get(knob, self.spec.knobs[knob].default)}}
                                 for claim, cfg in configs[1:]}
-                res.notes.append(f"labelled Paper-artifact inconsistency: one factor ({rel}) makes every one of the "
+                res.notes.append(f"labelled {label_s.value}: one factor ({rel}) makes every one of the "
                                  f"{len(sweep)} swept claims fit" + (f"; it replaces {old}" if old and old != res.changes
                                                                       else ""))
 
@@ -1614,7 +1672,7 @@ class GapSearch:
         self._mutation_alt = self.cfg.code_hold and label == ConfidenceLabel.fits_but_unsupported.value
         return self._mutation_alt
 
-    def _mutation_candidates(self, t: Target, res: ClaimResult) -> tuple[list, list[str]]:
+    def _mutation_candidates(self, t: Target, res: ClaimResult, limit: int | None = None) -> tuple[list, list[str]]:
         """(mutants best first, the knobs whose data flow they were taken from) for the mutation round."""
         from gapfinder.search.mutation import find_mutants
 
@@ -1632,9 +1690,83 @@ class GapSearch:
                     hints.setdefault(x.file, set()).add(x.line)
         except Exception:  # noqa: BLE001 (a hint only)
             hints = {}
-        ms = find_mutants(root, knobs, executed, self.scale_relations, limit=self.cfg.mutation_max, hints=hints,
+        ms = find_mutants(root, knobs, executed, self.scale_relations, limit=limit or self.cfg.mutation_max, hints=hints,
                           metrics=sorted({c.metric for c in self.targets}))
         return ms, knobs
+
+    async def _group_screen(self, t: Target, cands: list, g0: float) -> list:
+        """Plan F7: the mutants of `cands` (one per code site, the best operator of each) applied in groups; a group
+        that moves the target toward the paper, or whose run fails, is halved and each half run, down to single
+        mutants. Returns the single mutants that moved it (each run alone). Masking (two edits that cancel) and
+        interactions are possible: a group whose halves don't move is left as it is. Within group_budget_frac."""
+        import math
+
+        from gapfinder.sandbox.spec import Knob
+
+        site, uniq = set(), []
+        for m in cands:
+            if (m.file, m.line, m.col) not in site:
+                site.add((m.file, m.line, m.col))
+                uniq.append(m)
+        if not uniq or not self.cfg.max_runs:
+            return []
+        cap = min(int(self.cfg.max_runs * self.cfg.group_budget_frac), self.cfg.max_runs - self.runs_used)
+        if cap < 4:
+            return []
+        n_groups = max(1, cap // 2)  # half the runs for the groups, the rest for halving
+        size = max(2, min(16, math.ceil(len(uniq) / n_groups)))
+        groups = [uniq[i:i + size] for i in range(0, len(uniq), size)][:n_groups]
+        for m in uniq:
+            self.spec.knobs.setdefault(m.name, Knob(layer="environment", default="0", env=True, choices=["0", "1"]))
+        start = self.runs_used
+        band = self.band(t)
+
+        def cfg_of(g):
+            return {m.name: "1" for m in g}
+
+        def verdict(g) -> str:
+            c = cfg_of(g)
+            if not self.measure_ok(c):
+                return "failed"
+            gap = self.gap(t, c)
+            return "moves" if gap is not None and abs(gap) < g0 - band else "no"
+
+        async def run(gs, label):
+            gs = [g for g in gs if self.runs_used - start + 1 <= cap]
+            await _all(*(self.measure(cfg_of(g), 1, label) for g in gs))
+            return gs
+
+        found = []
+        try:
+            todo = await run(groups, "mutation group")
+            self.orch.events.emit("note", msg=f"{t.claim_id}: group screen: {len(uniq)} mutation sites in {len(todo)} "
+                                              f"groups of up to {size}")
+            frontier = [g for g in todo if verdict(g) in ("moves", "failed")]
+            while frontier and self.runs_used - start < cap:
+                nxt = []
+                for g in frontier:
+                    if len(g) == 1:
+                        if verdict(g) == "moves":
+                            found.append(g[0])
+                        continue
+                    half = len(g) // 2
+                    nxt += [g[:half], g[half:]]
+                nxt = await run(nxt, "mutation group (halving)")
+                frontier = [g for g in nxt if verdict(g) in ("moves", "failed")]
+            found += [g[0] for g in frontier if len(g) == 1 and verdict(g) == "moves" and g[0] not in found]
+            # an isolated site was screened with one operator: its other operators, one run each
+            others = [m for f in found for m in cands if (m.file, m.line, m.col) == (f.file, f.line, f.col)
+                      and m.name != f.name]
+            for m in others:
+                self.spec.knobs.setdefault(m.name, Knob(layer="environment", default="0", env=True, choices=["0", "1"]))
+            await _all(*(self.measure({m.name: "1"}, 1, "mutation group (site)") for m in others))
+            found += [m for m in others if verdict([m]) == "moves"]
+        except RunBudgetExceeded:
+            pass
+        if found:
+            self.orch.events.emit("note", msg=f"{t.claim_id}: group screen: {len(found)} mutant(s) isolated: "
+                                              + "; ".join(m.describe() for m in found[:5]))
+        return found
 
     async def _mutation_round(self, t: Target, res: ClaimResult) -> None:
         """Small code edits at sites on the data flow of the knobs the claims depend on, scored on every claim.
@@ -1679,27 +1811,56 @@ class GapSearch:
             g = self.gap(t, {m.name: "1"})
             return (i if i is not None else float("inf"), abs(g) if g is not None else float("inf"))
         moved = [m for m in ran if target_score(m)[1] < g0 - self.band(t)]
-        moved.sort(key=lambda m: (target_score(m), -m.priority))
-        kept = moved[: self.cfg.mutation_keep]
-        if not kept:
-            res.notes.append(f"mutation round: none of {len(ran)} mutants moved {t.claim_id} toward the paper")
-            return
         diff = self.differentials.get(t.claim_id) or self._new_differential(t)
         self.differentials[t.claim_id] = diff
         self._add_point_claims(diff)
-        await self._measure_points([{m.name: "1"} for m in kept], "mutation point")
         hyps = {}
-        for m in kept:
-            hyps[m.name] = diff.add(self._config_hypothesis(diff, {m.name: "1"}, 0.02 if not m.tags else 0.05,
-                                                            title=f"a code change: {m.describe()}"))
-        best = sorted(kept, key=lambda m: (-hyps[m.name].posterior, hyps[m.name].max_I))[:2]
-        for m in best:  # repeats at the target and at every claim's condition
-            await self.measure({m.name: "1"}, self.confirm_repeats(t), "mutation confirm")
-            for p in self._usable_points():
-                await self.measure(self._point_config(p, {m.name: "1"}), self.cfg.scale_repeats, "mutation confirm")
-            hyps[m.name] = diff.add(self._config_hypothesis(diff, {m.name: "1"}, 0.02 if not m.tags else 0.05,
-                                                            title=f"a code change: {m.describe()}"))
-        fitting = [m for m in kept if hyps[m.name].fits_all]
+
+        def keep_of(moved):
+            moved = sorted(moved, key=lambda m: (target_score(m), -m.priority))
+            kept = moved[: self.cfg.mutation_keep]
+            # equivalent mutants (the same effect on the target, within one band) compete for these places only by
+            # noise and priority; the deepest of them is the origin the round reports, so a deeper equivalent
+            # replaces a shallower kept one (the output slice, plan F1, adds equivalents near the output)
+            for m in moved[self.cfg.mutation_keep:]:
+                gm = self.gap(t, {m.name: "1"})
+                for i, k in enumerate(kept):
+                    gk = self.gap(t, {k.name: "1"})
+                    if m.dist > k.dist and gm is not None and gk is not None and abs(gm - gk) <= self.band(t):
+                        kept[i] = m
+                        break
+            return kept
+
+        async def evaluate(kept):
+            """The kept mutants at every claim's condition, the best two repeated; those that fit every claim."""
+            await self._measure_points([{m.name: "1"} for m in kept], "mutation point")
+            for m in kept:
+                hyps[m.name] = diff.add(self._config_hypothesis(diff, {m.name: "1"}, 0.02 if not m.tags else 0.05,
+                                                                title=f"a code change: {m.describe()}"))
+            best = sorted(kept, key=lambda m: (-hyps[m.name].posterior, hyps[m.name].max_I))[:2]
+            for m in best:  # repeats at the target and at every claim's condition
+                await self.measure({m.name: "1"}, self.confirm_repeats(t), "mutation confirm")
+                for p in self._usable_points():
+                    await self.measure(self._point_config(p, {m.name: "1"}), self.cfg.scale_repeats, "mutation confirm")
+                hyps[m.name] = diff.add(self._config_hypothesis(diff, {m.name: "1"}, 0.02 if not m.tags else 0.05,
+                                                                title=f"a code change: {m.describe()}"))
+            return [m for m in kept if hyps[m.name].fits_all]
+
+        kept = keep_of(moved)
+        fitting = await evaluate(kept) if kept else []
+        if not fitting and self.cfg.group_screen:
+            # plan F7: none of the first mutants fits every claim; the rest of the sites, in groups
+            more, _ = self._mutation_candidates(t, res, limit=self.cfg.group_max)
+            have = {(m.file, m.line, m.col) for m in ms}
+            found = await self._group_screen(t, [m for m in more if (m.file, m.line, m.col) not in have], g0)
+            ran += [m for m in found if m not in ran]
+            new = keep_of([m for m in found if target_score(m)[1] < g0 - self.band(t)])
+            if new:
+                kept += new
+                fitting = await evaluate(new)
+        if not kept:
+            res.notes.append(f"mutation round: none of {len(ran)} mutants moved {t.claim_id} toward the paper")
+            return
         if not fitting:
             res.notes.append("mutation round: no mutant fits every claim (" + "; ".join(
                 f"{m.describe()}: worst {hyps[m.name].max_I:.1f} sigma" for m in kept[:3]) + ")")
@@ -2378,6 +2539,7 @@ class GapSearch:
                                                       f"{h.knob}={h.value}" for h in dropped))
         await _all(*(self.measure(h.changes, reps + extra, "confirm") for h in racers))
         self._family = max(1, len(survivors))  # the correction still counts every hypothesis raced
+        await self._extend_borderline(t, [h.changes for h in racers], "confirm")
         confirmed = [h for h in racers if self.units(t, h.changes) >= thr and self._significant(t, h.changes)]
         self.orch.events.emit("round", name="confirm", claim=t.claim_id, confirmed=len(confirmed))
 
@@ -2481,6 +2643,7 @@ class GapSearch:
         self._reserve_for_patches(t)
 
         # candidates: confirmed singles and combos, closest to the paper first
+        await self._extend_borderline(t, list(good_combos), "confirm-combo")
         candidates = [h.changes for h in confirmed] + [c for c in good_combos if self.units(t, c) >= thr
                                                          and self._significant(t, c)]
         candidates = self._order_candidates(t, candidates, res.gap_before)
@@ -2872,6 +3035,40 @@ class GapSearch:
                 b = mid
         return fmt(a)
 
+    def _pair_tags(self, start: int, n: int, changes: Changes) -> list[str] | None:
+        """RUN_TAGs for a configuration's runs start .. start+n-1 (paired seeds, plan F4), or None. Paired within a
+        condition only: the tag names the configuration's values of the claims' condition knobs (Target.at), so a
+        candidate shares its seeds with the naive run at the same condition while claims at different conditions
+        keep independent seeds. Shared seeds across conditions would correlate the claims' errors, and one lucky
+        seed would fit every condition at once (history matching takes the claims as independent evidence)."""
+        if not self.cfg.paired_seeds:
+            return None
+        cond = sorted((k, changes[k]) for k in self._condition_knobs if k in changes)
+        key = ",".join(f"{k}={v}" for k, v in cond)
+        return [f"gf-crn-{j}" + (f"-{zlib.crc32(key.encode()) % 10 ** 8}" if key else "") for j in range(start, start + n)]
+
+    async def _extend_borderline(self, t: Target, configs: list, label: str) -> None:
+        """Plan F4: adaptive repeats. A configuration whose effect clears the threshold but whose effect interval
+        still includes 0 gets one more run at a time, up to adaptive_repeats, the best three first; each look divides
+        the significance level (effect_ci). A budget stop ends the extension, not the search."""
+        if not self.cfg.adaptive_repeats or self.cfg.effect_alpha is None:
+            return
+        thr = self.cfg.effect_threshold
+        todo = sorted((c for c in configs if self.units(t, c) >= thr), key=lambda c: -self.units(t, c))[:3]
+        for c in todo:
+            key = frozenset(c.items())
+            for _ in range(self.cfg.adaptive_repeats):
+                if self.units(t, c) < thr or self._significant(t, c):
+                    break
+                self._looks[key] = self._looks.get(key, 0) + 1
+                try:
+                    await self.measure(c, len(self.measure_ok(c)) + 1, f"{label} (adaptive)")
+                except RunBudgetExceeded:
+                    return
+            if self._looks.get(key):
+                self.orch.events.emit("note", msg=f"{t.claim_id}: adaptive repeats: {dict(c)} got {self._looks[key]} "
+                                                  f"more run(s); {'significant' if self._significant(t, c) else 'not significant'}")
+
     def _add_equivalent(self, t: Target, res: ClaimResult, c: Changes, source: str) -> None:
         """A code round's configuration that fits every claim as well as the answer, but can't displace it (an
         equally unsupported fit): it joins the set of configurations the claims can't tell apart, so the report
@@ -3067,6 +3264,27 @@ class GapSearch:
         res.notes.append("explained with a code patch (tested in memory, no file edited): " + "; ".join(
             f"{ast_patch.parse(k)[0]} line {ast_patch.parse(k)[1]}: {ast_patch.parse(k)[2]} = "
             f"{self.spec.knobs[k].default} -> {v}" for k, v in patches.items()))
+
+    def _cap_undetectable(self, t: Target, res: ClaimResult) -> None:
+        """A confident label for a gap below the minimum detectable effect is capped at Fits but unsupported: the
+        same reason the MDE rule turns such an Unexplained into Inconclusive (a cause that closed it couldn't have been
+        confirmed), from the other side. Found by plan F4's toy: a scale factor labelled a paper-artifact
+        inconsistency where every claim sat within 2-3 sigma of the naive run as well."""
+        confident = {ConfidenceLabel.explained.value, ConfidenceLabel.inconsistency.value,
+                     ConfidenceLabel.reporting_rule.value}
+        if res.attribution is None or res.attribution.confidence_label not in confident or res.gap_before is None:
+            return
+        vals = [b.parsed_metrics[t.metric] for b in self.measure_ok({}) if t.metric in b.parsed_metrics]
+        if len(vals) < 3:
+            return
+        n = self.confirm_repeats(t)
+        m = mde(statistics.stdev(vals), n) / abs(t.paper_value)
+        if abs(res.gap_before) >= m:
+            return
+        res.notes.append(f"capped at Fits but unsupported (was {res.attribution.confidence_label}): the gap "
+                         f"({res.gap_before:+.1%}) is below the minimum detectable effect (±{m:.1%} with {n} runs per "
+                         "configuration), so no explanation of it can be confirmed")
+        res.attribution = res.attribution.model_copy(update={"confidence_label": ConfidenceLabel.fits_but_unsupported.value})
 
     def _mde_check(self, t: Target, res: ClaimResult) -> None:
         """Unexplained -> Inconclusive when the gap is below the minimum detectable effect."""
