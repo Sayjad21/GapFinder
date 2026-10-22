@@ -113,6 +113,10 @@ class SearchConfig:
     # for every swept point, estimated from the measured curve, then verified by runs at g(v) for every claim
     scale_probe: bool = True
     scale_repeats: int = 2
+    scale_unjudged: int = 2  # plan G4: factors the measured curve can't judge that are run (unit conventions first)
+    # plan G6: one Super call proposes at most 3 code edits when the deterministic rounds end with no configuration
+    # that fits every claim (gapfinder/search/proposer.py); off until a fresh batch measures it
+    code_proposer: bool = False
     # plan D5: mutation-based localisation, when no setting fits every claim or a scale relation needs its code site;
     # at most mutation_max mutants, in three stages (one run each; the best mutation_keep at every claim's condition;
     # the best two repeated), within mutation_budget_frac of the run budget
@@ -373,6 +377,8 @@ class ClaimResult:
     # plan F9: False when configurations of different knobs fit every claim equally and no condition the paper
     # reports separates them (the answer is one member of that set, not the identified cause); None when not judged
     identifiable: bool | None = None
+    # plan G6: the answer and label before the code proposer ran (None: it didn't run), so a batch scores both arms
+    pre_proposer: dict | None = None
     diagnosis: dict | None = None  # history matching over every measured configuration (all claims)
     closes: bool = False  # the configuration closes the gap fully (within its noise band)
     # every configuration the target claim can't tell apart from the answer (likelihood within
@@ -1329,6 +1335,11 @@ class GapSearch:
                 await self._mutation_round(t, res)
             except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
                 res.notes.append(f"mutation round stopped early: {exc}")
+        if self.cfg.code_proposer and self.cfg.history_matching:
+            try:
+                await self._propose_code(t, res)
+            except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
+                res.notes.append(f"code proposer stopped early: {exc}")
         self._refuted_label(t, res)
         if self.cfg.value_interval:
             try:
@@ -1367,7 +1378,7 @@ class GapSearch:
                 continue
             sd = max(statistics.stdev(vals), self.cfg.noise_floor_frac * abs(c.paper_value))
             specs.append(ClaimSpec(c.claim_id, c.metric, c.paper_value, statistics.fmean(vals), sd, target=c is t,
-                                   run_sd=statistics.stdev(vals)))
+                                   run_sd=statistics.stdev(vals), run_n=len(vals)))
         return Differential(specs, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc)
 
     def _add_point_claims(self, diff) -> None:
@@ -1384,7 +1395,8 @@ class GapSearch:
             sd = max(statistics.stdev(vals) if len(vals) >= 2 else 0.0, self.bands[p.metric].band / 2,
                      self.cfg.noise_floor_frac * abs(p.paper_value))
             diff.claims[p.claim_id] = ClaimSpec(p.claim_id, p.metric, p.paper_value, statistics.fmean(vals), sd,
-                                                run_sd=statistics.stdev(vals) if len(vals) >= 2 else None)
+                                                run_sd=statistics.stdev(vals) if len(vals) >= 2 else None,
+                                                run_n=len(vals))
         for h in diff.hypotheses.values():  # rescored on the larger claim set
             diff.score(h)
         diff._normalise()
@@ -1546,9 +1558,15 @@ class GapSearch:
         return out
 
     @staticmethod
-    def _interp(curve: dict[float, tuple[float, int]], x: float, extrapolate: float = 0.5) -> float | None:
+    def _interp(curve: dict[float, tuple[float, int]], x: float, extrapolate: float = 0.5,
+                log: bool = False) -> float | None:
         """The measured curve at x: linear between measured points, and linear beyond the ends up to `extrapolate` x
-        the measured span (a screening estimate only: the scale probe's verification runs decide)."""
+        the measured span (a screening estimate only: the scale probe's verification runs decide). With `log`, linear
+        in log x (a rate or a weight measured over decades: plan G4)."""
+        if log:
+            if x <= 0 or any(k <= 0 for k in curve):
+                return None
+            curve, x = {math.log10(k): v for k, v in curve.items()}, math.log10(x)
         xs = sorted(curve)
         if len(xs) < 2:
             return curve[xs[0]][0] if xs and abs(x - xs[0]) < 1e-12 else None
@@ -1579,7 +1597,7 @@ class GapSearch:
         fraction, an epoch counted from 0) is a paper-code inconsistency the plain value search cannot express."""
         if not self.cfg.scale_probe:
             return
-        from gapfinder.diagnose import FIT_I, STRICT_I
+        from gapfinder.diagnose import FIT_I
 
         by_knob: dict[str, list[Target]] = {}
         for p in self._usable_points():
@@ -1602,90 +1620,119 @@ class GapSearch:
             sd = max(self.bands[t.metric].band / 2, self.cfg.noise_floor_frac * abs(t.paper_value))
             fams = ([("x", c) for c in self.SCALE_FACTORS] + [("x", c) for c in self.UNIT_FACTORS]
                     + [("+", c) for c in self.OFFSETS])
-            scored = []
+            # plan G4: a positive knob measured over a decade or more (a rate, a weight) is read on a log scale: a
+            # straight line through the two lowest learning rates, extrapolated to 0.01 x the paper's, put the x0.01
+            # convention 26-32 sigma off and rejected it (seed 4, twice)
+            logx = min(curve) > 0 and max(curve) >= 10 * min(curve)
+            scored, unjudged = [], []
             for fam, c in fams:
                 g = (lambda v, c=c: v * c) if fam == "x" else (lambda v, c=c: v + c)
-                preds = [self._interp(curve, g(v)) for v, _, _ in sweep]
+                preds = [self._interp(curve, g(v), log=logx) for v, _, _ in sweep]
                 if any(y is None for y in preds):
+                    unjudged.append((fam, c, g))
                     continue
                 zs = [abs(z - y) / math.sqrt(sd ** 2 + (self.cfg.hm_disc * z) ** 2) for (_, z, _), y in zip(sweep, preds)]
                 scored.append((max(zs), sum(x * x for x in zs), fam, c, g))
-            if not scored:
-                continue
-            scored.sort(key=lambda x: (x[0], x[1]))
-            worst, _, fam, c, g = scored[0]
-            ident = [x for x in self._interp_identity(curve, sweep, sd)]
-            self.orch.events.emit("note", msg=f"{t.claim_id}: scale probe on {knob}: best g(v) = "
-                                              f"{'%g*v' % c if fam == 'x' else 'v%+g' % c} (worst claim {worst:.1f} "
-                                              f"sigma on the measured curve; as is {max(ident):.1f})")
-            if worst > FIT_I or worst >= max(ident):
-                continue
-            # verify: run the code at g(v) for every claim
-            configs = []
-            for v, _, claim in sweep:
-                gv = self._snap_value(g(v), self.spec.knobs[knob].default)
-                cfg = {} if _same_value(gv, self.spec.knobs[knob].default) else {knob: gv}
-                configs.append((claim, cfg))
-            try:
-                await _all(*(self.measure(cfg, self.cfg.scale_repeats, f"scale {knob}") for _, cfg in configs))
-            except (RunBudgetExceeded, budget.BudgetExceeded):
-                pass
-            from gapfinder.diagnose import Hypothesis, Prediction
+            candidates = []
+            if scored:
+                scored.sort(key=lambda x: (x[0], x[1]))
+                worst, _, fam, c, g = scored[0]
+                ident = [x for x in self._interp_identity(curve, sweep, sd, log=logx)]
+                self.orch.events.emit("note", msg=f"{t.claim_id}: scale probe on {knob}: best g(v) = "
+                                                  f"{'%g*v' % c if fam == 'x' else 'v%+g' % c} (worst claim {worst:.1f} "
+                                                  f"sigma on the measured curve; as is {max(ident):.1f})")
+                if not (worst > FIT_I or worst >= max(ident)):
+                    candidates.append((fam, c, g))
+            real = not re.fullmatch(r"[-+]?\d+", str(self.spec.knobs[knob].default).strip())
+            if not candidates and real:
+                # plan G4: a factor whose g(v) lies outside the measured curve can't be judged on it, so it is run
+                # (unit conventions first, then a decade) when at least two swept claims are off as run. A real-valued
+                # knob only (a rate, a weight, a fraction): a count's conventions (x2, 1/2, +1) lie on its curve
+                off0 = sum(1 for _, _, claim in sweep if claim.claim_id in diff.claims
+                           and self._off_as_run(diff, claim.claim_id))
+                order = ([x for x in unjudged if x[0] == "x" and x[1] in self.UNIT_FACTORS]
+                         + [x for x in unjudged if x[0] == "x" and x[1] in (0.1, 10.0)])
+                if off0 >= 2 and order:
+                    candidates = order[: self.cfg.scale_unjudged]
+                    self.orch.events.emit("note", msg=f"{t.claim_id}: scale probe on {knob}: "
+                                                      f"{', '.join('%g*v' % x[1] for x in candidates)} outside the "
+                                                      "measured curve; run at g(v)")
+            for fam, c, g in candidates:
+                if await self._verify_scale(t, res, knob, sweep, diff, fam, c, g):
+                    break
 
-            preds = {}
-            for claim, cfg in configs:
-                vals = [b.parsed_metrics[t.metric] for b in self.measure_ok(cfg) if t.metric in b.parsed_metrics]
-                if vals and claim.claim_id in diff.claims:
-                    preds[claim.claim_id] = Prediction.from_values(vals, diff.claims[claim.claim_id].naive_sd)
-            rel = "%g x the paper's" % c if fam == "x" else "the paper's %+g" % c
-            h = diff.add(Hypothesis(f"code:scale:{knob}:{fam}{c:g}", "code",
-                                    f"the code's {knob} is {rel} (a unit or convention differs between paper and code)",
-                                    0.08, preds, detail={"knob": knob, "family": fam, "c": c},
-                                    runs=sum(len(self.measure_ok(cfg)) for _, cfg in configs),
-                                    check=f"find where {knob} enters the computation and compare its unit with the paper's"))
-            v_target = configs[0][1]
-            swept = [claim.claim_id for _, _, claim in sweep]
-            fits = all(cid in h.per_claim and h.per_claim[cid]["I"] <= STRICT_I and cid in preds for cid in swept)
-            self.scale_relations.append({"knob": knob, "family": fam, "c": c, "verified": bool(fits),
-                                         "claims": len(sweep)})
-            res.notes.append(f"scale probe: the code's {knob} as {rel} {'fits every swept claim' if fits else 'does not fit every swept claim'} "
-                             f"after {h.runs} runs at g(v) (" + ", ".join(
-                                 f"{claim.claim_id} at {knob}={cfg.get(knob, self.spec.knobs[knob].default)}"
-                                 for claim, cfg in configs) + ")")
-            # the confident label needs swept claims that were off as run (beyond FIT_I, at least two): when the naive
-            # run is itself within reach of every claim, one factor fitting them is no evidence of a convention (plan
-            # F4's toy: a 10x factor on a weakly acting knob "fit" three claims the naive run nearly fitted too); the
-            # factor is then at most an unsupported fit
-            n0 = max(1, len(self.measure_ok({})))
-            off = sum(1 for cid in swept if cid in diff.claims and diff.claim_loglik(
-                diff.claims[cid], Prediction(diff.claims[cid].naive_mean, diff.claims[cid].naive_sd, n0))[0] > FIT_I)
-            label_s = ConfidenceLabel.inconsistency if off >= 2 else ConfidenceLabel.fits_but_unsupported
-            if fits and len(sweep) >= 3 and off < 2:
-                res.notes.append(f"scale probe: only {off} of the {len(sweep)} swept claims were off as run, so the "
-                                 "factor is at most an unsupported fit")
-            if fits and len(sweep) >= 3 and _rank(res) > _LABEL_RANK[label_s.value]:
-                old = dict(res.changes)
-                res.changes, res.gap_after = dict(v_target), self.gap(t, v_target)
-                res.closes = True
-                res.attribution = self._attribution(t, v_target, res.gap_after, label_s,
-                                                    [b.result_checkpoint for b in self.measure_ok(v_target)
-                                                     if b.result_checkpoint])
-                res.held_out = {claim.claim_id: {"gap_before": self.gap(claim, {}) if claim is t else None,
-                                                 "gap_after": (self.value(cfg, t.metric) - claim.paper_value)
-                                                 / abs(claim.paper_value), "ok": True, "at": {knob: cfg.get(knob, self.spec.knobs[knob].default)}}
-                                for claim, cfg in configs[1:]}
-                res.notes.append(f"labelled {label_s.value}: one factor ({rel}) makes every one of the "
-                                 f"{len(sweep)} swept claims fit" + (f"; it replaces {old}" if old and old != res.changes
-                                                                      else ""))
+    async def _verify_scale(self, t: Target, res: ClaimResult, knob: str, sweep: list, diff, fam: str, c: float,
+                            g) -> bool:
+        """The code run at g(v) for every swept claim; the relation recorded and, when it fits every swept claim,
+        the answer labelled. True when it fits."""
+        from gapfinder.diagnose import STRICT_I, Hypothesis, Prediction
+
+        configs = []
+        for v, _, claim in sweep:
+            gv = self._snap_value(g(v), self.spec.knobs[knob].default)
+            cfg = {} if _same_value(gv, self.spec.knobs[knob].default) else {knob: gv}
+            configs.append((claim, cfg))
+        try:
+            await _all(*(self.measure(cfg, self.cfg.scale_repeats, f"scale {knob}") for _, cfg in configs))
+        except (RunBudgetExceeded, budget.BudgetExceeded):
+            pass
+        preds = {}
+        for claim, cfg in configs:
+            vals = [b.parsed_metrics[t.metric] for b in self.measure_ok(cfg) if t.metric in b.parsed_metrics]
+            if vals and claim.claim_id in diff.claims:
+                preds[claim.claim_id] = Prediction.from_values(vals, diff.claims[claim.claim_id].naive_sd)
+        rel = "%g x the paper's" % c if fam == "x" else "the paper's %+g" % c
+        h = diff.add(Hypothesis(f"code:scale:{knob}:{fam}{c:g}", "code",
+                                f"the code's {knob} is {rel} (a unit or convention differs between paper and code)",
+                                0.08, preds, detail={"knob": knob, "family": fam, "c": c},
+                                runs=sum(len(self.measure_ok(cfg)) for _, cfg in configs),
+                                check=f"find where {knob} enters the computation and compare its unit with the paper's"))
+        v_target = configs[0][1]
+        swept = [claim.claim_id for _, _, claim in sweep]
+        fits = all(cid in h.per_claim and h.per_claim[cid]["I"] <= STRICT_I and cid in preds for cid in swept)
+        self.scale_relations.append({"knob": knob, "family": fam, "c": c, "verified": bool(fits),
+                                     "claims": len(sweep)})
+        res.notes.append(f"scale probe: the code's {knob} as {rel} {'fits every swept claim' if fits else 'does not fit every swept claim'} "
+                         f"after {h.runs} runs at g(v) (" + ", ".join(
+                             f"{claim.claim_id} at {knob}={cfg.get(knob, self.spec.knobs[knob].default)}"
+                             for claim, cfg in configs) + ")")
+        # the confident label needs swept claims that were off as run (at least two): when the naive run is
+        # itself within reach of every claim, one factor fitting them is no evidence of a convention (plan F4's
+        # toy: a 10x factor on a weakly acting knob "fit" three claims the naive run nearly fitted too); the
+        # factor is then at most an unsupported fit
+        off = sum(1 for cid in swept if cid in diff.claims and self._off_as_run(diff, cid))
+        label_s = ConfidenceLabel.inconsistency if off >= 2 else ConfidenceLabel.fits_but_unsupported
+        if fits and len(sweep) >= 3 and off < 2:
+            res.notes.append(f"scale probe: only {off} of the {len(sweep)} swept claims were off as run, so the "
+                             "factor is at most an unsupported fit")
+        if fits and len(sweep) >= 3 and _rank(res) > _LABEL_RANK[label_s.value]:
+            old = dict(res.changes)
+            res.changes, res.gap_after = dict(v_target), self.gap(t, v_target)
+            res.closes = True
+            res.attribution = self._attribution(t, v_target, res.gap_after, label_s,
+                                                [b.result_checkpoint for b in self.measure_ok(v_target)
+                                                 if b.result_checkpoint])
+            res.held_out = {claim.claim_id: {"gap_before": self.gap(claim, {}) if claim is t else None,
+                                             "gap_after": (self.value(cfg, t.metric) - claim.paper_value)
+                                             / abs(claim.paper_value), "ok": True, "at": {knob: cfg.get(knob, self.spec.knobs[knob].default)}}
+                            for claim, cfg in configs[1:]}
+            res.notes.append(f"labelled {label_s.value}: one factor ({rel}) makes every one of the "
+                             f"{len(sweep)} swept claims fit" + (f"; it replaces {old}" if old and old != res.changes
+                                                                  else ""))
+        return bool(fits)
 
     # ------------------------------------------------------------ mutation-based localisation (plan D5)
     def _wants_mutations(self, t: Target, res: ClaimResult) -> bool:
         rel = [r for r in self.scale_relations if r.get("verified")]
         label = res.attribution.confidence_label if res.attribution else ConfidenceLabel.unexplained.value
         out_of_space = (res.diagnosis or {}).get("kind", "").startswith("out_of_space")
+        # a mutant the early code screen ran (F2) that fits every claim puts the claims in space; the mutation round
+        # still has to adopt it (its runs are reused), as the patch round does for patches
+        joint = [r.get("config") or {} for r in (res.diagnosis or {}).get("joint") or []]
+        mutant_fits = any("@mut." in k for c in joint for k in c)
         self._mutation_alt = False
-        if bool(rel) or out_of_space or label in (ConfidenceLabel.unexplained.value,
-                                                  ConfidenceLabel.conflicts_held_out.value):
+        if bool(rel) or out_of_space or mutant_fits or label in (ConfidenceLabel.unexplained.value,
+                                                                 ConfidenceLabel.conflicts_held_out.value):
             return True
         self._mutation_alt = self.cfg.code_hold and label == ConfidenceLabel.fits_but_unsupported.value
         return self._mutation_alt
@@ -1904,17 +1951,8 @@ class GapSearch:
         # interference control (FLIM 2025): an edit near the output can move one number to almost any value, and the
         # claims that already matched as run stay matched whatever it does, so "fits every claim" is no evidence
         # unless the mutant brings at least two claims that were off as run within reach (a no-cause toy: a score
-        # offset by 1.37 matched by an edit of the score alone, the held-out never off). Off as run is judged on the
-        # naive runs' own spread: the model-discrepancy allowance and the noise floor are for fitting, and a gap
-        # inside them is still one the runs see (a dropped last batch: 1 unit off at a spread of 0.001, inside the
-        # 1% floor)
-        n0 = max(1, len(self.measure_ok({})))
-
-        def off_as_run(c) -> bool:
-            sd = (c.naive_sd if c.run_sd is None else c.run_sd) * math.sqrt(1 / n0 + 1 / diff.paper_n)
-            return abs(c.paper - c.naive_mean) > FIT_I * max(sd, 1e-12)
-
-        moved = [cid for cid, v in h.per_claim.items() if v["I"] <= FIT_I and off_as_run(diff.claims[cid])]
+        # offset by 1.37 matched by an edit of the score alone, the held-out never off)
+        moved = [cid for cid, v in h.per_claim.items() if v["I"] <= FIT_I and self._off_as_run(diff, cid)]
         if len(moved) < 2 and not grounded:
             res.notes.append(f"mutation round: {origin.describe()} fits, but moves only {len(moved)} claim(s) that were "
                              "off as run: a code lead, not evidence for a cause (one number can't identify a code "
@@ -2228,11 +2266,11 @@ class GapSearch:
         diff.add(self._config_hypothesis(diff, ref, 0.08, title=f"the code as of the paper (commit {info['sha'][:10]})",
                                          cls="code"))
 
-    def _interp_identity(self, curve, sweep, sd) -> list[float]:
+    def _interp_identity(self, curve, sweep, sd, log: bool = False) -> list[float]:
         """The swept claims against the measured curve as is (g = identity), in sigma."""
         out = []
         for v, z, _ in sweep:
-            y = self._interp(curve, v)
+            y = self._interp(curve, v, log=log)
             out.append(float("inf") if y is None else abs(z - y) / math.sqrt(sd ** 2 + (self.cfg.hm_disc * z) ** 2))
         return out
 
@@ -3356,6 +3394,85 @@ class GapSearch:
             f"{ast_patch.parse(k)[0]} line {ast_patch.parse(k)[1]}: {ast_patch.parse(k)[2]} = "
             f"{self.spec.knobs[k].default} -> {v}" for k, v in patches.items()))
 
+    async def _propose_code(self, t: Target, res: ClaimResult) -> None:
+        """Plan G6 (code_proposer, gapfinder/search/proposer.py): when the deterministic rounds end with no
+        configuration that fits every claim, one Super call reads the executed code and the claims' ratios and
+        proposes at most 3 expression edits. Each runs like a patch; one that fits every claim and brings at least
+        two claims that were off as run within reach (the mutation round's interference control) is the answer, as
+        a code lead (Fits but unsupported, never Explained). The answer before it is kept in `pre_proposer`."""
+        from gapfinder.diagnose import FIT_I
+        from gapfinder.sandbox.spec import Knob
+        from gapfinder.search import proposer
+
+        kind = (res.diagnosis or {}).get("kind", "")
+        label = res.attribution.confidence_label if res.attribution else ConfidenceLabel.unexplained.value
+        root = self.spec.code_root()
+        if self.router is None or root is None or not (kind.startswith("out_of_space") or label in (
+                ConfidenceLabel.unexplained.value, ConfidenceLabel.inconclusive.value,
+                ConfidenceLabel.conflicts_held_out.value)):
+            return
+        res.pre_proposer = {"changes": dict(res.changes), "label": label}
+        held = [h for h in self.targets if h.held_out and not h.tuned_separately and h.metric in self.bands]
+        rows = []
+        for c in [t] + held:
+            v = self.value(self._point_config(c, {}) if c.at else {}, c.metric)
+            if v is not None:
+                rows.append((c.claim_id, c.metric, c.paper_value, v))
+        ints = {k: int(kn.default) for k, kn in self.spec.knobs.items()
+                if not k.startswith("@") and re.fullmatch(r"\d+", str(kn.default or "").strip())}
+        executed = self.trace_report.executed if self.trace_report is not None else {}
+        ms, _ = self._mutation_candidates(t, res)
+        files = list(dict.fromkeys([m.file for m in ms] + sorted(executed)))  # the output slice's files first
+        try:
+            edits = await proposer.propose(self.router, proposer.ratio_lines(rows, ints), ints,
+                                           proposer.code_listing(root, executed, files))
+        except budget.BudgetExceeded:
+            raise
+        except Exception as exc:  # noqa: BLE001 (an aid: a failed call leaves the result as it was)
+            self.orch.events.emit("note", msg=f"{t.claim_id}: code proposer: skipped ({type(exc).__name__}: "
+                                              f"{str(exc)[:160]})")
+            return
+        kept, refused = proposer.ground(edits, root, [c.paper_value for c in [t] + held])
+        self.orch.events.emit("note", msg=f"{t.claim_id}: code proposer: {len(edits)} edit(s) proposed, {len(kept)} "
+                                          f"grounded" + (f"; refused: {'; '.join(refused)}" if refused else ""))
+        diff = self.differentials.get(t.claim_id) or self._new_differential(t)
+        self.differentials[t.claim_id] = diff
+        self._add_point_claims(diff)
+        for knob, desc in kept:
+            self.spec.knobs.setdefault(knob, Knob(layer="environment", default="0", env=True, choices=["0", "1"]))
+            cfg = {knob: "1"}
+            await self.measure(cfg, self.confirm_repeats(t), "code proposer")
+            await self._measure_points([cfg], "code proposer point")
+            h = diff.add(self._config_hypothesis(diff, cfg, 0.05, title=f"proposed edit {desc}"))
+            moved = [cid for cid, v in h.per_claim.items() if v["I"] <= FIT_I and self._off_as_run(diff, cid)]
+            if h.max_I <= FIT_I and len(moved) >= 2:
+                res.changes, res.gap_after = cfg, self.gap(t, cfg)
+                res.closes = res.gap_after is not None and abs(res.gap_after) <= self.band_at(t, cfg)
+                res.attribution = self._attribution(t, cfg, res.gap_after, ConfidenceLabel.fits_but_unsupported,
+                                                    [b.result_checkpoint for b in self.measure_ok(cfg)
+                                                     if b.result_checkpoint])
+                res.notes.append(f"code proposer: {desc} fits every claim (worst {h.max_I:.1f} sigma, "
+                                 f"{len(self.measure_ok(cfg))} runs): a code lead, not a confirmed cause")
+                return
+            res.notes.append(f"code proposer: {desc} does not fit every claim (worst {h.max_I:.1f} sigma, "
+                             f"{len(moved)} claim(s) off as run brought within reach)")
+
+    @staticmethod
+    def _off_as_run(diff, cid: str) -> bool:
+        """The claim's naive runs miss the paper's number beyond their own spread (FIT_I standard errors of the
+        difference). Not the fitting yardstick: the model-discrepancy allowance and the noise floor are for fitting,
+        and a gap inside them is still one the runs see (a dropped last batch: 1 unit off at a spread of 0.001,
+        inside the 1% floor; seed 4: clear scale gaps judged "0 of 3 off" with the floor)."""
+        from gapfinder.diagnose import FIT_I
+
+        c = diff.claims[cid]
+        run_sd = c.run_sd
+        if run_sd is None:  # one naive run at its condition: the spread of the same metric where it was repeated
+            run_sd = next((x.run_sd for x in diff.claims.values() if x.metric == c.metric and x.run_sd is not None),
+                          None)
+        sd = (c.naive_sd if run_sd is None else run_sd) * math.sqrt(1 / max(1, c.run_n) + 1 / diff.paper_n)
+        return abs(c.paper - c.naive_mean) > FIT_I * max(sd, 1e-12)
+
     def _identifiability(self, t: Target, res: ClaimResult) -> None:
         """Plan F9: practical identifiability (profile likelihood; Liu, Maini & Baker 2025) and GLUE's set of
         acceptable models (Beven): when several configurations that change different knobs fit every claim as well
@@ -3375,7 +3492,13 @@ class GapSearch:
                     return False
             return True
 
-        alts_eq = [e for e in res.equivalent if e.get("config") and as_good(e["config"])]
+        def holds(a: Changes, b: Changes) -> bool:  # every change of b is in a
+            return all(k in a and _same_value(str(a[k]), str(v)) for k, v in b.items())
+
+        # plan G2: the answer plus passengers (or the answer less one) is the same explanation, not a rival (seed 4:
+        # `kmeans_synthetic_lmbda=20` with an unrelated lambda beside it counted as a second cause)
+        alts_eq = [e for e in res.equivalent if e.get("config") and as_good(e["config"])
+                   and not holds(e["config"], res.changes) and not holds(res.changes, e["config"])]
         knobsets = {frozenset(k for k in e["config"]) for e in alts_eq}
         knobsets.add(frozenset(res.changes))
         if len(knobsets) < 2:
@@ -3386,10 +3509,11 @@ class GapSearch:
             res.identifiable = True
             return
         res.identifiable = False
-        alts = sorted({", ".join(f"{k}={v}" for k, v in sorted(e["config"].items())) for e in alts_eq})
+        show = lambda c: ", ".join(f"{k}={v}" for k, v in sorted(c.items()))  # noqa: E731
+        alts = sorted({show(e["config"]) for e in alts_eq} - {show(res.changes)})
         conds = (res.discrimination or {}).get("conditions") or []
-        res.notes.append(f"not identifiable from the paper's numbers: {len(alts)} configurations of different knobs fit "
-                         f"every claim as well as the answer ({'; '.join(alts[:6])})"
+        res.notes.append(f"not identifiable from the paper's numbers: {len(alts)} configuration(s) of other knobs fit "
+                         f"every claim as well as the answer ({show(res.changes)}: {'; '.join(alts[:6])})"
                          + (f", and the paper's other conditions ({', '.join(conds)}) don't separate them" if conds
                             else ", and the paper reports no other condition that could separate them")
                          + ": the answer is one of them, not the identified cause")

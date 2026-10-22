@@ -20,8 +20,9 @@ Mutation-based fault localisation (MUSE, Metallaxis) ranks sites by how mutants 
   (`drop_last`, `shuffle`); split fractions (a keyword like `test_size=0.2`, or `0.8 * len(x)`): the complement first,
   then the common fractions; what a scaler, normaliser or encoder is fit on (`fit(X)` against `fit(X_train)`, both
   ways: leakage, or a paper that fit on everything); filtering thresholds in data code (`min_count=5`,
-  `df[df.n > 10]`); a line a static check flagged (split fractions, evaluation switches, selection on test data)
-  comes first;
+  `df[df.n > 10]`); the training data cut to its first half or three quarters (an assignment to the training
+  indices: DeepCrime's TRD, plan G5); a line a static check flagged (split fractions, evaluation switches, selection
+  on test data) comes first;
 - **executed lines only**, when the runtime trace recorded coverage;
 - **operators implied by measured relations** first: a verified scale relation ("the code's knob is 0.5 x the
   paper's", plan D2.4) makes the matching factor on that knob's slice the first mutants tried.
@@ -52,6 +53,9 @@ SPLIT_KW = re.compile(r"(?i)^(test|val|valid|validation|train|dev|holdout|eval)?
 COMMON_FRACS = (0.1, 0.2, 0.3, 0.5, 0.25, 0.15)
 FITTERS = re.compile(r"(?i)(scal|norm|pca|imput|vectoriz|encod|standard|minmax|robust|whiten|tfidf|discretiz|binar)")
 FIT_CALLS = {"fit", "fit_transform", "partial_fit"}
+# plan G5: names that hold the training examples' indices (a mask can't be sliced, so it is left out)
+TRAIN_IDS = re.compile(r"(?i)^(idx_?train|train_?(idx|index|indices|ids|nodes|edges|samples|rows))$")
+SUBSET_SHARES = ((1, 2), (3, 4))
 DATA_FN = re.compile(r"(?i)(load|read|prep|preprocess|process|filter|clean|build|dataset|data|split|sample|parse|graph)")
 FILTER_KW = re.compile(r"(?i)^(min|max)_?(count|freq|df|degree|support|len|length|users?|items?|interactions?|occur\w*)$|"
                        r"^(threshold|thresh|cutoff|min_count|core|k_core|kcore)$")
@@ -427,6 +431,12 @@ def _data_mutants(rel: str, tree: ast.Module, add, parents, hints: set[int]) -> 
                             add(rel, n.comparators[0], "num", op, 2 - hint, None, ["data pipeline", "filter threshold"],
                                 parents)
                         add(rel, n, "Compare", "cmpflip", 2 - hint, None, ["data pipeline", "filter threshold"], parents)
+                # the training data cut to a share (DeepCrime's TRD, from a taxonomy of real deep-learning faults)
+                if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name)                         and TRAIN_IDS.search(n.targets[0].id):
+                    for a, b in SUBSET_SHARES:
+                        cut = f"(lambda _v: _v[:max(1, len(_v) * {a} // {b})])({_unparse(n.value)})"
+                        add(rel, n.value, type(n.value).__name__, set_op(cut), 1 - hint, None,
+                            ["data pipeline", "training subset", f"{n.targets[0].id}: the first {a}/{b}"], parents)
 
 
 def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[int]] | None = None,
@@ -592,7 +602,36 @@ def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[in
     # is the relation's origin); then by priority (the output slice's bonus cannot push them out of the first stage)
     out.sort(key=lambda m: (not any(t.startswith("implied by the verified relation") for t in m.tags), -m.priority,
                             m.dist, m.file, m.line, m.col, m.op))
-    return out[:limit]
+    return _stratified(out, limit)
+
+
+def _klass(m: Mutant) -> str:
+    if any(t.startswith("implied by the verified relation") for t in m.tags):
+        return "relation"
+    if "data pipeline" in m.tags:
+        return "data"
+    if "metric output" in m.tags or "metric code" in m.tags:
+        return "metric"
+    return "loop" if "loop bound" in m.tags else "flow"
+
+
+def _stratified(ranked: list[Mutant], limit: int) -> list[Mutant]:
+    """The first `limit` mutants, taken in turn from each operator class (data pipeline, metric code, loop bounds,
+    the knobs' data flow), best first within a class, so no class's best are cut because another class has many
+    sites (operator-based mutant sampling, Zhang et al., ASE 2013). Seed 4: a training-data cut ranked 32nd of 38,
+    under 30 metric-output mutants, past the round's 24. The relation-implied operators stay first, all of them."""
+    if len(ranked) <= limit:
+        return ranked
+    first = [m for m in ranked if _klass(m) == "relation"]
+    by: dict[str, list[Mutant]] = {}
+    for m in ranked:
+        if _klass(m) != "relation":
+            by.setdefault(_klass(m), []).append(m)  # dicts keep insertion order: the class of the best mutant first
+    out, i = first[:limit], 0
+    while len(out) < limit and any(i < len(v) for v in by.values()):
+        out += [v[i] for v in by.values() if i < len(v)][: limit - len(out)]
+        i += 1
+    return out
 
 
 ARITH = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv)

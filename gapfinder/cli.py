@@ -280,7 +280,8 @@ async def cmd_search(args) -> int:
                                                               reproduce_tol=args.reproduce_tol,
                                                               evidence_gate=not args.no_evidence_gate,
                                                               rank=args.rank, seed=args.seed,
-                                                              hm_disc=spec.discrepancy if spec.discrepancy is not None else 0.01),
+                                                              hm_disc=spec.discrepancy if spec.discrepancy is not None else 0.01,
+                                                              code_proposer=args.code_proposer),
                        evidence=evidence, claims=ledger_claims, router=_router_if_configured(), paper_text=paper_text)
     for path in args.resume or []:  # reuse earlier runs' branch results (no re-running, no re-paying)
         lines = Path(path).read_text(encoding="utf-8").splitlines()
@@ -502,6 +503,9 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--paper", help="paper name for the report title")
     ps.add_argument("--max-runs", type=int, default=None, help="branch-run budget")
     ps.add_argument("--screen-repeats", type=int, default=1, help="runs per hypothesis in the screen round")
+    ps.add_argument("--code-proposer", action="store_true",
+                    help="plan G6: when nothing fits every claim, one Super call proposes at most 3 code edits, run "
+                         "like patches (a fit is a code lead)")
     ps.add_argument("--reproduce-tol", type=float, default=0.10,
                     help="call a claim Reproduced only if the noise band is at most this fraction of the "
                          "paper value; otherwise Inconclusive")

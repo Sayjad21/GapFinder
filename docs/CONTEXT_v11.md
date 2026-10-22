@@ -221,7 +221,7 @@ that one number leaves most planted causes unidentifiable.
   - Answers are sealed in `eval/planted/curriculum/sealed/` and read only by `score`.
 - **Search:**
   - The frozen engine runs from its own worktree (`planted-c1` at `../gf-c1`, `python -P`).
-  - It runs `gapfinder search --hypotheses repomap`: no paper, no ledger, no model call.
+  - It runs `gapfinder search --hypotheses repomap`: no paper and no ledger. The only model calls are the search's name-matching step: 15 Super calls, under $0.01, for all of seed 4.
   - Each task gets 150 runs, in Sandboxes.
   - A search cut off by the machine resumes from its earlier runs (`--resume` on `run.cut*`).
 - **Scoring** (`curriculum.py score`):
@@ -401,15 +401,34 @@ after c3 was frozen, with 13 gap tasks and 11 controls.
 - **Gains:**
   - the first planted code defect found (RippleNet `np.mean` -> `np.sum`, by the mutation round);
   - c1's confidently wrong scale answer (pygcn weight decay) answered right.
-- **Next candidates, each class-level, to be judged on seed 5:**
-  - **G1.** The scale probe's "swept claims off as run" guard uses the noise floor. On seed 4 it reported 0 of 3
-    off on clear scale gaps, so no correct scale answer kept its confident label. This is the same fix as the
-    mutation round's guard.
-  - **G2.** The "not identifiable" note counts supersets of the answer (the answer plus a knob that does nothing)
-    as alternatives.
-  - **G3.** Removed training data (DeepCrime TRD) is outside every family. It went 0 of 3, each answered with an
-    unconfident setting. The class is real (published fault taxonomies), but an operator for it would be judged on
-    the curriculum's own generator: decide with care.
+- **Seed-4 misses, by class** (c3, 7 of 13):
+  - 3 cut the training data (DeepCrime training-index cuts);
+  - 1 shifts an evaluation split: SparseTSF's `30 -> 15` in `border1s`, the start of the validation and test
+    periods (`12 * 30 * 24`). The mutation round was cut by the budget;
+  - 2 are scale conventions of x0.01 that the scale probe chose and then rejected (pygcn, FastGCN);
+  - 1 is a tie on pygcn's single number (`epochs=100`).
+- **Plan of 2026-10-23 (c4), agreed with the owner after a review of an outside proposal.** Each item is
+  class-level, has its own acceptance toy, and is judged on seed 5 (fresh). Seed 4 is dev data: re-searching it is
+  a sanity check, never evidence.
+
+| ID | Fix | Why | Status |
+|---|---|---|---|
+| G1 | The scale probe's "swept claims off as run" uses the naive runs' own spread, as the mutation round's guard does (one helper for both) | Seed 4: "0 of 3 off" on clear scale gaps, so no correct scale answer kept its confident label | done: one helper (`_off_as_run`) for both guards; a single naive run at a condition borrows the spread of the same metric where it was repeated (toy test_scale_probe_c4: passes, fails on c3) |
+| G2 | The "not identifiable" note treats a configuration that holds the answer's knobs plus passengers (knobs whose removal leaves every claim within noise, as measured) as the same explanation. Not "drop every knob that is flat alone": a knob can matter only together with another (RippleNet's lr + l2) | Supersets of the answer were counted as rival causes | done (toy in test_identifiability: passes, fails on c3) |
+| G4 | Scale probe: interpolate the measured curve on a log scale for a positive knob whose measured values span a decade; when the swept claims are off as run, a factor whose g(v) the curve can't judge (outside its range) is run, unit conventions first | The x0.01 factor was picked on both misses, then rejected by a straight-line extrapolation of the learning-rate curve to near 0 (26-32 sigma) | done: `scale_unjudged`=2, on real-valued knobs only: the full suite found x100 and x10 of an integer list length run and taking the budget (toys in test_scale_probe_c4: pass, fail on c3) |
+| G5 | A data-amount operator: the training data cut to a fraction (assignments to training indices), fractions 1/2 and 3/4 | 3 of the 7 misses. The class is in published fault taxonomies (DeepCrime TRD). Its results on DeepCrime tasks are not independent of the generator, so they are reported apart | done, with operator-stratified mutant selection (Zhang et al., ASE 2013): the first mutants are taken from each class in turn (data, metric, loop, flow), because the cut ranked 32nd of 38 under metric-output mutants. Toy test_training_subset (passes, fails on c3). Found with it: a mutant the early screen ran that fits every claim never reached the round that adopts it; fixed as for patches |
+| G6 | A residual-guided code proposer: one Super call, only when the deterministic rounds end with no explanation in space. The prompt has the executed lines only (from the trace), and the ratios between the paper's and the naive numbers set against traced integers (batch size, batches, sizes, 2, 10, 100). It returns at most 3 structured edits, run by the patch runner. Behind a flag | The proven pattern in program repair (localise, propose candidates, validate by execution: Agentless, AutoFL) at about $0.03 a task | built, behind `code_proposer` (CLI `--code-proposer`, curriculum `GF_CODE_PROPOSER=1`): the answer before it is kept in `pre_proposer`, so one c4 batch scores both arms. About $0.0015 a call (toys with a fake model: test_code_proposer, test_proposer) |
+| G7 | Scorer: a credible-set metric beside the verdict (the planted cause in the answer or its tied set, with the set at most 3) and the reciprocal rank | Honest scoring of ties the claims can't break | done: `in_set3` and `rr` in the scorer's rows and the report |
+| G8 | Curriculum: the reporting-rule family is planted only where the naive runs' best epoch and final epoch differ by more than the noise band | The rebuilt harnesses produced only controls for it | done: the case's naive runs decide, with a printed reason |
+
+Not adopted from that review:
+- A split-sum conservation check. In the curriculum the paper's side has the cut, not the code we run, and the
+  standard Planetoid split uses 140 + 300 + 1000 of 2708 nodes, so the check would fire on every naive pygcn run.
+- Binding test loss as a pygcn claim. The paper reports only accuracy, so this would make the curriculum easier
+  than real papers.
+- Adding x0.01 and x100 to the scale probe: both are already there (`UNIT_FACTORS`).
+- A lookup table of breaking library defaults: a planted shim can't be found by installing old releases, which is
+  what the library probe does.
 
 **Problems with the curriculum itself:**
 - Controls first took about half the slots. Fixed: at most one in five per case, and gap tasks and controls are

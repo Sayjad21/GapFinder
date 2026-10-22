@@ -22,7 +22,10 @@ HELPER = textwrap.dedent('''\
             total += xs[i % len(xs)] * 0.01
         return total
     ''')
-DECOYS = "\n".join(f"    d{i} = a.a * {i + 2} + a.b / {i + 3} - a.c * {i + 1}" for i in range(20))
+# decoys on the knobs' data flow, and decoy loop bounds that add nothing (the mutation round takes its first mutants
+# from each operator class in turn, so the planted loop bound is outranked within its own class)
+DECOYS = "\n".join(f"    d{i} = a.a * {i + 2} + a.b / {i + 3} - a.c * {i + 1}\n"
+                   f"    for _ in range({i + 2}):\n        d{i} += 0.0" for i in range(20))
 BENCH = textwrap.dedent('''\
     import argparse, hashlib, os
     import helper

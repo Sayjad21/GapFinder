@@ -612,6 +612,19 @@ async def _make_case(level, name, per_case, seed, repeats, tries, concurrency, c
     # the slowest baseline run, and a cut draw is redrawn
     slow = max(b.resources.elapsed_s for b in good)
     spec.run.timeout = min(spec.run.timeout, max(120.0, 5 * slow))
+    if "reporting" in fams:
+        # plan G8: the reporting rule (each metric's best epoch) moves the numbers only where training ends past its
+        # best; on the naive runs, best minus final in pooled standard deviations must reach the lowest band
+        best = [x.get(f"{m}__x_best") for x in ok]
+        gaps = [abs(b - x[m]) for b, x in zip(best, ok) if b is not None]
+        lowest = min(LEVELS[lv_]["min_sd"] for lv_ in bank)
+        if gaps and (statistics.mean(gaps) < lowest * max(sd0, 1e-12) or statistics.mean(gaps) <= 0.005 * abs(mu0)):
+            print(f"{name}: family reporting can't be planted: the runs' best and final {m} differ by "
+                  f"{statistics.mean(gaps):.3g}, under {lowest:g} sd ({sd0:.3g})", flush=True)
+            fams.remove("reporting")
+            if not fams:
+                print(f"{name}: no family of level {level} applies", flush=True)
+                return
     if sd0 == 0:  # a deterministic target: no subtle band in standard deviations, and two runs show a change
         bank = [lv_ for lv_ in bank if LEVELS[lv_].get("max_sd") is None]
         repeats = 2
@@ -809,6 +822,8 @@ def _search_once(tag: str, code: Path, max_runs: int, concurrency: int) -> int:
     cmd = [py, "-P", "-m", "gapfinder.cli", "search", "--spec", str(spec_p), "--targets",
            str(TASKS / tag / "targets.json"), "--hypotheses", "repomap", "--backend", "contree", "--concurrency",
            str(concurrency), "--max-runs", str(max_runs), "--paper", f"planted {tag}", "--out", str(run)] + resume
+    if os.environ.get("GF_CODE_PROPOSER") == "1":  # plan G6, on an engine that has it (c4 and later)
+        cmd.append("--code-proposer")
     with open(TASKS / tag / f"search{_sfx()}.log", "w", encoding="utf-8") as out, \
             open(TASKS / tag / f"search{_sfx()}.err", "w", encoding="utf-8") as err:
         return subprocess.call(cmd, env=env, cwd=str(code), stdout=out, stderr=err)
@@ -918,6 +933,31 @@ def _tied(a: dict, res: dict) -> bool:
                for c in eq for k in c)
 
 
+def _credible(a: dict, res: dict) -> tuple[bool, float]:
+    """Plan G7: (the planted cause is in the answer's credible set and the set has at most 3 members, its reciprocal
+    rank there). The set is the answer, then the configurations GapFinder reports the claims can't tell apart from
+    it, without the answer plus passengers (a configuration that holds the answer's changes is the same
+    explanation). Scored beside the verdict, for ties no search can break: it rewards a small set that holds the
+    cause, not a guess among them. A control or an outside cause has no planted set: (False, 0.0)."""
+    parts = [q for q in a.get("parts") or [] if q["family"] != "outside"]
+    if a["kind"] == "control" or not parts:
+        return False, 0.0
+    answer = res.get("changes") or {}
+    holds = lambda x, y: all(k in x and plant._same(str(x[k]), str(v)) for k, v in y.items())  # noqa: E731
+    cs = [answer] + [c for c in (e.get("config") or {} for e in res.get("equivalent") or [])
+                     if c and not (answer and holds(c, answer))]
+    seen, uniq = set(), []
+    for c in cs:
+        key = tuple(sorted((k, str(v)) for k, v in c.items()))
+        if c and key not in seen:
+            seen.add(key)
+            uniq.append(c)
+    for i, c in enumerate(uniq):
+        if all(_part_found(q, {**res, "changes": c, "value_sets": {}, "value_intervals": {}}) for q in parts):
+            return len(uniq) <= 3, 1.0 / (i + 1)
+    return False, 0.0
+
+
 def _knob_named(a: dict, res: dict) -> bool:
     """Every planted setting, scale or code knob is in GapFinder's answer, whatever value it gives (FastGCN:
     hidden1=160 for a planted hidden1=4, both lowering the target alike). Reported beside the verdict."""
@@ -942,6 +982,11 @@ def score(level: int | None = None) -> dict:
         rows.append({"task": d.name, "level": a["level"], "case": a["case"], "kind": a["kind"],
                      "verdict": verdict(a, res), "tied": _tied(a, res), "knob": _knob_named(a, res),
                      "identifiable": res.get("identifiable"),
+                     "in_set3": _credible(a, res)[0], "rr": round(_credible(a, res)[1], 3),
+                     # plan G6: the verdict of the answer before the code proposer ran (the arm without it)
+                     "verdict_pre": verdict(a, {**res, "changes": res["pre_proposer"]["changes"],
+                                                "attribution": {"confidence_label": res["pre_proposer"]["label"]}})
+                     if res.get("pre_proposer") else None,
                      "label": (res.get("attribution") or {}).get("confidence_label"),
                      "found": res.get("changes") or {}, "planted": [f"{p['family']}: {p['desc']}" for p in a["parts"]]})
     by = {}
@@ -954,13 +999,16 @@ def score(level: int | None = None) -> dict:
     # gap tasks' alone, and the controls only have to stay free of confident answers
     lv_sum = {}
     for x in rows:
-        blank = {"n": 0, "correct": 0, "partial": 0, "missed": 0, "confidently wrong": 0, "tied": 0, "knob": 0}
+        blank = {"n": 0, "correct": 0, "partial": 0, "missed": 0, "confidently wrong": 0, "tied": 0, "knob": 0,
+                 "in_set3": 0, "rr": 0.0}
         s = lv_sum.setdefault(x["level"], {**blank, "controls": dict(blank)})
         t = s["controls"] if x["kind"] == "control" else s
         t["n"] += 1
         t[x["verdict"]] += 1
         t["tied"] += x["verdict"] != "correct" and x["tied"]
         t["knob"] += x["verdict"] != "correct" and x["knob"]
+        t["in_set3"] += bool(x.get("in_set3"))
+        t["rr"] += x.get("rr") or 0.0
     for lv, s in sorted(lv_sum.items()):
         c = s["controls"]
         print(f"level {lv}: gap tasks {s['correct']}/{s['n']} correct, {s['partial']} partial, {s['missed']} missed, "
@@ -995,14 +1043,16 @@ def report(out: Path) -> None:
               f"{sum(x['verdict'] == 'confidently wrong' for x in gaps)} confidently wrong. Controls: "
               f"{sum(x['verdict'] == 'correct' for x in ctl)}/{len(ctl)} correct, "
               f"{sum(x['verdict'] == 'confidently wrong' for x in ctl)} confidently wrong.", "",
-              "| Family | Tasks | Correct | Partial | Missed | Confidently wrong | Right knob, other value | Tied |",
-              "|---|---|---|---|---|---|---|---|"]
+              "| Family | Tasks | Correct | Partial | Missed | Confidently wrong | Right knob, other value | Tied | "
+              "In a credible set of at most 3 | Mean reciprocal rank |",
+              "|---|---|---|---|---|---|---|---|---|---|"]
         for kind in sorted({x["kind"] for x in rs}):
             k = [x for x in rs if x["kind"] == kind]
             bad = [x for x in k if x["verdict"] != "correct"]
             L.append(f"| {kind} | {len(k)} | " + " | ".join(str(sum(x["verdict"] == v for x in k)) for v in
                      ("correct", "partial", "missed", "confidently wrong"))
-                     + f" | {sum(bool(x.get('knob')) for x in bad)} | {sum(bool(x.get('tied')) for x in bad)} |")
+                     + f" | {sum(bool(x.get('knob')) for x in bad)} | {sum(bool(x.get('tied')) for x in bad)} | "
+                     f"{sum(bool(x.get('in_set3')) for x in k)} | {sum(x.get('rr') or 0 for x in k) / len(k):.2f} |")
         L += ["", "| Task | Planted | GapFinder's answer | Label | Verdict |", "|---|---|---|---|---|"]
         for x in rs:
             ans = ", ".join(f"`{k}={v}`" for k, v in (x.get("found") or {}).items()) or "none"

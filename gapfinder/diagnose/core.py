@@ -41,6 +41,7 @@ class ClaimSpec:
     naive_sd: float
     target: bool = False
     run_sd: float | None = None  # the naive runs' own spread, before the noise floor (None: fewer than 2 runs)
+    run_n: int = 0  # how many naive runs
 
 
 @dataclass
