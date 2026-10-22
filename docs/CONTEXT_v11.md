@@ -1,4 +1,4 @@
-# GapFinder: current context (2026-10-19)
+# GapFinder: current context (2026-10-22)
 
 The one current document: what GapFinder is, the rules, what it can do, where the harness stands, every real
 result, and the bottlenecks still in the way of generalising. The step-by-step history is in git and in
@@ -184,6 +184,7 @@ different class whose answer was already in the run's data (eval/external/batch5
 
 - Both multi-claim misses were `loss=mae`, which never ran: categorical choices weren't candidates. Fixed.
 - **Several claims per paper matter:** one number leaves most planted causes unidentifiable.
+- The larger, graded run of 2026-10-22 (six papers, every family, 41 tasks) is section 5.6.
 
 ### 5.4 Synthetic benchmark (GapBench)
 
@@ -214,9 +215,124 @@ different class whose answer was already in the run's data (eval/external/batch5
 
 None of the fixes listed above is measured on a fresh paper yet.
 
+### 5.6 Planted-gap curriculum on reproduced papers (2026-10-21/22; development measurement)
+
+The owner's question: which kinds of gaps does GapFinder find, beyond settings? Gaps were planted into papers it
+already reproduces, graded from easy to hard, and searched for by a frozen engine. The summary and per-task tables
+are in `eval/results/planted_curriculum*.md`, and the failure classes are section 7.4.
+
+**How the tests were run**
+
+- **Papers:** six whose code reproduces, with their hand harnesses (claims per task in brackets): pygcn (1), FastGCN
+  (4), Variational Fair Clustering b3a (8), SparseTSF b3c (8), RippleNet b4a (2), VGAE (8).
+  - Each was also rebuilt by `gapfinder harness` (`eval/planted/rebuild_harnesses.py`, cases named `<case>-h`).
+    The rebuilt spec has per-epoch values, the paper-year packages and the paper-era commit, which the reporting,
+    library and era families need.
+  - b3a's rebuild could not bind its printed objective to the claim.
+  - pygcn's paper-year pins can't install, because 2016's compiled packages have no wheels for Python 3.10.
+- **Generator** (`eval/planted/curriculum.py make`, seeded):
+  - Each draw picks a family, then a change applied as hidden knob values or as an in-memory code edit; no file is
+    changed.
+  - The "paper's numbers" are the mean of 3 runs with the change (2 when the target is deterministic). The
+    reproduction runs without it.
+  - Families:
+    - **setting:** a flag or a literal constant at another value (x0.25 to x10, or another choice);
+    - **scale convention:** "the paper's v is the code's c x v", with a two-point sweep as held-out claims;
+    - **code defect:** a mutation-operator edit (x2, /2, mean <-> sum, a constant);
+    - **data pipeline:** a data-loading or split edit;
+    - on the `-h` harnesses only: **reporting** (the best epoch, chosen on the test labels), **paper-era code**,
+      and **a package release from the paper's date**.
+- **Levels, by measured effect:**
+  - L1: at least 5 pooled sd, and more than 0.5% of the value.
+  - L2: 3 to 5 sd.
+  - L3: two causes of one family.
+  - L4: two causes of different families.
+  - L5: a cause outside every family (a string choice such as `relu` -> `tanh`), alone or with a setting.
+  - A single-cause draw is measured once and banked at L1 or L2 by its effect, so no measured draw is wasted.
+- **Controls:** nothing planted, and the "paper" is another batch of the same runs. About one task in five on seed
+  2, none on seed 3.
+- **Guards:**
+  - A run is cut at 5x the slowest baseline run.
+  - A draw lost to Sandboxes or the network is drawn again, not counted.
+  - The maker's log never says what a task is.
+  - Answers are sealed in `eval/planted/curriculum/sealed/` and read only by `score`.
+- **Search:**
+  - The frozen engine runs from its own worktree (`planted-c1` at `../gf-c1`, `python -P`).
+  - It runs `gapfinder search --hypotheses repomap`: no paper, no ledger, no model call.
+  - Each task gets 150 runs, in Sandboxes.
+  - A search cut off by the machine resumes from its earlier runs (`--resume` on `run.cut*`).
+- **Scoring** (`curriculum.py score`):
+  - **Correct:** every planted part is found, with a label other than Unexplained, Inconclusive or Reproduced.
+    A setting part counts when its knob is in the answer at the planted value within 10%, or the value is in
+    GapFinder's set of equally good values. A code part counts when its edit is in the answer, or is named with its
+    site as a code change.
+  - **Partial:** some parts found. **Missed:** none found.
+  - **Confidently wrong:** a confident label without the planted cause; on a control, any confident label.
+  - Reported beside the verdict:
+    - "right knob": the answer changes the planted knob, at another value;
+    - "tied": the planted knob is among the configurations the report says the target can't tell apart from its
+      answer.
+- **Gate:** a level opens only when the previous one reaches 70% of its gap tasks correct, with nothing confidently
+  wrong.
+- **Batches:**
+  - Seed 2: 14 gap tasks and 11 controls.
+  - Seed 3: 16 gap tasks and no controls, made after c2 was frozen and searched by both c1 and c2 (c2 into
+    `run-c2/`, with `GF_CURRICULUM_RUN=run-c2`).
+  - Both seeds' answers are now public, so they are dev data.
+
+**Results, c1 (seeds 2 and 3, 30 gap tasks and 11 controls)**
+
+| Family | Level 1 | Level 2 |
+|---|---|---|
+| Scale or unit convention | 4 of 4 | 2 of 3 |
+| Setting | 0 of 9 | 2 of 9 |
+| Code defect | 0 of 3 | 0 of 2 |
+| Reporting rule, paper-era code, package release | none plantable | none plantable |
+| **All** | **4 of 16** | **4 of 14** |
+
+- **0 confidently wrong:** none of the 30 gap tasks, and none of the 11 controls (all reported as reproduced).
+  Every miss carried an unconfident label.
+- **Per seed:** seed 2 had L1 1 of 7 and L2 3 of 7; seed 3 had L1 3 of 9 and L2 1 of 7.
+- **The gate was not passed:** level 1 got 25% against 70%. Levels 3 to 5 were not run.
+- **Scale conventions are found:** the scale probe names the knob and the factor, labelled Paper-artifact
+  inconsistency.
+- **Settings miss narrowly:** 10 of the 16 setting misses name the planted knob at another value (6), or have it
+  among the tied configurations (7).
+- **A code round was cut by the run budget in 19 of the 30 searches:** the patch round in 14, the mutation round
+  in 5.
+- **The reporting, era and library families couldn't be tested:** on the five rebuilt harnesses, no draw from them
+  moved a target by 3 sd. The rebuilt harnesses gave only controls.
+
+**c2 against c1 on the fresh batch (seed 3)**
+
+c2 (tag `planted-c2`, `ca4a5e2`) added `code_hold`:
+- When the code has leads, the patch round's share and the mutation round's minimum are kept out of the settings
+  exploration.
+- An unsupported fit also opens the mutation round, and a fitting mutant is then reported as an alternative,
+  not as the answer.
+
+| | c1 | c2 |
+|---|---|---|
+| Seed 3, level 1 | 3 of 9 | 6 of 9 |
+| Seed 3, level 2 | 1 of 7 | 1 of 7 |
+| Seed 3, code-defect tasks | 0 of 3 | 0 of 3 |
+| Dev suite cause runs (c1 = run 5000, c2 = run 6000) | 52 of 69 | 48 of 69 |
+| Confidently wrong, either measure | 0 | 0 |
+
+- **By task:** on seed 3, c2 is better on 4 and worse on 1 (sign test p = 0.38). On the dev suite it is better on
+  2 and worse on 6 (p = 0.29).
+- **Every gain was a setting task.** One of them (pygcn, `lr=0.0025`) was a pick among tied configurations. Code
+  defects stayed at 0 of 3.
+- **The rounds now ran, but missed the planted sites:** VGAE's mutation round tested 22 mutants, none at the planted
+  site (7.4, E2).
+- **Not adopted:** `code_hold` is off by default (`d2a4ca0`); the code and its toy test stay.
+
 ---
 
 ## 6. Remaining bottlenecks (2026-10-20, after batch-5; ordered by impact on finding the cause)
+
+The planted curriculum of 2026-10-22 (5.6) measured 6.1, 6.2 and 6.5 directly on six reproduced papers. Its failure
+classes, E1-E7, are the current work list (7.4).
 
 Evidence base: 8 sealed blind papers. Causes that are settings: 4 (1 correct, 1 partial, 1 close miss, 1 wrong
 before the cap). Causes that are code, evaluation or library: 4 (none found). In all three batch-5 misses the
@@ -442,13 +558,52 @@ reporting rule the runs can't read on every claim took posterior from the ones t
 local backend joined hook paths with ":" (now the interpreter's separator, `GF_PATHSEP`).
 
 Open, by what they need:
-- **Sandboxes runs** (unbilled, the owner's go): D7.4 on the dev containers (pygcn, GAT, VGAE, GraphMAE, SDCN,
-  BOND), the acceptance suite of D1, D2 and D5; D6.4's 1.5 GB toy on a Linux VM.
+- **Sandboxes runs** (unbilled, the owner's go): D7.4 on the dev containers, run on 2026-10-22 as the planted
+  curriculum on six reproduced papers (section 5.6; failure classes in 7.4). GAT, GraphMAE, SDCN and BOND are not in
+  it yet. D6.4's 1.5 GB toy on a Linux VM is still open.
 - **Model calls** (the $33 cap is spent to $0.40): D3.3's labeller, D3.4's two-pass prose extraction, D4.2's
   adjudication, D6.5's reading of prose steps. Each has its interface and a deterministic part that runs now.
 - **Measurement** (the owner's budget): a fresh sealed batch, the only evidence of progress (section 7.3's rules).
 
+### 7.4 Plan of 2026-10-22: the planted curriculum's failure classes (to solve)
 
+These come from section 5.6, c1's 22 misses out of 30 gap tasks. Every miss is in exactly one class; where a second
+blocker stands behind the first, the evidence column says so. Counts are of misses unless stated.
+
+**The rules for solving them:**
+- Every fix is class-level and gets its own acceptance toy.
+- It is judged on a **fresh seed** (4 or later; seeds 2 and 3 are dev data), searched by the old and the new frozen
+  version, both into their own run folders.
+- It must also hold the dev suite with 0 confidently wrong.
+- c2 showed why both checks matter: its gains came from somewhere other than its target.
+
+| ID | Class | Evidence | Mechanism | Direction (to be designed and tested) | Status |
+|---|---|---|---|---|---|
+| E1 | **Code rounds starved by the run budget** | 5 misses: the patch round stopped 1-2 runs short of the planted literal (VGAE `val_percent=40`, VGAE `test_percent=7.5`, RippleNet `eval_ratio=0.05`); the patch round never got to VGAE's code edit; RippleNet's mutation round reported "no room left". Across all 30 searches a code round was cut in 19. | Rounds run in a fixed order (screen, confirm, combine, verify, spec knobs, history matching, patch, mutation), and the code rounds get what is left. The patch reserve is held only once the claims look out of space. | Choose each next run by expected information per run across classes, extending the D2 discrimination scheduler: a settings screen, a patch value and a mutant compete on one scale, instead of the code rounds getting leftovers. At least try the few literal leads early: they are the top 3 leads x 6 values. | open. c2's fixed hold was not adopted (5.6) |
+| E2 | **Mutation sites ranked out** | 1 miss on its own (VGAE `gae/layers.py:30` `1.0 -> 0.0`: c2's round ran 22 mutants, none at that site). It also stands behind 2 E1 code misses. The planted sites rank 37, 110 and 289 among 121-332 candidates, and at most 24 are tried. | Candidate sites come from the data flow of the known knobs and the metric code, ranked by distance. A defect off those paths, or ranked low, is never run. | Group screening of sites: apply many mutants at once and bisect (group testing, delta debugging; O(k log N) runs over all N sites). Rank by executed lines and a cheap sensitivity probe. | open |
+| E3 | **Right knob, value off the grid** | 6: SparseTSF patience 25 for 20; FastGCN hidden1 160 for 4 (the other side of the default; 6 was tied); pygcn weight_decay 0.0025 for 0.002; FastGCN weight_decay 1e-4 for 1.25e-4; VGAE val_percent 4 for 5; RippleNet `item_update_mode` `replace` for `replace_transform` (a choice) | The candidate ladder (x0.4, x2, x10 ... and the knob's choices) rarely holds the planted value. The secant step is off when a ladder value fits, because on the dev suite it made decoys (102 -> 92). The equal-value set lists only measured values. | Report the interval of values consistent with every claim (profile the answer's knob on both sides of the default), not a point; the answer stays. A categorical knob that moves the target has all its choices screened. | open |
+| E4 | **Equifinality: the planted cause is tied, another is chosen** | 6: pygcn epochs=50 (lr chosen), lr=0.0025 (hidden chosen), weight_decay=0.002 (lr chosen); VGAE epochs=800 (hidden1 chosen); pygcn's two level-2 code tasks (c1: an unsupported fit doesn't open the mutation round; c2: it ran, and other mutants fit equally). 5 of 6 are on pygcn, which has one claim. | One number can't separate causes that move it alike. GapFinder says so (Fits but unsupported, with the tied set), and the scorer counts it missed. | Not an engine fix on one number. Curriculum: score "tied" apart (done) and give pygcn's harness more claims (more datasets or printed metrics the paper reports). Engine: discriminating runs at conditions the paper reports (D2) need those claims. | curriculum: open |
+| E5 | **A wrong knob with no tie, on a multi-claim task** | 1: SparseTSF batch_size=512, answered patience=25 (c2 found it) | Unclear from one case | Watch on fresh seeds | watch |
+| E6 | **Below the detection limit (level 2)** | 3: FastGCN learning_rate x0.5 (Inconclusive); FastGCN learning_rate=0.005 (no answer); VGAE epochs=800 (Inconclusive) | Gaps of 3-5 sd sit near the minimum detectable effect at 3 confirmation repeats, and the MDE rule calls them Inconclusive (correct abstentions, but misses) | Adaptive repeats when a gap lies between 1 and 3 MDE, as in sequential testing (SPRT), before calling it Inconclusive | open |
+| E7 | **Families the curriculum could not plant** | Reporting rule, paper-era code, package release: no draw moved a target 3 sd on five rebuilt harnesses. The b3a rebuild doesn't bind, and pygcn's pins don't install. | On these papers those choices barely change the numbers | Plant them where they matter: SDCN (best epoch on the labels), BOND (PyGOD drift), GraphMAE. Or plant synthetic versions (a shim that changes a library default). | open |
+
+**Problems with the curriculum itself (fixed during the run, or open):**
+- Controls first took about half the slots: a control was accepted on every try, while most real draws were
+  redrawn. Fixed: at most one in five per case, and gap tasks and controls are scored apart.
+- pygcn's tasks have one claim each (E4). Open: a multi-claim pygcn harness.
+- The scorer's value tolerance (10%) is strict against the engine's coarse grid; E3 counts those cases rather than
+  passing them. Open: score against a reported interval once E3 exists.
+- The rebuilt harnesses offer few distinct draws (one era commit, one reporting rule, one to three package
+  directories), so a new seed replants the same causes there.
+
+**Infrastructure seen during the run (handled):**
+- The machine lost DNS for minutes at a time. Task making waits for the API's name to resolve and redraws lost
+  draws; searches rerun on an InfraError and resume from `run.cut*`.
+- A Sandboxes burst refused new VMs at about 40 simultaneous creations.
+- Windows killed background processes when the session ended (exit code 1073807364).
+- A new worktree needs `.env` copied in (it is git-ignored).
+- `tests/integration/test_alternative_configs.py` fails in about 1 run in 3 on c1 as well: a flaky test, not a
+  regression.
 
 ## 8. Where things are
 
@@ -459,8 +614,9 @@ Open, by what they need:
 | Sealed blind cases | `eval/external/blind-1/`, `blind-2/`, `batch3/` (b3a, b3c), `batch4/` (b4a): each has `case.md`, `answer_key.md` after the reveal, HARNESS.md, the run and RESULT.md |
 | Frozen batches | `eval/external/devset/` (devbatch-1 cases; CANDIDATES.md holds answers); `eval/external/devbatch2/` (PROTOCOL.md, RESULTS.md) |
 | Planted causes | `eval/planted/plant.py` (`make`, `search`, `score`); tasks in `eval/planted/tasks/`; answers in `eval/planted/sealed/`; `--kinds setting,scale,code,reporting,library` (plan D7.4) |
+| Planted curriculum | `eval/planted/curriculum.py` (`make` with `--seed`, `--control-rate`; `search` with `--seed`, `--watch`; `score` and `report` with `--seed`; `GF_CURRICULUM_RUN` names the run folder); `eval/planted/rebuild_harnesses.py` (the `-h` harnesses); tasks, sealed answers and work files in `eval/planted/curriculum/`; results `eval/results/planted_curriculum.md` and `planted_curriculum_c{1,2}_seed{2,3}.md` (section 5.6, classes 7.4) |
 | Case pool | `eval/pool/mine.py` (miner; answers sealed in `eval/pool/sealed/`, never opened by the runner); `eval/pool/verify.py` (parent against fix, verdict only); `eval/pool/candidates.json` (public); `mine.py prefilter-check` (plan D7.6) |
 | Measurements | `eval/claims_tier.py` -> `eval/results/claims_tier.json` (item 16); `eval/claims_recall.py` (re-grounding, table recall); `eval/links_eval.py` (dev link set) |
 | Synthetic benchmark | `eval/gapbench/`; dev suite `eval/dev_suite.py`; `eval/compare_suites.py`; `eval/results/dev_suite_run*.json` |
-| Tags | `blind-1`, `blind-2`, `devbatch-1`, `devbatch-2` (`e0117a2`), `planted-1`, `batch-3` (`92b1faa`), `batch-4` (`bae25f4`) |
+| Tags | `blind-1`, `blind-2`, `devbatch-1`, `devbatch-2` (`e0117a2`), `planted-1`, `batch-3` (`92b1faa`), `batch-4` (`bae25f4`), `planted-c1` (`1c8f0f8`, worktree `../gf-c1`), `planted-c2` (`ca4a5e2`, worktree `../gf-c2`) |
 | Learning docs | `docs/learn/` (beginner path) |
