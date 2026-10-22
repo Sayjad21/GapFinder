@@ -176,6 +176,10 @@ class SearchConfig:
     # rounds. A screen whose settings fit takes nothing from them (c2's fixed hold cost the dev suite 52 -> 48).
     class_scheduler: bool = True
     code_share_max: float = 0.3
+    # plan F9: paper priors from description lengths (discriminate.config_prior_mdl) instead of D7.3's fixed weights;
+    # it changes tie-breaking on real papers, which the planted curriculum (no paper) can't measure: off until the dev
+    # suite compares it
+    mdl_prior: bool = False
     # plans D1.3-D1.5, D7.2: when the paper-year packages (or the paper-era code) change the numbers, which package
     # (delta debugging), which release or commit (binary search) and which call site (API and source diff); at most
     # library_budget_frac of the run budget; two configurations give "the same numbers" within library_z standard
@@ -366,6 +370,9 @@ class ClaimResult:
     # plan F3: knob -> [low, high] of the answer's values that fit every claim (bisection; "<" or ">" before a bound
     # means the interval goes on past it)
     value_intervals: dict[str, list[str]] = field(default_factory=dict)
+    # plan F9: False when configurations of different knobs fit every claim equally and no condition the paper
+    # reports separates them (the answer is one member of that set, not the identified cause); None when not judged
+    identifiable: bool | None = None
     diagnosis: dict | None = None  # history matching over every measured configuration (all claims)
     closes: bool = False  # the configuration closes the gap fully (within its noise band)
     # every configuration the target claim can't tell apart from the answer (likelihood within
@@ -1329,6 +1336,7 @@ class GapSearch:
             except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
                 res.notes.append(f"value interval stopped early: {exc}")
         self._cap_undetectable(t, res)
+        self._identifiability(t, res)
         if res.attribution is not None:
             res.attribution.hypotheses_tested = len(tried)
         lib_out = self._library_out.get(t.claim_id)
@@ -3318,6 +3326,33 @@ class GapSearch:
             f"{ast_patch.parse(k)[0]} line {ast_patch.parse(k)[1]}: {ast_patch.parse(k)[2]} = "
             f"{self.spec.knobs[k].default} -> {v}" for k, v in patches.items()))
 
+    def _identifiability(self, t: Target, res: ClaimResult) -> None:
+        """Plan F9: practical identifiability (profile likelihood; Liu, Maini & Baker 2025) and GLUE's set of
+        acceptable models (Beven): when several configurations that change different knobs fit every claim as well
+        as the answer, and the discrimination step found no condition the paper reports that separates them (or
+        there was none), the claims don't identify the cause. The report says so and lists the set; the answer is
+        one member of it. Only a further reported number at another condition can tell them apart."""
+        if not res.changes or res.status == "reproduced":
+            return
+        knobsets = {frozenset(k for k in (e.get("config") or {})) for e in res.equivalent if e.get("config")}
+        knobsets.add(frozenset(res.changes))
+        if len(knobsets) < 2:
+            res.identifiable = True
+            return
+        post = [x["posterior"] for x in ((res.discrimination or {}).get("posterior") or [])]
+        if post and max(post) >= self.cfg.discriminate_stop:
+            res.identifiable = True
+            return
+        res.identifiable = False
+        alts = sorted({", ".join(f"{k}={v}" for k, v in sorted((e.get("config") or {}).items()))
+                       for e in res.equivalent if e.get("config")})
+        conds = (res.discrimination or {}).get("conditions") or []
+        res.notes.append(f"not identifiable from the paper's numbers: {len(alts)} configurations of different knobs fit "
+                         f"every claim as well as the answer ({'; '.join(alts[:6])})"
+                         + (f", and the paper's other conditions ({', '.join(conds)}) don't separate them" if conds
+                            else ", and the paper reports no other condition that could separate them")
+                         + ": the answer is one of them, not the identified cause")
+
     def _cap_undetectable(self, t: Target, res: ClaimResult) -> None:
         """A confident label for a gap below the minimum detectable effect is capped at Fits but unsupported: the
         same reason the MDE rule turns such an Unexplained into Inconclusive (a cause that closed it couldn't have been
@@ -3648,6 +3683,11 @@ class GapSearch:
             pl = plausible(a, v, self.spec.knobs[k].default if k in self.spec.knobs else None)
             if pl.supported and pl.source == "docs":
                 documented[k] = {v}
+        if self.cfg.mdl_prior:
+            from gapfinder.diagnose.discriminate import config_prior_mdl
+
+            n_open = sum(1 for k in self.spec.knobs if not k.startswith("@") and k not in mentioned)
+            return config_prior_mdl(changes, stated, mentioned, documented, n_open)
         return config_prior(changes, stated, mentioned, documented)
 
     def _claim_loglik(self, c: Target, changes: Changes) -> float | None:

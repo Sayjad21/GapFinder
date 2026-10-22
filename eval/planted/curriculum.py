@@ -698,6 +698,7 @@ def score(level: int | None = None) -> dict:
         res = (r.get("results") or r.get("claims") or [{}])[0]
         rows.append({"task": d.name, "level": a["level"], "case": a["case"], "kind": a["kind"],
                      "verdict": verdict(a, res), "tied": _tied(a, res), "knob": _knob_named(a, res),
+                     "identifiable": res.get("identifiable"),
                      "label": (res.get("attribution") or {}).get("confidence_label"),
                      "found": res.get("changes") or {}, "planted": [f"{p['family']}: {p['desc']}" for p in a["parts"]]})
     by = {}

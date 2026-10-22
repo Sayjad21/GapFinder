@@ -172,6 +172,28 @@ def _round(v: str) -> bool:
     return any(abs(m - r) < 1e-9 for r in (1, 2, 2.5, 5, 10))
 
 
+def config_prior_mdl(config: dict, stated: dict[str, set[str]], mentioned: set[str], documented: dict[str, set[str]],
+                     n_open: int, n_values: int = 8) -> float:
+    """Plan F9: the prior of a configuration as 2^-L, L its description length (minimum description length,
+    Rissanen 1978): per change, which knob (0 bits when the paper states the value, 1 bit when it mentions or sweeps
+    the knob, log2(n_open + 1) bits for one of the n_open knobs it never mentions) plus which value (0 bits when
+    stated, else log2(n_values), less log2(1.2) for a round number and log2(1.1) for a value the code's docs give).
+    The same ordering as config_prior, with its weights derived from how many alternatives the paper leaves open: an
+    unmentioned knob among many costs more than among few. A weight, never a veto."""
+    bits = 0.0
+    for k, v in config.items():
+        if v in stated.get(k, set()):
+            continue
+        bits += 1.0 if k in mentioned else math.log2(max(1, n_open) + 1)
+        b = math.log2(max(2, n_values))
+        if _round(v):
+            b -= math.log2(1.2)
+        if v in documented.get(k, set()):
+            b -= math.log2(1.1)
+        bits += max(0.0, b)
+    return 2.0 ** -bits
+
+
 def config_prior(config: dict, stated: dict[str, set[str]], mentioned: set[str], documented: dict[str, set[str]]) -> float:
     """The prior of a configuration: the product over its changes. `stated`: knob -> values the paper states;
     `mentioned`: knobs the paper mentions or sweeps; `documented`: knob -> values the code's own docs give."""
