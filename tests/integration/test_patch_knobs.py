@@ -62,7 +62,8 @@ async def test_the_patch_round_keeps_its_budget_share_when_runs_are_tight(tmp_pa
     s = GapSearch(orch, targets, [a], SearchConfig(max_runs=40))
     [r] = await s.run()
     notes = [e.get("msg", "") for e in orch.events.read() if e.get("type") == "note"]
-    assert any("held for a patch round" in n for n in notes)
+    # the patch round's runs come from its reserve, or from the early code screen (plan F2) before the settings use them
+    assert any("held for a patch round" in n or "early code screen" in n for n in notes)
     assert r.changes == {ast_patch.knob_name("model.py", 2, "lengthscale"): "0.1"}, (r.changes, r.notes)
 
 

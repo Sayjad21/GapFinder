@@ -59,7 +59,8 @@ def _search(tmp_path, reserve: bool):
     targets = [Target("C1", "mean_score", _paper(30))] + [
         Target(f"N{n}", "mean_score", _paper(n), held_out=True, at={"n": str(n)}) for n in (20, 44)]
     return GapSearch(orch, targets, asm, SearchConfig(max_runs=150, trace=False, hm_disc=0.005, patch_knobs=False,
-                                                      code_hold=reserve))
+                                                      code_hold=reserve, early_code_screen=False,
+                                                      value_interval=False))
 
 
 async def test_the_mutation_round_keeps_its_share(tmp_path):

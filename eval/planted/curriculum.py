@@ -625,9 +625,23 @@ def _part_found(p: dict, res: dict) -> bool:
     if fam in ("code", "data"):
         site = p["desc"].split(": ", 1)[0]
         return p["knob"] in changes or bool(site and site in notes and "code change" in notes)
-    return any(plant._knob_matches(k, p["knob"]) and (plant._same(v, p["value"]) or
-                                                       any(plant._same(s, p["value"]) for s in sets.get(k, [])))
-               for k, v in changes.items())
+    if any(plant._knob_matches(k, p["knob"]) and (plant._same(v, p["value"]) or
+                                                   any(plant._same(s, p["value"]) for s in sets.get(k, [])))
+           for k, v in changes.items()):
+        return True
+    # plan F3: the planted value inside the interval GapFinder reports for that knob ("<v" / ">v": open past v)
+    try:
+        x = float(p["value"])
+    except (TypeError, ValueError):
+        return False
+    for k, (lo, hi) in (res.get("value_intervals") or {}).items():
+        if not (plant._knob_matches(k, p["knob"]) and k in changes):
+            continue
+        low = float("-inf") if str(lo).startswith("<") else float(str(lo).lstrip(">"))
+        high = float("inf") if str(hi).startswith(">") else float(str(hi).lstrip("<"))
+        if low <= x <= high:
+            return True
+    return False
 
 
 def verdict(a: dict, res: dict) -> str:

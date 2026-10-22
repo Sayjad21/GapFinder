@@ -230,10 +230,12 @@ async def test_resume_reuses_runs(tmp_path):
     # the same budget on both sides: the per-knob value cap depends on it, so a different budget plans a
     # different search (a resumed run capped at the first run's count wanted alpha=0.0, which the first never
     # tried, and was rightly no longer confident once it couldn't finish)
-    s1, [r1] = await search(tmp_path, {"alpha": "2.0"}, max_runs=150)
+    # the value interval (plan F3) bisects on what has been measured, so a resumed run whose retried value now
+    # succeeds brackets differently; this test is about the main search's caching
+    s1, [r1] = await search(tmp_path, {"alpha": "2.0"}, max_runs=150, value_interval=False)
     events = list(s1.orch.events.read())
     m = await paper(tmp_path, {"alpha": "2.0"})
-    s2 = GapSearch(orch(tmp_path, "resumed"), targets(m), ALL, SearchConfig(max_runs=150))
+    s2 = GapSearch(orch(tmp_path, "resumed"), targets(m), ALL, SearchConfig(max_runs=150, value_interval=False))
     assert s2.seed(events) == s1.runs_used
     [r2] = await s2.run()  # every successful measurement is cached
     new = [e["branch"]["knob_changes"] for e in s2.orch.events.read() if e["type"] == "branch_created"]

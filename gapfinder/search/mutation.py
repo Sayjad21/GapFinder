@@ -561,7 +561,10 @@ def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[in
                 bonus = 2.0 if d <= 2 else 1.0
 
                 def addm(rel_, n_, kind_, op_, dist_, knob_, tags_, parents_, _b=bonus):
-                    add(rel_, n_, kind_, op_, dist_, knob_, tags_ + ["metric output"], parents_, bonus=_b)
+                    # rescaling a whole expression near the output (x2, /2, x10, /10) can mimic any multiplicative
+                    # gap (an interference mutant): it stays a candidate, without the output bonus
+                    add(rel_, n_, kind_, op_, dist_, knob_, tags_ + ["metric output"], parents_,
+                        bonus=0.0 if op_ in EXPR_OPS else _b)
                 if d == 0:  # the printed expression itself: its reductions and arithmetic
                     for call in _emits(s, words):
                         for v in list(call.args) + [k.value for k in call.keywords]:
@@ -569,10 +572,7 @@ def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[in
                                 if isinstance(n, ast.Call) and _call_name(n) in REDUCTIONS:
                                     add(rel, n, "Call", "red." + REDUCTIONS[_call_name(n)], 0, None,
                                         ["metric output"], parents, bonus=bonus, in_output=True)
-                                elif isinstance(n, ast.BinOp) and isinstance(n.op, ARITH) and n is v:
-                                    for op in EXPR_OPS[:2]:
-                                        add(rel, n, "BinOp", op, 0, None, ["metric output"], parents, bonus=bonus,
-                                            in_output=True)
+
                     continue
                 _mutants_of(s, d, None, rel, addm, parents, kset)
                 for fname in _result_calls(s):  # into the repo function that returns the printed value

@@ -150,7 +150,9 @@ async def test_the_loop_make_search_score(tmp_path, monkeypatch, kind):
     [row] = json.loads((plant.HERE / "scores.json").read_text())
     if kind == "code":
         # one shifted number can't localise a code edit: other mutants fit as well (what the suite measures on real
-        # repositories); a code lead is never confirmed, so the toy's requirement is no confident wrong answer
-        assert row["verdict"] in ("correct", "missed") and row["label"] == "Fits but unsupported", (row, r.notes)
+        # repositories); a code lead is never confirmed, so the toy's requirement is no confident wrong answer (a
+        # mutant that moves one claim is a lead, not an answer: the mutation round's interference control)
+        assert row["verdict"] in ("correct", "missed", "partial") and row["label"] not in (
+            "Explained", "Paper-artifact inconsistency", "Explained by the reporting rule"), (row, r.notes)
     else:
         assert row["verdict"] == "correct", (row, r.notes)

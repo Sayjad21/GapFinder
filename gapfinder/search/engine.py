@@ -130,6 +130,20 @@ class SearchConfig:
     # every gain was a setting task (code defects 0 of 3 both), and the dev suite fell 52 -> 48 of 69 (neither
     # significant; eval/results/planted_curriculum.md). Mutation-site coverage is the code bottleneck now.
     code_hold: bool = False
+    # plan F2: after the settings pass gives no confident answer, the code rounds' cheapest tests run next, before
+    # the spec-knob round and discrimination: the patch round's top literal leads alone (its own configurations,
+    # one run each) and the mutation round's first screen (mutation_keep mutants). The rounds reuse these runs and
+    # decide as before; nothing is decided here. The budget had run out before them: planted curriculum c1, the
+    # patch round cut in 14 of 30 searches, the mutation round in 5.
+    early_code_screen: bool = True
+    # plan F3: the answer's value as an interval, after the answer is chosen (the answer is not changed): each numeric
+    # knob of the answer is bisected on both sides (log scale for positive values) between its value and the nearest
+    # value that doesn't fit every claim (x10 or /10 when none was measured), interval_steps runs a side; each untried
+    # choice of a categorical knob of the answer runs once. The planted curriculum's E3: the right knob at a value
+    # off the candidate grid (patience 25 for 20, weight_decay 0.0025 for 0.002) read as a different answer. These
+    # runs are kept out of the settings exploration (2 x interval_steps).
+    value_interval: bool = True
+    interval_steps: int = 3
     # plans D1.3-D1.5, D7.2: when the paper-year packages (or the paper-era code) change the numbers, which package
     # (delta debugging), which release or commit (binary search) and which call site (API and source diff); at most
     # library_budget_frac of the run budget; two configurations give "the same numbers" within library_z standard
@@ -317,6 +331,9 @@ class ClaimResult:
     # every measured value of each explaining knob that fits about as well (equifinality): the honest
     # answer when one target claim can't tell e.g. max_steps 400, 500 and 1000 apart
     value_sets: dict[str, list[str]] = field(default_factory=dict)
+    # plan F3: knob -> [low, high] of the answer's values that fit every claim (bisection; "<" or ">" before a bound
+    # means the interval goes on past it)
+    value_intervals: dict[str, list[str]] = field(default_factory=dict)
     diagnosis: dict | None = None  # history matching over every measured configuration (all claims)
     closes: bool = False  # the configuration closes the gap fully (within its noise band)
     # every configuration the target claim can't tell apart from the answer (likelihood within
@@ -583,6 +600,7 @@ class GapSearch:
         self.untestable: list[tuple[str, str]] = []  # (knob, value) above the spec's cost limit
         self._patch_reserve = 0  # runs held back for the patch round (set after the combine round)
         self._code_hold = 0  # runs kept out of the settings exploration for the code rounds (code_hold)
+        self._early_screened: set[str] = set()  # claims whose code rounds' first tests already ran (plan F2)
         self._mutation_alt = False  # the mutation round runs only because the settings answer is unsupported
         self._coarse: set[tuple[str, str]] = set()  # coarse ladder rungs (screened first)
         self._fine: set[tuple[str, str]] = set()  # finer rungs (screened only if the coarse ones move the metric)
@@ -1159,7 +1177,8 @@ class GapSearch:
         """Runs screening and combining may still use before reaching the confirmation escrow."""
         if self.cfg.max_runs is None or not self.cfg.escrow_frac:
             return None
-        return max(0, int(self.cfg.max_runs * (1 - self.cfg.escrow_frac)) - self.runs_used - self._code_hold)
+        hold = 2 * self.cfg.interval_steps if self.cfg.value_interval else 0
+        return max(0, int(self.cfg.max_runs * (1 - self.cfg.escrow_frac)) - self.runs_used - self._code_hold - hold)
 
     def _per_knob_cap(self, n_open: int) -> int:
         """Values per knob: at least coverage_candidates, more when the budget spread over the open knobs
@@ -1211,6 +1230,11 @@ class GapSearch:
             res.status = "partial"
             res.notes.append(f"stopped early: {exc}")
             await self._label_partial(t, res)
+        if self.cfg.early_code_screen:
+            try:
+                await self._early_code_screen(t, res)
+            except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
+                res.notes.append(f"early code screen stopped: {exc}")
         confident = {ConfidenceLabel.explained.value, ConfidenceLabel.inconsistency.value}
         if (self._fallback or (self._stated_skipped and not self._include_stated)) and not (
                 res.attribution and res.attribution.confidence_label in confident):
@@ -1245,6 +1269,11 @@ class GapSearch:
             except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
                 res.notes.append(f"mutation round stopped early: {exc}")
         self._refuted_label(t, res)
+        if self.cfg.value_interval:
+            try:
+                await self._value_intervals(t, res)
+            except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
+                res.notes.append(f"value interval stopped early: {exc}")
         if res.attribution is not None:
             res.attribution.hypotheses_tested = len(tried)
         lib_out = self._library_out.get(t.claim_id)
@@ -1585,19 +1614,11 @@ class GapSearch:
         self._mutation_alt = self.cfg.code_hold and label == ConfidenceLabel.fits_but_unsupported.value
         return self._mutation_alt
 
-    async def _mutation_round(self, t: Target, res: ClaimResult) -> None:
-        """Small code edits at sites on the data flow of the knobs the claims depend on, scored on every claim.
-        Stages: one run each (target); the best `mutation_keep` at every claim's condition; the best two repeated.
-        Mutants that predict the same numbers form one group (behaviour can't tell them apart); the group is
-        reported with its origin (the deepest site on the data flow) first. Never "Explained": a fitting mutant is a
-        code lead, a paper-code inconsistency only when a verified scale relation implies it."""
-        root = self.spec.code_root()
-        if root is None or not self._wants_mutations(t, res):
-            return
-        from gapfinder.diagnose import FIT_I, STRICT_I
-        from gapfinder.sandbox.spec import Knob
+    def _mutation_candidates(self, t: Target, res: ClaimResult) -> tuple[list, list[str]]:
+        """(mutants best first, the knobs whose data flow they were taken from) for the mutation round."""
         from gapfinder.search.mutation import find_mutants
 
+        root = self.spec.code_root()
         knobs = sorted({k for p in self._usable_points() for k in p.at} | {r["knob"] for r in self.scale_relations}
                        | {k for k in res.changes if not k.startswith("@")}
                        | {x["knob"] for x in (res.screen or [])[:3] if x.get("units", 0) > 1 and not x["knob"].startswith("@")})
@@ -1613,14 +1634,32 @@ class GapSearch:
             hints = {}
         ms = find_mutants(root, knobs, executed, self.scale_relations, limit=self.cfg.mutation_max, hints=hints,
                           metrics=sorted({c.metric for c in self.targets}))
+        return ms, knobs
+
+    async def _mutation_round(self, t: Target, res: ClaimResult) -> None:
+        """Small code edits at sites on the data flow of the knobs the claims depend on, scored on every claim.
+        Stages: one run each (target); the best `mutation_keep` at every claim's condition; the best two repeated.
+        Mutants that predict the same numbers form one group (behaviour can't tell them apart); the group is
+        reported with its origin (the deepest site on the data flow) first. Never "Explained": a fitting mutant is a
+        code lead, a paper-code inconsistency only when a verified scale relation implies it."""
+        root = self.spec.code_root()
+        if root is None or not self._wants_mutations(t, res):
+            return
+        from gapfinder.diagnose import FIT_I, STRICT_I
+        from gapfinder.sandbox.spec import Knob
+
+        ms, knobs = self._mutation_candidates(t, res)
         if not ms:
             return
         room = (self.cfg.max_runs or 10 ** 6) - self.runs_used
         cap = int((self.cfg.max_runs or 10 ** 6) * self.cfg.mutation_budget_frac)
         n_pts = len(self._usable_points())
         per_kept = (1 + n_pts) * 2
-        n_first = max(0, min(len(ms), min(room, cap) - self.cfg.mutation_keep * per_kept))
-        ms = ms[:n_first]
+        # mutants already run (the early code screen, plan F2) cost nothing and stay in the round
+        done = [m for m in ms if frozenset({m.name: "1"}.items()) in self._runs]
+        rest = [m for m in ms if m not in done]
+        n_first = max(0, min(len(rest), min(room, cap) - self.cfg.mutation_keep * per_kept))
+        ms = done + rest[:n_first]
         if not ms:
             res.notes.append("mutation round: no room left in the run budget")
             return
@@ -1683,6 +1722,20 @@ class GapSearch:
         self.code_leads[t.claim_id] = [{"group": [m.describe() for m in g], "worst_sigma": round(hyps[g[0].name].max_I, 2),
                                         "grounded": any(x.tags and "relation" in " ".join(x.tags) for x in g)} for g in groups]
         grounded = any("relation" in " ".join(m.tags) for m in top)
+        # interference control (FLIM 2025): an edit near the output can move one number to almost any value, and the
+        # claims that already matched as run stay matched whatever it does, so "fits every claim" is no evidence
+        # unless the mutant brings at least two claims that were off as run within reach (a no-cause toy: a score
+        # offset by 1.37 matched by an edit of the score alone, the held-out never off)
+        from gapfinder.diagnose import Prediction
+
+        n0 = max(1, len(self.measure_ok({})))
+        moved = [cid for cid, v in h.per_claim.items() if v["I"] <= FIT_I and diff.claim_loglik(
+            diff.claims[cid], Prediction(diff.claims[cid].naive_mean, diff.claims[cid].naive_sd, n0))[0] > FIT_I]
+        if len(moved) < 2 and not grounded:
+            res.notes.append(f"mutation round: {origin.describe()} fits, but moves only {len(moved)} claim(s) that were "
+                             "off as run: a code lead, not evidence for a cause (one number can't identify a code "
+                             "change)")
+            return
         res.notes.append(f"mutation round: {len(top)} equivalent code change(s) fit every claim (worst "
                          f"{h.max_I:.1f} sigma): " + "; ".join(m.describe() for m in top[:5])
                          + (" (implied by the verified scale relation)" if grounded else ""))
@@ -1699,6 +1752,7 @@ class GapSearch:
                              f"{origin.describe()}; a code lead, not a confirmed cause")
             return
         if _rank(res) <= _LABEL_RANK[label.value] and current != ConfidenceLabel.unexplained.value and res.changes:
+            self._add_equivalent(t, res, {origin.name: "1"}, "mutation round")
             return
         cfg = {origin.name: "1"}
         res.changes, res.gap_after = cfg, self.gap(t, cfg)
@@ -2181,11 +2235,7 @@ class GapSearch:
         # manufacture decoys (dev suite, runs 3000/3100: lr=0.04, eps_start=0.3 and eps_decay=0.495 beat the
         # true max_steps=100, a ladder value that fit; 102 -> 92 of 138 correct). "Every claim": a value that
         # fits only the target (toy build_mode=release for a planted alpha=3) leaves the gap open
-        held = [h for h in self.targets if h.held_out and not h.tuned_separately and h.metric in self.bands]
-
-        def fits_all(c):
-            return all((g := self.gap(x, c)) is not None and abs(g) <= self.band(x) for x in [t] + held)
-        if any(fits_all(h.changes) for h in hyps):
+        if any(self._fits_all(t, h.changes) for h in hyps):
             return []
         added: list[Hypothesis] = []
         for _ in range(self.cfg.secant_per_knob):
@@ -2286,6 +2336,10 @@ class GapSearch:
             self.orch.events.emit("survivor" if h in survivors else "pruned", claim=t.claim_id,
                                   knob=h.knob, value=h.value, units=round(score[h], 2), round="screen")
         self.orch.events.emit("round", name="screen", claim=t.claim_id, tested=len(hyps), survivors=len(survivors))
+        # plan F2: no single screened setting fits every claim, so the settings class failed its cheapest test; the
+        # code rounds' cheapest tests run before confirmation and combining spend the budget on settings
+        if self.cfg.early_code_screen and not any(self._fits_all(t, h.changes) for h in hyps):
+            await self._early_code_screen(t, res)
 
         # 2. confirm: survivors get repeats; effects that fade are pruned
         reps = self.confirm_repeats(t)
@@ -2729,22 +2783,118 @@ class GapSearch:
             self.orch.events.emit("note", msg=f"{t.claim_id}: out of space after the combine round; {self._patch_reserve} "
                                               f"runs held for a patch round ({len(leads)} literal code leads)")
 
-    async def _patch_round(self, t: Target, res: ClaimResult) -> None:
-        """Out of space: test the top static leads (hard-coded literals in imported modules) as patch knobs.
-        A configuration with a patch that fits every claim, where no setting did, is confirmed and verified
-        like any other; it is reported as a code change."""
+    async def _value_intervals(self, t: Target, res: ClaimResult) -> None:
+        """Plan F3 (value_interval): which values of the answer's knobs fit every claim, beyond the one chosen. A
+        numeric knob: a bisection on each side (log scale for positive values; integers rounded), between the
+        answer's value and the nearest measured value on that side that doesn't fit, or a decade away when none was
+        measured, interval_steps runs a side. A categorical knob: each untried choice once; those that fit join the
+        knob's equally good values. Probabilistic bisection (Frazier, Henderson & Waeber 2019) and level-set
+        estimation (Gotovos et al. 2013) find where a noisy response crosses a band; this is their simplest form,
+        one run a step, so the interval is approximate. Reported only: the answer is not changed."""
+        label = res.attribution.confidence_label if res.attribution else None
+        if not res.changes or res.status == "reproduced" or label in (
+                None, ConfidenceLabel.unexplained.value, ConfidenceLabel.inconclusive.value):
+            return
+        for k, v in list(res.changes.items())[:2]:
+            kn = self.spec.knobs.get(k)
+            if kn is None or "@mut." in k or kn.role == "seed":
+                continue
+            if kn.choices:
+                fit = []
+                for ch in kn.choices:
+                    c = {**res.changes, k: ch}
+                    if ch == v:
+                        continue
+                    await self.measure(c, 1, f"interval {k}={ch}")
+                    if self._fits_all(t, c):
+                        fit.append(ch)
+                if fit:
+                    res.value_sets[k] = sorted(set(res.value_sets.get(k) or [v]) | set(fit))
+                    res.notes.append(f"{k}: the choices {', '.join(sorted({v, *fit}))} fit every claim equally")
+                continue
+            x = _num_or_none(v)
+            if x is None:
+                continue
+            lo = await self._bisect_side(t, res.changes, k, x, -1)
+            hi = await self._bisect_side(t, res.changes, k, x, +1)
+            res.value_intervals[k] = [lo, hi]
+            res.notes.append(f"{k}: values from {lo} to {hi} fit every claim (a bisection, {self.cfg.interval_steps} "
+                             "runs a side, one run a value: approximate)")
+
+    async def _bisect_side(self, t: Target, changes: Changes, k: str, x: float, side: int) -> str:
+        """The farthest value of knob k on one side of x (side -1 below, +1 above) that still fits every claim, the
+        other knobs at the answer's values; "<v" or ">v" when it fits all the way to the decade bound v."""
+        import math
+
+        kn = self.spec.knobs[k]
+        like = str(changes[k])
+        is_int = _is_num(like) and "." not in like and "e" not in like.lower()
+        fmt = (lambda y: str(int(round(y)))) if is_int else (lambda y: f"{y:.4g}")  # noqa: E731
+        a, b = x, None  # a fits (the answer); b is the nearest value on this side that doesn't
+        seen = []
+        for key in self._runs:
+            c = dict(key)
+            if set(c) != set(changes) or any(c[j] != changes[j] for j in changes if j != k):
+                continue
+            y = _num_or_none(c[k])
+            if y is not None and (y - x) * side > 0 and self.measure_ok(c):
+                seen.append((abs(y - x), y, self._fits_all(t, c)))
+        for _, y, ok in sorted(seen):
+            if ok:
+                a = y
+            else:
+                b = y
+                break
+        if b is None:  # nothing measured that doesn't fit on this side: a decade away (within the knob's range)
+            b = x * 10 if side > 0 else x / 10 if x > 0 else x - max(1.0, abs(x))
+            if side > 0 and x <= 0:
+                b = x + max(1.0, abs(x))
+            if side > 0 and kn.max is not None:
+                b = min(b, kn.max)
+            if is_int:
+                b = max(1.0, round(b)) if x >= 1 else round(b)
+            c = {**changes, k: fmt(b)}
+            if fmt(b) == fmt(a):
+                return fmt(a)
+            await self.measure(c, 1, f"interval {k}={fmt(b)}")
+            if self._fits_all(t, c):
+                return ("<" if side < 0 else ">") + fmt(b)
+        for _ in range(self.cfg.interval_steps):
+            mid = math.sqrt(a * b) if a > 0 and b > 0 else (a + b) / 2
+            if fmt(mid) in (fmt(a), fmt(b)):
+                break
+            mid = float(fmt(mid))
+            c = {**changes, k: fmt(mid)}
+            await self.measure(c, 1, f"interval {k}={fmt(mid)}")
+            if self._fits_all(t, c):
+                a = mid
+            else:
+                b = mid
+        return fmt(a)
+
+    def _add_equivalent(self, t: Target, res: ClaimResult, c: Changes, source: str) -> None:
+        """A code round's configuration that fits every claim as well as the answer, but can't displace it (an
+        equally unsupported fit): it joins the set of configurations the claims can't tell apart, so the report
+        names both classes (plan F2; the planted curriculum's in-space misses had the code cause unreported)."""
+        if any(dict(e.get("config") or {}) == dict(c) for e in res.equivalent):
+            return
+        res.equivalent.append({"config": dict(c), "loglik": self.loglik(t, c), "source": source})
+        res.notes.append(f"{source}: {dict(c)} fits every claim as well as the answer; the claims can't tell them apart")
+
+    def _fits_all(self, t: Target, c: Changes) -> bool:
+        """The configuration's numbers lie within the noise band of the paper's on the target and every held-out
+        claim that is not tuned separately."""
+        held = [h for h in self.targets if h.held_out and not h.tuned_separately and h.metric in self.bands]
+        return all((g := self.gap(x, c)) is not None and abs(g) <= self.band(x) for x in [t] + held)
+
+    def _patch_leads(self, static: list[dict], contrasted: list[dict]) -> list[dict]:
+        """The patch round's leads, best first: grounded differences from the paper (contrast, matcher, swaps), then
+        literals seen reaching a sink at runtime, then the static unexposed settings; imported modules only, or an
+        entry script the command runs directly; the top patch_top_k."""
         from gapfinder.sandbox import ast_patch
-        from gapfinder.sandbox.spec import Knob
-        from gapfinder.search.history import diagnose
-        from gapfinder.search.hypotheses import patch_values, role_values
 
         root = self.spec.code_root()
-        leads = [x for x in (res.diagnosis or {}).get("leads") or []
-                 if x["family"] == "unexposed_setting" and x.get("name") and x.get("value")]
-        contrasted = [x for x in (res.diagnosis or {}).get("contrast_leads") or []]
-        have = {(c["file"], c["line"]) for c in contrasted}  # the model's reading first, then the matcher's
-        contrasted += [x for x in (res.diagnosis or {}).get("matcher_leads") or [] if (x["file"], x["line"]) not in have]
-        contrasted += list((res.diagnosis or {}).get("swap_leads") or [])  # operations the paper names
+        leads = [x for x in static if x["family"] == "unexposed_setting" and x.get("name") and x.get("value")]
         if self.trace_report is not None:  # literals seen reaching a sink at runtime come first
             traced = [{"file": x.file, "line": x.line, "name": x.name, "value": x.literal, "family": "unexposed_setting",
                        "source": "trace", "sink": x.sink} for x in self.trace_report.leads]
@@ -2756,7 +2906,95 @@ class GapSearch:
         # imported modules through the import hook; entry scripts only when the command runs them directly
         leads = [x for x in leads if root is not None and (not ast_patch.entry_script(root / x["file"])
                                                            or ast_patch.direct_entry(self.spec.run.command, x["file"]))]
-        leads = leads[: self.cfg.patch_top_k]
+        return leads[: self.cfg.patch_top_k]
+
+    def _lead_values(self, x: dict) -> tuple[str, list[str]]:
+        """A lead's patch knob (registered in the spec) and the values the patch round tries, first ones first."""
+        from gapfinder.sandbox import ast_patch
+        from gapfinder.sandbox.spec import Knob
+        from gapfinder.search.hypotheses import patch_values, role_values
+
+        k = ast_patch.knob_name(x["file"], x["line"], x["name"])
+        self.spec.knobs.setdefault(k, Knob(layer="environment", default=str(x["value"]), env=True))
+        role = "size" if str(x.get("sink", "")).startswith(("batch.", "width.")) else None
+        vals = ((role_values(role, str(x["value"])) if role else None) or patch_values(x["name"], str(x["value"])))
+        pv = x.get("paper_value")  # a contrast lead: the paper's own number first
+        if pv and not _same_value(str(pv), str(x["value"])):
+            vals = [str(pv)] + [v for v in vals if not _same_value(v, str(pv))]
+        if x.get("source") == "swap":  # an operation swap: the paper's choice and nothing else
+            vals = [str(pv)]
+        return k, vals[: self.cfg.patch_values]
+
+    async def _early_code_screen(self, t: Target, res: ClaimResult) -> None:
+        """Plan F2 (early_code_screen): the settings pass gave no confident answer, so before the spec-knob round,
+        discrimination and the scale probe spend the budget, the code rounds' cheapest tests run: each top literal
+        lead's values alone (the patch round's own configurations) and the mutation round's first mutation_keep
+        mutants, one run each. The order of tests by value per run (sequential diagnosis: the next class's few,
+        cheap tests once the likeliest class failed to confirm); the rounds reuse the runs and decide as before."""
+        confident = {ConfidenceLabel.explained.value, ConfidenceLabel.inconsistency.value}
+        if not self.cfg.history_matching or (res.attribution and res.attribution.confidence_label in confident):
+            return
+        root = self.spec.code_root()
+        if root is None or t.claim_id in self._early_screened:
+            return
+        self._early_screened.add(t.claim_id)  # once per claim: after the screen, or after the settings pass
+        from gapfinder.ingest.code_checks import code_checks
+        from gapfinder.search.history import diagnose
+
+        runs, claims, extra = self._hm_inputs(t)
+        d = diagnose(runs, claims, t.claim_id, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc, **extra)
+        label = res.attribution.confidence_label if res.attribution else ConfidenceLabel.unexplained.value
+        n_lead = n_mut = 0
+        # with a paper and a model, the patch round's contrast step grounds a literal to the paper's value and runs it
+        # first: its leads are left to it (generic values run early would only compete with the paper's)
+        contrast_ahead = bool(self.cfg.contrast and self.router is not None and self.paper_text and self.trace_records)
+        if self.cfg.patch_knobs and not contrast_ahead and (d.kind.startswith("out_of_space")
+                                                            or d.kind in ("in_space", "reproduced")):
+            try:
+                static = [x.to_dict() for x in code_checks(root, set(self.spec.knobs))]
+            except Exception:  # noqa: BLE001 (no leads read)
+                static = []
+            # the paper's values first, as in the patch round: the deterministic matcher and operation swaps (no model
+            # call; the contrast step's model call stays in the patch round)
+            import types
+
+            tmp = types.SimpleNamespace(diagnosis={})
+            self._match_constants(tmp)
+            self._match_ops(tmp)
+            grounded = list(tmp.diagnosis.get("matcher_leads") or []) + list(tmp.diagnosis.get("swap_leads") or [])
+            groups = [[{k: v} for v in vals] for k, vals in
+                      (self._lead_values(x) for x in self._patch_leads(static, grounded))]
+            configs = [g[i] for i in range(max((len(g) for g in groups), default=0)) for g in groups if i < len(g)]
+            configs = configs[: int((self.cfg.max_runs or 10 ** 6) * self.cfg.patch_budget_frac)]
+            n_lead = len(configs)
+            await _all(*(self.measure(c, 1, "patch screen (early)") for c in configs))
+        rel = [r for r in self.scale_relations if r.get("verified")]
+        if self.cfg.mutations and (rel or d.kind.startswith("out_of_space") or label in (
+                ConfidenceLabel.unexplained.value, ConfidenceLabel.conflicts_held_out.value)):
+            from gapfinder.sandbox.spec import Knob
+
+            ms, _ = self._mutation_candidates(t, res)
+            first = ms[: self.cfg.mutation_keep]
+            for m in first:
+                self.spec.knobs.setdefault(m.name, Knob(layer="environment", default="0", env=True, choices=["0", "1"]))
+            n_mut = len(first)
+            await _all(*(self.measure({m.name: "1"}, 1, "mutation screen (early)") for m in first))
+        if n_lead or n_mut:
+            self.orch.events.emit("note", msg=f"{t.claim_id}: early code screen: {n_lead} literal-lead configuration(s), "
+                                              f"{n_mut} mutant(s), before the spec-knob round")
+
+    async def _patch_round(self, t: Target, res: ClaimResult) -> None:
+        """Out of space: test the top static leads (hard-coded literals in imported modules) as patch knobs.
+        A configuration with a patch that fits every claim, where no setting did, is confirmed and verified
+        like any other; it is reported as a code change."""
+        from gapfinder.sandbox import ast_patch
+        from gapfinder.search.history import diagnose
+
+        contrasted = [x for x in (res.diagnosis or {}).get("contrast_leads") or []]
+        have = {(c["file"], c["line"]) for c in contrasted}  # the model's reading first, then the matcher's
+        contrasted += [x for x in (res.diagnosis or {}).get("matcher_leads") or [] if (x["file"], x["line"]) not in have]
+        contrasted += list((res.diagnosis or {}).get("swap_leads") or [])  # operations the paper names
+        leads = self._patch_leads((res.diagnosis or {}).get("leads") or [], contrasted)
         if not leads:
             return
         fits = [r for r in (res.diagnosis.get("per_claim") or {}).get(t.claim_id, []) if r["config"]]
@@ -2764,8 +3002,7 @@ class GapSearch:
         base = {k: v for k, v in base.items() if not ast_patch.is_patch(k)}
         with_base, alone = [], []
         for x in leads:
-            k = ast_patch.knob_name(x["file"], x["line"], x["name"])
-            self.spec.knobs.setdefault(k, Knob(layer="environment", default=str(x["value"]), env=True))
+            k, vals = self._lead_values(x)
             if x.get("quote") and x.get("paper_value") and k not in self.assumptions:
                 # the paper states this value, verbatim: evidence like a ledger quote, and a paper-code difference
                 self.assumptions[k] = Assumption(
@@ -2773,14 +3010,6 @@ class GapSearch:
                     code_default=str(x["value"]), candidate_values=[str(x["paper_value"])], prior_score=0.9,
                     status=AssumptionStatus.stated_code_differs.value, affects_claims=[],
                     evidence=[Evidence(kind="paper", ref="paper text", quote=x["quote"])])
-            role = "size" if str(x.get("sink", "")).startswith(("batch.", "width.")) else None
-            vals = ((role_values(role, str(x["value"])) if role else None) or patch_values(x["name"], str(x["value"])))
-            pv = x.get("paper_value")  # a contrast lead: the paper's own number first
-            if pv and not _same_value(str(pv), str(x["value"])):
-                vals = [str(pv)] + [v for v in vals if not _same_value(v, str(pv))]
-            if x.get("source") == "swap":  # an operation swap: the paper's choice and nothing else
-                vals = [str(pv)]
-            vals = vals[: self.cfg.patch_values]
             with_base.append([{**base, k: v} for v in vals] if base else [])
             alone.append([{k: v} for v in vals])
 
@@ -2807,6 +3036,9 @@ class GapSearch:
         if not joint:
             res.notes.append(f"patch round: none of {len(configs)} code-patch configurations fits every claim")
             return
+        # among the fits, one at a value the paper states comes first (the paper prior, plan D7.3): the early code
+        # screen (plan F2) also runs a lead's generic values, and one of them can fit as well by chance
+        joint.sort(key=lambda r: not any(stated.get(k) == v for k, v in r["config"].items()))
         c = joint[0]["config"]
         await self.measure(c, self.confirm_repeats(t), "patch confirm")
         d = rediagnose()
@@ -2824,6 +3056,7 @@ class GapSearch:
         if res.changes and not _rank(trial) < _rank(res):
             res.notes.append(f"patch round: {c} also fits every claim ({trial.attribution.confidence_label}), "
                              f"but doesn't beat {res.changes}")
+            self._add_equivalent(t, res, c, "patch round")
             return
         for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay", "relations"):
             setattr(res, f, getattr(trial, f))
@@ -3487,6 +3720,13 @@ class GapSearch:
         except ValueError as exc:
             res.notes.append(f"skipped {h.knob}={h.value!r}: {exc}")
             return False
+
+
+def _num_or_none(x) -> float | None:
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_num(x: str) -> bool:
