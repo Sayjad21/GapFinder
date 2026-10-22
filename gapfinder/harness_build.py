@@ -1166,8 +1166,10 @@ def harness_markdown(r: HarnessResult) -> str:
                                                                   if k not in (y.get("deps") or {})}}.items())] + [""]
     if r.paper_era:
         e = r.paper_era
+        which = ("The repository starts after the paper; its first commit, the code as first published"
+                 if e.get("kind") == "first" else "The repository's last commit before the paper's date")
         L += ["## Paper-era code (knob `gf_paper_era_code`)", "",
-              f"The repository's last commit before the paper's date: `{e['sha'][:12]}` ({e['date']}: {e['message']}); "
+              f"{which}: `{e['sha'][:12]}` ({e['date']}: {e['message']}); "
               f"{e.get('files', 0)} code files in `/opt/gf_paper_era`, copied over the checkout when the knob is 1. "
               f"{len(e.get('commits') or [])} commits from it to the given one (history before the given commit "
               "only) for the binary search.", ""]
@@ -1442,7 +1444,9 @@ async def build_harness(router, backend, *, repo: str | None, commit: str | None
                 final += (f"; {env_year.install_command(every)}; "
                           f"{sprefix}{env_year.import_check(every, check_mods, brought)}")
             if repo and commit:
-                era = env_year.commit_before(repo, commit, paper_date)
+                era, why = env_year.paper_era_commit(repo, commit, paper_date)
+                if not era:
+                    r.notes.append(f"no paper-era code knob: {why}")
                 if era:
                     era["commits"] = env_year.commits_between(repo, commit, era["date"])
                     final += f"; {env_year.era_fetch_command(era['sha'])}"

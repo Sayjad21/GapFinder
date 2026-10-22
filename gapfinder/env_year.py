@@ -468,6 +468,46 @@ def commit_before(repo: str, commit: str, when: date, timeout: float = 30) -> di
     return _brief(data[0])
 
 
+def first_commit(repo: str, commit: str, pages: int = 10, timeout: float = 30) -> dict | None:
+    """The oldest commit reachable from `commit` (GitHub's API, history before the given commit only; at most
+    100 x pages commits are walked, so a longer history gives the oldest of those), or None when unreadable."""
+    last = None
+    for page in range(1, pages + 1):
+        url = f"https://api.github.com/repos/{_owner_repo(repo)}/commits?sha={commit}&per_page=100&page={page}"
+        try:
+            data = _github(url, timeout)
+        except Exception:  # noqa: BLE001
+            return last and _brief(last)
+        if not isinstance(data, list) or not data:
+            break
+        last = data[-1]
+        if len(data) < 100:
+            break
+    return _brief(last) if last else None
+
+
+def paper_era_commit(repo: str, commit: str, when: date, timeout: float = 30) -> tuple[dict | None, str]:
+    """(the paper-era commit, why) (plan F5). The last commit before the paper's date (kind "before"); when the
+    repository's history starts after the paper (pygcn's repository is 13 months younger than its paper), its first
+    commit, the code as first published (kind "first"); None with the reason otherwise, for HARNESS.md."""
+    url = (f"https://api.github.com/repos/{_owner_repo(repo)}/commits?sha={commit}&until={when.isoformat()}T00:00:00Z"
+           "&per_page=1")
+    try:
+        data = _github(url, timeout)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"GitHub's API could not be read ({type(exc).__name__})"
+    if isinstance(data, list) and data:
+        if data[0]["sha"] == commit or commit.startswith(data[0]["sha"][:12]):
+            return None, "the given commit is already the last one before the paper's date"
+        return {**_brief(data[0]), "kind": "before"}, ""
+    first = first_commit(repo, commit, timeout=timeout)
+    if first is None:
+        return None, "the repository's history could not be read"
+    if first["sha"] == commit or commit.startswith(first["sha"][:12]):
+        return None, "the repository starts after the paper, and the given commit is its first"
+    return {**first, "kind": "first"}, ""
+
+
 def _brief(c: dict) -> dict:
     return {"sha": c["sha"], "date": c["commit"]["committer"]["date"][:10],
             "message": (c["commit"]["message"] or "").splitlines()[0][:120] if c["commit"].get("message") else ""}
