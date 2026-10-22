@@ -168,6 +168,14 @@ class SearchConfig:
     group_screen: bool = True
     group_budget_frac: float = 0.15
     group_max: int = 2000
+    # plan F8: the budget split between the settings and the code classes by evidence, after the screen (Bayesian
+    # search theory: effort where posterior x detection is highest; Koopman, Stone). P(a setting explains) is the
+    # posterior of the best screened setting over all claims against "outside every class", at least one half when a
+    # single setting moved the gap by the effect threshold (pairs may still fit: interactions); when the code has
+    # leads, (1 - P) x code_share_max of the remaining runs is kept out of the settings exploration for the code
+    # rounds. A screen whose settings fit takes nothing from them (c2's fixed hold cost the dev suite 52 -> 48).
+    class_scheduler: bool = True
+    code_share_max: float = 0.3
     # plans D1.3-D1.5, D7.2: when the paper-year packages (or the paper-era code) change the numbers, which package
     # (delta debugging), which release or commit (binary search) and which call site (API and source diff); at most
     # library_budget_frac of the run budget; two configurations give "the same numbers" within library_z standard
@@ -2499,6 +2507,8 @@ class GapSearch:
         self.orch.events.emit("round", name="screen", claim=t.claim_id, tested=len(hyps), survivors=len(survivors))
         # plan F2: no single screened setting fits every claim, so the settings class failed its cheapest test; the
         # code rounds' cheapest tests run before confirmation and combining spend the budget on settings
+        if self.cfg.class_scheduler:
+            self._schedule_classes(t, hyps, thr)
         if self.cfg.early_code_screen and not any(self._fits_all(t, h.changes) for h in hyps):
             await self._early_code_screen(t, res)
 
@@ -3034,6 +3044,49 @@ class GapSearch:
             else:
                 b = mid
         return fmt(a)
+
+    def _schedule_classes(self, t: Target, hyps: list, thr: float) -> None:
+        """Plan F8 (class_scheduler): after the screen, the code rounds' share of the remaining runs from the
+        posterior that a setting explains the claims (see SearchConfig.class_scheduler). Sets the exploration hold
+        (_code_hold) only up: an earlier hold stays."""
+        if not self.cfg.max_runs or self.spec.code_root() is None:
+            return
+        from gapfinder.diagnose import Prediction
+
+        diff = self._new_differential(t)
+        if not diff.claims:
+            return
+        best = None
+        for h in hyps:
+            if not self.measure_ok(h.changes):
+                continue
+            hh = diff.score(self._config_hypothesis(diff, h.changes, 0.5))
+            if hh.loglik is not None and (best is None or hh.loglik > best):
+                best = hh.loglik
+        if best is None:
+            return
+        outside = sum(diff.outside_loglik(c) for c in diff.claims.values())
+        z = max(-50.0, min(50.0, best - outside))
+        p_set = 1.0 / (1.0 + math.exp(-z))
+        if any(self.units(t, h.changes) >= thr for h in hyps):
+            p_set = max(p_set, 0.5)  # a single setting moves it: pairs may still fit every claim
+        try:
+            from gapfinder.ingest.code_checks import code_checks
+
+            leads = any(x.family == "unexposed_setting" for x in code_checks(self.spec.code_root(), set(self.spec.knobs)))
+        except Exception:  # noqa: BLE001
+            leads = False
+        import types
+
+        probe = types.SimpleNamespace(changes={}, screen=[])  # the static candidates: no answer yet
+        mutants = bool(self.cfg.mutations and self._mutation_candidates(t, probe)[0])
+        if not (leads or mutants):
+            return
+        hold = int((self.cfg.max_runs - self.runs_used) * self.cfg.code_share_max * (1.0 - p_set))
+        if hold > self._code_hold:
+            self._code_hold = hold
+            self.orch.events.emit("note", msg=f"{t.claim_id}: class scheduler: P(a setting explains) = {p_set:.2f}; "
+                                              f"{hold} runs kept out of the settings exploration for the code rounds")
 
     def _pair_tags(self, start: int, n: int, changes: Changes) -> list[str] | None:
         """RUN_TAGs for a configuration's runs start .. start+n-1 (paired seeds, plan F4), or None. Paired within a
