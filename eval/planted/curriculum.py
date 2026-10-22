@@ -1,4 +1,4 @@
-"""A progressive planted-gap curriculum on papers GapFinder already reproduces (plan D7.4, docs/CONTEXT_v11.md 7.3).
+"""A progressive planted-gap curriculum on papers GapFinder already reproduces (plan D7.4, docs/CONTEXT_v11.md 7.2).
 
     python eval/planted/curriculum.py make   --level 1 --cases pygcn,fastgcn,b3a --per-case 2 --seed 1
     python eval/planted/curriculum.py search --level 1 --code <frozen worktree> [--parallel 3]

@@ -1,4 +1,4 @@
-"""Paper tables as grids (plan D3.2-D3.4, docs/CONTEXT_v11.md section 7.3).
+"""Paper tables as grids (plan D3.2-D3.4, docs/CONTEXT_v11.md section 7.2).
 
 Claims extracted by a language model from flattened text drop cells and invent some (DTBench); a table's numbers are
 better read from its structure. This module builds grids deterministically and never lets a model write a number:

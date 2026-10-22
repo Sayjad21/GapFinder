@@ -1,4 +1,4 @@
-"""Library drift, narrowed to a package, a release and a call site (plan D1.3-D1.5, docs/CONTEXT_v11.md 7.3).
+"""Library drift, narrowed to a package, a release and a call site (plan D1.3-D1.5, docs/CONTEXT_v11.md 7.2).
 
 The paper-year knob (gapfinder/env_year.py) says whether the packages as of the paper's date change the numbers.
 This module narrows a "yes" down in three steps, each run in the VM like any configuration:

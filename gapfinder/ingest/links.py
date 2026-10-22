@@ -1,4 +1,4 @@
-"""Paper terms to code flags (plan D4.1, D4.3, D4.4; docs/CONTEXT_v11.md section 7.3).
+"""Paper terms to code flags (plan D4.1, D4.3, D4.4; docs/CONTEXT_v11.md section 7.2).
 
 A paper says "the L2 weight λ", "K = 8 output attention heads", "a patience of 100 epochs"; the code has `l2_coef`,
 `n_heads`, `patience`. Names alone mislead (Alor et al. 2025: most false links come from naming assumptions), so a link

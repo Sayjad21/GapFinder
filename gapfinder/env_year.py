@@ -1,4 +1,4 @@
-"""The paper-year environment (plan item 19; D1.3 and D7.2, docs/CONTEXT_v11.md section 7.3).
+"""The paper-year environment (plan item 19; D1.3 and D7.2, docs/CONTEXT_v11.md section 7.2).
 
 Library defaults and APIs drift: a reproduction on today's packages can differ from the paper's because a default
 changed, a keyword was renamed (an old keyword then vanishes into **kwargs), or the repository is itself a library

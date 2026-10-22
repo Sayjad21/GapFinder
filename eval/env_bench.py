@@ -8,7 +8,7 @@ and its smoke command with its harness, exactly as the hand-built image ran them
 the smoke run exits 0 and prints every metric the case's spec declares.
 
 This measures one part of the harness, the environment. The data step, the run command and the metric
-parser are still the hand-written ones; they are later parts of item 4 (docs/CONTEXT_v11.md section 7.3).
+parser are still the hand-written ones; they are later parts of item 4 (docs/CONTEXT_v11.md section 7.2).
 """
 
 from __future__ import annotations

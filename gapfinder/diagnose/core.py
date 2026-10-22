@@ -1,4 +1,4 @@
-"""A differential diagnosis over cause classes (plan D1.1, docs/CONTEXT_v11.md section 7.3).
+"""A differential diagnosis over cause classes (plan D1.1, docs/CONTEXT_v11.md section 7.2).
 
 GapFinder used to answer one question, "which setting explains the gap?". Half the documented causes on sealed real
 papers were something else: a reporting rule, a code defect, a library change, a data-pipeline switch. This module

@@ -1,4 +1,4 @@
-"""Discriminating experiments (plan D2.2, D2.3, D7.3; docs/CONTEXT_v11.md section 7.3).
+"""Discriminating experiments (plan D2.2, D2.3, D7.3; docs/CONTEXT_v11.md section 7.2).
 
 When two or more configurations fit the paper's target claim about equally well, the paper's other reported
 conditions (a sweep's points, another dataset, another budget) usually tell them apart, but running every candidate

@@ -32,7 +32,7 @@ Planted gap tasks, seeds 2 and 3 together:
   says the target can't tell apart.
   On pygcn the task gives one number (Cora accuracy only), so several settings fit it equally well. GapFinder says
   so, but the scorer counts it as missed.
-- **Code defects are not found.** A code round was cut by the run budget in 19 of the 30 searches (section 7.4 of docs/CONTEXT_v11.md has every failure class). In 4 of the 6 level-1 misses on seed 2, a code round ran out of budget: the patch
+- **Code defects are not found.** A code round was cut by the run budget in 19 of the 30 searches (section 7.1 of docs/CONTEXT_v11.md has every failure class). In 4 of the 6 level-1 misses on seed 2, a code round ran out of budget: the patch
   round was one run short of the planted constant (VGAE, twice), and the mutation round never ran (RippleNet,
   FastGCN).
 - **Reporting rules, paper-era code and old package releases could not be tested here.** The rebuilt harnesses
