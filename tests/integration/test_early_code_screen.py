@@ -72,7 +72,8 @@ def _search(tmp_path, early: bool, max_runs: int = 150, case: str = "literal"):
         Target(f"N{n}", "mean_score", paper(n), held_out=True, at={"n": str(n)}) for n in (20, 44)]
     return GapSearch(orch, targets, asm, SearchConfig(max_runs=max_runs, trace=False, hm_disc=0.005,
                                                       mutations=case != "literal", patch_knobs=case == "literal",
-                                                      early_code_screen=early, value_interval=False))
+                                                      early_code_screen=early, value_interval=False,
+                                                      class_scheduler=False))  # the early screen's own effect
 
 
 def _found(r):

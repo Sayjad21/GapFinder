@@ -60,7 +60,7 @@ def _search(tmp_path, reserve: bool):
         Target(f"N{n}", "mean_score", _paper(n), held_out=True, at={"n": str(n)}) for n in (20, 44)]
     return GapSearch(orch, targets, asm, SearchConfig(max_runs=150, trace=False, hm_disc=0.005, patch_knobs=False,
                                                       code_hold=reserve, early_code_screen=False,
-                                                      value_interval=False))
+                                                      value_interval=False, class_scheduler=False))  # its own effect
 
 
 async def test_the_mutation_round_keeps_its_share(tmp_path):

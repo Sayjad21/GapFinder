@@ -1366,7 +1366,8 @@ class GapSearch:
             if len(vals) < 2:
                 continue
             sd = max(statistics.stdev(vals), self.cfg.noise_floor_frac * abs(c.paper_value))
-            specs.append(ClaimSpec(c.claim_id, c.metric, c.paper_value, statistics.fmean(vals), sd, target=c is t))
+            specs.append(ClaimSpec(c.claim_id, c.metric, c.paper_value, statistics.fmean(vals), sd, target=c is t,
+                                   run_sd=statistics.stdev(vals)))
         return Differential(specs, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc)
 
     def _add_point_claims(self, diff) -> None:
@@ -1382,7 +1383,8 @@ class GapSearch:
                 continue
             sd = max(statistics.stdev(vals) if len(vals) >= 2 else 0.0, self.bands[p.metric].band / 2,
                      self.cfg.noise_floor_frac * abs(p.paper_value))
-            diff.claims[p.claim_id] = ClaimSpec(p.claim_id, p.metric, p.paper_value, statistics.fmean(vals), sd)
+            diff.claims[p.claim_id] = ClaimSpec(p.claim_id, p.metric, p.paper_value, statistics.fmean(vals), sd,
+                                                run_sd=statistics.stdev(vals) if len(vals) >= 2 else None)
         for h in diff.hypotheses.values():  # rescored on the larger claim set
             diff.score(h)
         diff._normalise()
@@ -1902,12 +1904,17 @@ class GapSearch:
         # interference control (FLIM 2025): an edit near the output can move one number to almost any value, and the
         # claims that already matched as run stay matched whatever it does, so "fits every claim" is no evidence
         # unless the mutant brings at least two claims that were off as run within reach (a no-cause toy: a score
-        # offset by 1.37 matched by an edit of the score alone, the held-out never off)
-        from gapfinder.diagnose import Prediction
-
+        # offset by 1.37 matched by an edit of the score alone, the held-out never off). Off as run is judged on the
+        # naive runs' own spread: the model-discrepancy allowance and the noise floor are for fitting, and a gap
+        # inside them is still one the runs see (a dropped last batch: 1 unit off at a spread of 0.001, inside the
+        # 1% floor)
         n0 = max(1, len(self.measure_ok({})))
-        moved = [cid for cid, v in h.per_claim.items() if v["I"] <= FIT_I and diff.claim_loglik(
-            diff.claims[cid], Prediction(diff.claims[cid].naive_mean, diff.claims[cid].naive_sd, n0))[0] > FIT_I]
+
+        def off_as_run(c) -> bool:
+            sd = (c.naive_sd if c.run_sd is None else c.run_sd) * math.sqrt(1 / n0 + 1 / diff.paper_n)
+            return abs(c.paper - c.naive_mean) > FIT_I * max(sd, 1e-12)
+
+        moved = [cid for cid, v in h.per_claim.items() if v["I"] <= FIT_I and off_as_run(diff.claims[cid])]
         if len(moved) < 2 and not grounded:
             res.notes.append(f"mutation round: {origin.describe()} fits, but moves only {len(moved)} claim(s) that were "
                              "off as run: a code lead, not evidence for a cause (one number can't identify a code "
@@ -2343,8 +2350,14 @@ class GapSearch:
 
     def _wants_patch(self, res: ClaimResult) -> bool:
         kind = (res.diagnosis or {}).get("kind", "")
+        # a patch the early code screen ran (F2) that fits every claim puts the claims in space; the patch round
+        # still has to adopt it (its runs are reused: no cost), as it would have without the early screen
+        from gapfinder.sandbox import ast_patch
+
+        joint = [r.get("config") or {} for r in (res.diagnosis or {}).get("joint") or []]
+        patch_fits = any(ast_patch.is_patch(k) and "@mut." not in k for c in joint for k in c)
         return kind.startswith("out_of_space") or (kind in ("in_space", "reproduced") and self._unsupported(res)
-                                                    and bool((res.diagnosis or {}).get("leads")))
+                                                    and (bool((res.diagnosis or {}).get("leads")) or patch_fits))
 
     async def _contrast(self, res: ClaimResult) -> None:
         """Out of space: ask Super where the code, as traced, differs from the paper; ground the answers."""
@@ -2515,9 +2528,17 @@ class GapSearch:
         self.orch.events.emit("round", name="screen", claim=t.claim_id, tested=len(hyps), survivors=len(survivors))
         # plan F2: no single screened setting fits every claim, so the settings class failed its cheapest test; the
         # code rounds' cheapest tests run before confirmation and combining spend the budget on settings
+        # the repo's declared alternative blocks are settings too: screened here, before the code rounds are given
+        # budget for want of a fitting setting (the combine round reuses these runs). Left to the combine round,
+        # a block that fits every claim ran after the early code screen and the scheduler's hold had taken their
+        # runs, and the budget ended before it was verified (a commented-out argparse block, lr and l2 together)
+        alts = self._alternative_configs() if self.cfg.class_scheduler or self.cfg.early_code_screen else []
+        if alts:
+            await _all(*(self.measure(c, self.cfg.screen_repeats, "screen (the repo's alternative settings)")
+                         for c in alts))
         if self.cfg.class_scheduler:
-            self._schedule_classes(t, hyps, thr)
-        if self.cfg.early_code_screen and not any(self._fits_all(t, h.changes) for h in hyps):
+            self._schedule_classes(t, [h.changes for h in hyps] + alts, thr)
+        if self.cfg.early_code_screen and not any(self._fits_all(t, c) for c in [h.changes for h in hyps] + alts):
             await self._early_code_screen(t, res)
 
         # 2. confirm: survivors get repeats; effects that fade are pruned
@@ -2645,6 +2666,17 @@ class GapSearch:
         ll_c = {frozenset(c.items()): self.loglik(t, c) for c in good_combos}
         good_combos.sort(key=lambda c: -(ll_c[frozenset(c.items())] if ll_c[frozenset(c.items())] is not None
                                          else float("-inf")))
+        # a combination already confirmed (the early confirmation) that fits every claim: a candidate clearly less
+        # likely can't overtake it, so its race and confirmation runs only take the budget the fit's verification
+        # needs (a declared block confirmed early, then two dozen pairs with a low learning rate raced and confirmed,
+        # and the budget ended before the block's bisection: 1 run in 3)
+        settled = [c for c in good_combos if len(self.measure_ok(c)) >= reps and self._fits_all(t, c)]
+        if settled:
+            top_ll = max((ll_c[frozenset(c.items())] for c in settled if ll_c[frozenset(c.items())] is not None),
+                         default=None)
+            if top_ll is not None:
+                good_combos = [c for c in good_combos if c in settled or (
+                    ll_c[frozenset(c.items())] is not None and ll_c[frozenset(c.items())] >= top_ll - LL_EQUIVALENT)]
         racing_combos = good_combos
         if self.cfg.racing and len(good_combos) > self.cfg.race_keep and reps > 2:
             await _all(*(self.measure(c, 2, "confirm-combo (race)") for c in good_combos))
@@ -3053,22 +3085,20 @@ class GapSearch:
                 b = mid
         return fmt(a)
 
-    def _schedule_classes(self, t: Target, hyps: list, thr: float) -> None:
+    def _schedule_classes(self, t: Target, configs: list[Changes], thr: float) -> None:
         """Plan F8 (class_scheduler): after the screen, the code rounds' share of the remaining runs from the
-        posterior that a setting explains the claims (see SearchConfig.class_scheduler). Sets the exploration hold
-        (_code_hold) only up: an earlier hold stays."""
+        posterior that a setting explains the claims (see SearchConfig.class_scheduler), from the screened
+        configurations. Sets the exploration hold (_code_hold) only up: an earlier hold stays."""
         if not self.cfg.max_runs or self.spec.code_root() is None:
             return
-        from gapfinder.diagnose import Prediction
-
         diff = self._new_differential(t)
         if not diff.claims:
             return
         best = None
-        for h in hyps:
-            if not self.measure_ok(h.changes):
+        for c in configs:
+            if not self.measure_ok(c):
                 continue
-            hh = diff.score(self._config_hypothesis(diff, h.changes, 0.5))
+            hh = diff.score(self._config_hypothesis(diff, c, 0.5))
             if hh.loglik is not None and (best is None or hh.loglik > best):
                 best = hh.loglik
         if best is None:
@@ -3076,7 +3106,7 @@ class GapSearch:
         outside = sum(diff.outside_loglik(c) for c in diff.claims.values())
         z = max(-50.0, min(50.0, best - outside))
         p_set = 1.0 / (1.0 + math.exp(-z))
-        if any(self.units(t, h.changes) >= thr for h in hyps):
+        if any(self.units(t, c) >= thr for c in configs):
             p_set = max(p_set, 0.5)  # a single setting moves it: pairs may still fit every claim
         try:
             from gapfinder.ingest.code_checks import code_checks
@@ -3334,7 +3364,19 @@ class GapSearch:
         one member of it. Only a further reported number at another condition can tell them apart."""
         if not res.changes or res.status == "reproduced":
             return
-        knobsets = {frozenset(k for k in (e.get("config") or {})) for e in res.equivalent if e.get("config")}
+        # `equivalent` ties with the answer on the target; an alternative counts only when it is no worse than the
+        # answer on every held-out claim too (a held-out claim that separates them identifies the answer)
+        held = [h for h in self.targets if h.held_out and not h.tuned_separately and h.metric in self.bands]
+
+        def as_good(c: Changes) -> bool:
+            for x in held:
+                g, g0 = self.gap(x, c), self.gap(x, res.changes)
+                if g is None or g0 is None or abs(g) > max(self.band(x), abs(g0) + self.band(x)):
+                    return False
+            return True
+
+        alts_eq = [e for e in res.equivalent if e.get("config") and as_good(e["config"])]
+        knobsets = {frozenset(k for k in e["config"]) for e in alts_eq}
         knobsets.add(frozenset(res.changes))
         if len(knobsets) < 2:
             res.identifiable = True
@@ -3344,8 +3386,7 @@ class GapSearch:
             res.identifiable = True
             return
         res.identifiable = False
-        alts = sorted({", ".join(f"{k}={v}" for k, v in sorted((e.get("config") or {}).items()))
-                       for e in res.equivalent if e.get("config")})
+        alts = sorted({", ".join(f"{k}={v}" for k, v in sorted(e["config"].items())) for e in alts_eq})
         conds = (res.discrimination or {}).get("conditions") or []
         res.notes.append(f"not identifiable from the paper's numbers: {len(alts)} configurations of different knobs fit "
                          f"every claim as well as the answer ({'; '.join(alts[:6])})"

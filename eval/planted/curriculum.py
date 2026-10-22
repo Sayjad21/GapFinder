@@ -163,6 +163,199 @@ def draw_code_only(rng: random.Random, root: Path, spec) -> tuple[str, str, str]
     return None
 
 
+# plan F10: DeepCrime's mutation operators (Humbatova, Jahangirova & Tonella, ISSTA 2021), drawn from a taxonomy of
+# real deep-learning faults: the ones that are code edits, not settings (learning rate, epochs, batch size, dropout
+# and patience are the setting family). They are the curriculum's own, not GapFinder's mutation operators, so a code
+# or data task is not always a fault GapFinder itself generates. RRW removes weights regularisation, RAW adds it,
+# WRB removes a layer's bias (WAB adds it), TRD removes part of the training data.
+TORCH_OPTIM = {"Adam", "AdamW", "SGD", "Adagrad", "RMSprop", "Adadelta", "Adamax", "NAdam", "RAdam"}
+LAYER_CALL = ("Linear", "Dense", "Conv1d", "Conv2d", "Conv3d", "Conv", "GraphConvolution", "GraphConv", "GCNConv",
+              "SAGEConv", "GATConv", "ChebConv", "Bilinear")
+TRAIN_IDX = ("idx_train", "train_idx", "train_index", "train_indices", "train_ids", "train_nodes", "train_edges")
+TRD_KEEP = ((1, 2), (3, 4))  # the share of the training data kept
+_DC_SITES: dict[tuple[str, str], list] = {}
+
+
+def deepcrime_sites(fam: str, root: Path, spec) -> list[tuple[str, str, str, dict]]:
+    """(knob, description, operator, equivalent settings) for each DeepCrime site the patch hook reaches. The
+    equivalent settings are the flags the edit amounts to (the optimizer's weight_decay=args.weight_decay removed is
+    weight_decay=0): the scorer accepts them."""
+    key = (fam, str(root))
+    if key in _DC_SITES:
+        return _DC_SITES[key]
+    import ast
+
+    from gapfinder.harness_auto import _import_closure
+    from gapfinder.sandbox import ast_patch
+    from gapfinder.search.mutation import _knob_reads, _norm
+
+    names = {_norm(k): k for k in spec.knobs if not k.startswith("@")}
+    trees = [(p, t) for p, t in _import_closure(root.resolve()) if t is not None and p.is_relative_to(root.resolve())]
+    reached = _reached({p.relative_to(root.resolve()).as_posix(): t for p, t in trees}, spec)
+    trees = [(p, t) for p, t in trees if p.relative_to(root.resolve()).as_posix() in reached]
+    params = {}  # a repo function's or class's parameters, with their defaults
+    for _, tree in trees:
+        for n in ast.walk(tree):
+            fn = n if isinstance(n, ast.FunctionDef) else next(
+                (b for b in n.body if isinstance(b, ast.FunctionDef) and b.name == "__init__"), None) \
+                if isinstance(n, ast.ClassDef) else None
+            if fn is not None:
+                a = fn.args
+                ds = [None] * (len(a.args) - len(a.defaults)) + list(a.defaults)
+                params[n.name] = [(x.arg, d) for x, d in zip(a.args, ds) if x.arg != "self"]
+    equiv = lambda node, v: {names[k]: v for k in _knob_reads(node, set(names))}  # noqa: E731
+    out = []
+    for p, tree in trees:
+        rel = p.relative_to(root.resolve()).as_posix()
+        if ast_patch.entry_script(p) and not ast_patch.direct_entry(spec.run.command, rel):
+            continue
+        torch = any("torch" in ast.unparse(x) for x in tree.body if isinstance(x, (ast.Import, ast.ImportFrom)))
+        parents = {id(c): q for q in ast.walk(tree) for c in ast.iter_child_nodes(q)}
+        for n in ast.walk(tree):
+            at = lambda node, op: f"@ast:{rel}:{node.lineno}:@mut.{node.col_offset}.{type(node).__name__}.{op}"  # noqa: E731
+            if fam == "code" and isinstance(n, ast.Call):
+                f = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "")
+                kws = {k.arg: k.value for k in n.keywords}
+                if f in TORCH_OPTIM and torch:
+                    wd = kws.get("weight_decay")
+                    if wd is not None and not (isinstance(wd, ast.Constant) and not wd.value):
+                        out.append((at(n, ast_patch.kwset_op("weight_decay", "0")),
+                                    f"{rel}:{n.lineno}: `{ast.unparse(n)}` without its weight decay (DeepCrime RRW)",
+                                    "RRW", equiv(wd, "0")))
+                    elif wd is None:
+                        out.append((at(n, ast_patch.kwset_op("weight_decay", "5e-4")),
+                                    f"{rel}:{n.lineno}: `{ast.unparse(n)}` with weight_decay=5e-4 (DeepCrime RAW)",
+                                    "RAW", {}))
+                if f == "l2_loss":  # TensorFlow: loss += weight_decay * tf.nn.l2_loss(w)
+                    q = parents.get(id(n))
+                    node = q if isinstance(q, ast.BinOp) and isinstance(q.op, ast.Mult) else n
+                    out.append((at(node, ast_patch.set_op("0.0")),
+                                f"{rel}:{node.lineno}: `{ast.unparse(node)}` -> `0.0` (DeepCrime RRW)", "RRW",
+                                equiv(node, "0")))
+                if f in LAYER_CALL and not (isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)
+                                            and n.func.value.id == "self"):  # self.linear(x) calls a layer built
+                    ps = params.get(f)
+                    if ps is not None:
+                        pname = next((x for x, _ in ps if x in ("bias", "use_bias")), None)
+                        idx = [x for x, _ in ps].index(pname) if pname else 0
+                        default = dict(ps).get(pname)
+                        if pname is None or len(n.args) > idx:
+                            continue
+                    elif "keras" in ast.unparse(n.func) or f == "Dense":
+                        pname, default = "use_bias", None
+                    elif torch and not (f == "Linear" and len(n.args) > 2):
+                        pname, default = "bias", None
+                    else:
+                        continue
+                    cur = kws.get(pname, default)
+                    on = not (isinstance(cur, ast.Constant) and cur.value is False)
+                    out.append((at(n, ast_patch.kwset_op(pname, "False" if on else "True")),
+                                f"{rel}:{n.lineno}: `{ast.unparse(n)}` with {pname}={not on} "
+                                f"(DeepCrime {'WRB' if on else 'WAB'})", "WRB" if on else "WAB", {}))
+            if fam == "data" and isinstance(n, ast.Assign) and len(n.targets) == 1 \
+                    and isinstance(n.targets[0], ast.Name) and n.targets[0].id.lower() in TRAIN_IDX:
+                v = n.value
+                for a, b in TRD_KEEP:
+                    expr = f"(lambda _v: _v[:max(1, len(_v) * {a} // {b})])({ast.unparse(v)})"
+                    out.append((at(v, ast_patch.set_op(expr)),
+                                f"{rel}:{v.lineno}: `{n.targets[0].id}` keeps the first {a}/{b} of the training "
+                                "data (DeepCrime TRD)", "TRD", {}))
+    _DC_SITES[key] = out
+    return out
+
+
+def _reached(trees: dict, spec) -> set[str]:
+    """The repo files a run reaches: the import graph from the scripts the run command starts, not through a module
+    that is one of several alternatives in its folder when the command or a knob's default names another (a repo of
+    many models, the run naming one: SparseTSF's models/Informer.py, and the layers only it imports, never run).
+    Every file when the command starts no script of the repo."""
+    import ast
+    import re
+
+    cmd = spec.run.command
+    scripts = set(re.findall(r"([\w.-]+)\.py\b", cmd))  # the scripts the command starts (python -u x.py too)
+    entries = [r for r in trees if r.rsplit("/", 1)[-1][:-3] in scripts]
+    # a value the command passes (--model SparseTSF) or a knob's default, never a flag's name (--model: gae/model.py)
+    named = set(re.findall(r"--?[\w-]+[ =]['\"]?([A-Za-z_]\w{2,})", cmd)) | {str(k.default) for k in spec.knobs.values()}
+    by_dir: dict[str, list[str]] = {}
+    for rel in trees:
+        d, _, f = rel.rpartition("/")
+        if f != "__init__.py":
+            by_dir.setdefault(d, []).append(rel)
+    skip = set()
+    for d, rels in by_dir.items():
+        chosen = [r for r in rels if r.rsplit("/", 1)[-1][:-3] in named]
+        if len(rels) >= 3 and chosen:
+            skip |= set(rels) - set(chosen)
+
+    def edges(rel, tree):
+        d = rel.rpartition("/")[0]
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom):
+                up = d.split("/")[:len(d.split("/")) - (n.level - 1)] if n.level and d else []
+                bases = ["/".join(up)] if n.level else ["", d]
+                mod = (n.module or "").replace(".", "/")
+                for b in bases:
+                    stem = "/".join(x for x in (b, mod) if x)
+                    yield from (f"{stem}.py", f"{stem}/__init__.py")
+                    yield from (f"{stem}/{a.name}.py" for a in n.names)
+            elif isinstance(n, ast.Import):
+                for a in n.names:
+                    for b in ("", d):
+                        stem = "/".join(x for x in (b, a.name.replace(".", "/")) if x)
+                        yield from (f"{stem}.py", f"{stem}/__init__.py")
+
+    todo = list(entries)
+    if not todo:
+        return set(trees)
+    seen = set(todo)
+    while todo:
+        rel = todo.pop()
+        for e in edges(rel, trees[rel]):
+            if e in trees and e not in seen and e not in skip:
+                seen.add(e)
+                todo.append(e)
+    return seen
+
+
+def unplantable(fam: str, spec, root: Path, flags, lits, spec_p: Path) -> str | None:
+    """Plan F10: why a family can't be planted on this case (None: it can be drawn). Printed once per case, so a
+    family missing from a batch has its reason in the log."""
+    from gapfinder import env_year
+
+    base = fam.split("+")[0]
+    r = random.Random(0)
+    if base == "setting":
+        return None if flags or lits else "no flag or named literal to change"
+    if base == "scale":
+        return None if plant.draw_scale(r, flags) else "no numeric flag whose values stay valid at x2, x0.5 or x0.01"
+    if base == "code":
+        return None if (plant.draw_code(r, root, spec) or deepcrime_sites("code", root, spec)) else \
+            "no mutant or DeepCrime site (optimizer, layer, l2 loss) the patch hook reaches"
+    if base == "data":
+        return None if (draw_data(r, root, spec) or deepcrime_sites("data", root, spec)) else \
+            "no data-pipeline site (split fraction, filter threshold, loader switch, normalisation fit, training " \
+            "indices) the patch hook reaches"
+    if base == "outside":
+        return None if draw_outside(r, root, spec) else "no string choice (activation, reduction, optimizer) to swap"
+    if base == "era":
+        if env_year.ERA_KNOB in spec.knobs:
+            return None
+        h = spec_p.parent / "HARNESS.md"
+        why = next((ln.strip(" -*") for ln in (h.read_text(encoding="utf-8").splitlines() if h.exists() else [])
+                    if "no paper-era code knob" in ln), "")
+        return why or "the harness has no paper-era code knob"
+    if base == "library":
+        pins = (spec.library or {}).get("pins") or {}
+        kn = spec.knobs.get(env_year.KNOB)
+        if not pins:
+            return "the harness pins no package release from the paper's time"
+        return None if kn and [c for c in kn.choices if c != "0"] else "no paper-era release installs"
+    if base == "reporting":
+        return None if any(m.endswith("__x_best") for m in spec.metrics) else "the run prints no per-epoch values"
+    return None
+
+
 def draw_outside(rng: random.Random, root: Path, spec) -> tuple[str, str, str] | None:
     """A string choice in the code swapped for another of its kind (no GapFinder family changes strings)."""
     import ast
@@ -231,12 +424,16 @@ def draw_family(fam: str, rng, spec, root, flags, lits):
         d0 = spec.knobs[k].default
         return ("scale", k, plant._fmt_c(plant._num(d0) * factor, d0), f"{k}: the paper's v is the code's {factor:g} x v",
                 {"factor": factor})
-    if fam == "code":
-        c = draw_code_only(rng, root, spec)
-        return None if c is None else ("code", c[1], "1", c[2], {})
-    if fam == "data":
-        c = draw_data(rng, root, spec)
-        return None if c is None else ("data", c[1], "1", c[2], {})
+    if fam in ("code", "data"):  # half from DeepCrime's operators where the code has their sites (plan F10)
+        dc = deepcrime_sites(fam, root, spec)
+        c = None if dc and rng.random() < 0.5 else draw_code_only(rng, root, spec) if fam == "code" \
+            else draw_data(rng, root, spec)
+        if c is not None:
+            return (fam, c[1], "1", c[2], {})
+        if not dc:
+            return None
+        k, desc, op, eq = rng.choice(dc)
+        return (fam, k, "1", desc, {"source": "deepcrime", "op": op, "equiv": eq})
     if fam == "outside":
         c = draw_outside(rng, root, spec)
         return None if c is None else ("outside", c[1], "1", c[2], {})
@@ -296,6 +493,31 @@ def _infra(runs) -> bool:
 def _band_ok(level: int, moved: float) -> bool:
     lv = LEVELS[level]
     return moved >= lv["min_sd"] and (lv.get("max_sd") is None or moved < lv["max_sd"])
+
+
+def _sweep_knob(rng: random.Random, flags) -> tuple[str, str] | None:
+    """(knob, default) of a numeric flag with two valid sweep values, for a single-claim case's paper sweep."""
+    pool = [(k, kn.default) for k, kn in flags if plant._num(kn.default) and not kn.choices
+            and plant._bool(kn.default) is None
+            and len(plant.scale_values(plant._num(kn.default), 1.0, plant._is_int(kn.default))) == 2]
+    return rng.choice(pool) if pool else None
+
+
+async def _sweep(orch, changes: dict, main: dict, k: str, d0: str, factor: float, tag: str, repeats: int,
+                 best: bool = False) -> list[dict]:
+    """The paper's numbers at two more values u of knob k (held-out claims at k=u, in the paper's units), run at
+    factor x u in the code's, with the task's changes (each run's best epoch for a reporting task)."""
+    m, out = main["metric"], []
+    for u in plant.scale_values(plant._num(d0), factor, plant._is_int(d0)):
+        pv = plant._fmt_c(u, d0)
+        pr = await orch.fanout([{**changes, k: plant._fmt_c(u * factor, d0)}] * repeats,
+                               [f"{tag}-{pv}-{j}" for j in range(repeats)])
+        mk = f"{m}__x_best" if best else m
+        pg = [b.parsed_metrics for b in pr if b.status == "succeeded" and mk in b.parsed_metrics]
+        if len(pg) >= 2:
+            out.append({**main, "claim_id": f"{main['claim_id']}@{k}={pv}", "held_out": True, "at": {k: pv},
+                        "paper_value": round(statistics.mean(x[mk] for x in pg), 4)})
+    return out
 
 
 def _made(level: int, name: str, seed: int) -> int:
@@ -365,6 +587,18 @@ async def _make_case(level, name, per_case, seed, repeats, tries, concurrency, c
     m = main["metric"]
     flags, lits = plant.candidates(spec, root)
     rng = random.Random(f"curriculum:{level}:{name}:{seed}")
+    fams = [f for f in lv["families"] if (f.split("+")[0] in HARNESS_FAMILIES) == (rebuilt(name) is not None)]
+    for f in list(fams):
+        if why := unplantable(f, spec, root, flags, lits, spec_p):
+            print(f"{name}: family {f} can't be planted: {why}", flush=True)
+            fams.remove(f)
+    if not fams:
+        print(f"{name}: no family of level {level} applies", flush=True)
+        return
+    # plan F10: a case with one reported number can't tell causes that move it alike apart (E4), so each of its
+    # tasks, controls too, also reports the number at two values of a flag (the paper's sweep, as papers report
+    # sensitivity to a setting): the scale family's sweep is its own
+    single = len(targets) == 1
     orch = Orchestrator(make_backend("contree"), spec, EventLog(WORK / f"L{level}-{name}-s{seed}.jsonl"),
                         concurrency=concurrency)
     base = await orch.fanout([{}] * 6, [f"base-{i}" for i in range(6)])
@@ -396,7 +630,7 @@ async def _make_case(level, name, per_case, seed, repeats, tries, concurrency, c
             a = json.loads(f.read_text(encoding="utf-8"))
             if a.get("parts"):
                 measured.add(tuple(sorted((q["family"], q["knob"], q["value"]) for q in a["parts"])))
-    i, lost = 0, 0
+    i, lost, tried = 0, 0, {}
     while i < tries * per_case * len(bank) and lost < 20:
         i += 1
         open_ = [lv_ for lv_ in bank if need[lv_] > 0]
@@ -414,18 +648,20 @@ async def _make_case(level, name, per_case, seed, repeats, tries, concurrency, c
                 continue
             if len(got) < 2:
                 continue
-            _write(tag, name, lc, plant._paper(targets, got), {"kind": "control", "parts": []})
+            sw = _sweep_knob(rng, flags) if single else None
+            extra = await _sweep(orch, {}, main, sw[0], sw[1], 1.0, tag, repeats) if sw else []
+            _write(tag, name, lc, plant._paper(targets, got) + extra, {"kind": "control", "parts": []})
             need[lc] -= 1
             quota -= 1
             print(f"  {name} draw {i}: kept as {tag}", flush=True)  # the log never says what a task is
             continue
-        fams = [f for f in lv["families"] if (f.split("+")[0] in HARNESS_FAMILIES) == (rebuilt(name) is not None)]
-        if not fams:
-            print(f"{name}: no family of level {level} applies", flush=True)
-            break
         if lv["causes"] == 2:
             f1 = rng.choice(fams)
-            f2 = f1 if lv.get("same") else rng.choice([f for f in fams if f != f1])
+            others = [f for f in fams if f != f1]
+            if not lv.get("same") and not others:
+                print(f"{name}: one family applies; level {level} needs two", flush=True)
+                break
+            f2 = f1 if lv.get("same") else rng.choice(others)
             picks = [f1, f2]
         else:
             picks = rng.choice(fams).split("+")
@@ -469,6 +705,7 @@ async def _make_case(level, name, per_case, seed, repeats, tries, concurrency, c
         mu = statistics.mean(x[m] for x in got)
         pooled = math.sqrt((sd0 ** 2 + statistics.stdev([x[m] for x in got]) ** 2) / 2) or 1e-12
         moved = abs(mu - mu0) / pooled
+        tried.setdefault("+".join(q[0] for q in parts), []).append(moved)
         fits = [lv_ for lv_ in open_ if _band_ok(lv_, moved)] if abs(mu - mu0) > 0.005 * abs(mu0) else []
         if fits and len(parts) == 2:  # each cause must matter alone, and both are needed
             for fam, k, v, desc, extra in parts:
@@ -486,15 +723,11 @@ async def _make_case(level, name, per_case, seed, repeats, tries, concurrency, c
         extra_targets = []
         for fam, k, v, desc, extra in parts:
             if fam == "scale":  # the paper's sweep in its own units, run in the code's
-                d0 = spec.knobs[k].default
-                for u in plant.scale_values(plant._num(d0), extra["factor"], plant._is_int(d0)):
-                    pv = plant._fmt_c(u, d0)
-                    pr = await orch.fanout([{**changes, k: plant._fmt_c(u * extra["factor"], d0)}] * repeats,
-                                           [f"{tag}-{pv}-{j}" for j in range(repeats)])
-                    pg = [b.parsed_metrics for b in pr if b.status == "succeeded" and m in b.parsed_metrics]
-                    if len(pg) >= 2:
-                        extra_targets.append({**main, "claim_id": f"{main['claim_id']}@{k}={pv}", "held_out": True,
-                                              "at": {k: pv}, "paper_value": round(statistics.mean(x[m] for x in pg), 4)})
+                extra_targets += await _sweep(orch, changes, main, k, spec.knobs[k].default, extra["factor"], tag,
+                                              repeats)
+        if single and not extra_targets and (sw := _sweep_knob(rng, flags)):
+            extra_targets += await _sweep(orch, changes, main, sw[0], sw[1], 1.0, tag, repeats,
+                                          best=any(q[0] == "reporting" for q in parts))
         kind = "+".join(q[0] for q in parts)
         _write(tag, name, lk, plant._paper(targets, got) + extra_targets,
                {"kind": kind, "moved_sd": round(moved, 2),
@@ -505,6 +738,13 @@ async def _make_case(level, name, per_case, seed, repeats, tries, concurrency, c
     if left:
         print(f"{name}: short of tasks after {i} draws ({lost} lost to the infrastructure): "
               + ", ".join(f"L{k} {v}" for k, v in left.items()), flush=True)
+    # plan F10: a family whose draws never reach a level's band can't be planted on this case either: its draws
+    # change the numbers too little (E7)
+    low = min(LEVELS[lv_]["min_sd"] for lv_ in bank)
+    for f, ms in sorted(tried.items()):
+        if max(ms) < low:
+            print(f"{name}: family {f} can't be planted: {len(ms)} draws measured, none moved {m} {low:g} sd "
+                  f"(largest {max(ms):.1f})", flush=True)
 
 
 def _write(tag: str, case: str, level: int, targets: list[dict], answer: dict) -> None:
@@ -624,6 +864,8 @@ def _part_found(p: dict, res: dict) -> bool:
         return v == "all" or bool(set(p["value"].split(",")) & set(v.split(",")))
     if fam in ("code", "data"):
         site = p["desc"].split(": ", 1)[0]
+        if any(plant._same(str(changes.get(k, "")), v) for k, v in (p.get("equiv") or {}).items()):
+            return True  # a DeepCrime edit found as the setting it amounts to (weight_decay=0 for RRW)
         return p["knob"] in changes or bool(site and site in notes and "code change" in notes)
     if any(plant._knob_matches(k, p["knob"]) and (plant._same(v, p["value"]) or
                                                    any(plant._same(s, p["value"]) for s in sets.get(k, [])))

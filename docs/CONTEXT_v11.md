@@ -359,17 +359,36 @@ new test round: planted seed 4 (fresh), the frozen c1 against the new frozen ver
 
 | ID | Fix | For | Published basis | Status |
 |---|---|---|---|---|
-| F1 | Rank mutation sites by a backward slice from the line that prints the metric, not by function names | E2 | thin slicing; mutation-based fault localisation (MUSE, Metallaxis) | todo |
-| F2 | Literal leads early: the patch round's top leads (at most 3 x 6 runs) run as soon as screening shows no single setting closes the gap | E1 | value of information in sequential diagnosis (GDE, de Kleer & Williams 1987) | todo |
-| F3 | Value interval for the answer's knob (a level-set search, about 6-10 runs, after the answer is chosen; the answer stays); all choices of a categorical knob that moves the target | E3 | level-set estimation (Gotovos et al. 2013); probabilistic bisection (Frazier, Henderson & Waeber 2019) | todo |
-| F4 | Sequential testing on paired seeds: the j-th repeat of every configuration uses the same seed; repeats added while a gap is between 1 and 3 MDE, under an anytime-valid test; the same test cuts slow screening runs (replacing the fixed 2-band rule) | E6, D7.7 | common random numbers; anytime-valid t-tests (Wang & Ramdas); SPRT (Wald 1945) | todo |
-| F5 | Paper-era code for repositories that start after the paper (the first commits, the code as first published), and HARNESS.md says why a knob is missing | E7 | time-travel environments (mining software repositories) | todo |
-| F6 | Large arrays memory-mapped (copy-on-write) by the runtime shim | harness | zero-copy mmap | todo |
-| F7 | Group screening of mutation sites: small compatible groups in one run, split when they move every claim toward the paper | E2 | sequential bifurcation (Bettonvil & Kleijnen 1997); ProbDD (FSE'21) | todo |
-| F8 | One scheduler across cause classes: each batch to the class with the highest posterior x detection gain / cost; failed screens lower a class's posterior | E1 | Bayesian search theory (Koopman, Stone); cost-aware active hypothesis testing (Vershinin et al. 2025) | todo |
-| F9 | Ties: bind every metric the target run prints and the other reported cells as claims; when no reported condition separates the tied set, the report says "not identifiable from the paper's numbers"; paper priors from MDL codelengths (a weight, never a veto) | E4 | practical identifiability (profile likelihood, Liu, Maini & Baker 2025); GLUE; MDL (Rissanen 1978) | todo |
-| F10 | Curriculum: multi-claim tasks for settings; DeepCrime's real-fault operators for code and data; dev containers where reporting and library drift matter (SDCN, BOND); a reason when a family can't be planted | E4, E7 | DeepCrime (ISSTA'21); gDefects4DL (ICSE'22) | todo |
-| F11 | Cheaper ledgers: the paper sliced to the target table, setup and appendix tables, adopted only if the recall harness (D3.5) shows no loss | budget | (measured, not assumed) | todo (model calls) |
+| F1 | Rank mutation sites by a backward slice from the line that prints the metric, not by function names | E2 | thin slicing; mutation-based fault localisation (MUSE, Metallaxis) | done: mutation.py output slice (toy: test_mutation_output_slice) |
+| F2 | Literal leads early: the patch round's top leads (at most 3 x 6 runs) run as soon as screening shows no single setting closes the gap | E1 | value of information in sequential diagnosis (GDE, de Kleer & Williams 1987) | done: `early_code_screen`, on (toy: test_early_code_screen) |
+| F3 | Value interval for the answer's knob (a level-set search, about 6-10 runs, after the answer is chosen; the answer stays); all choices of a categorical knob that moves the target | E3 | level-set estimation (Gotovos et al. 2013); probabilistic bisection (Frazier, Henderson & Waeber 2019) | done: `value_interval`, on; the scorer takes a planted value inside the interval (toy: test_value_interval) |
+| F4 | Sequential testing on paired seeds: the j-th repeat of every configuration uses the same seed; repeats added while a gap is between 1 and 3 MDE, under an anytime-valid test; the same test cuts slow screening runs (replacing the fixed 2-band rule) | E6, D7.7 | common random numbers; anytime-valid t-tests (Wang & Ramdas); SPRT (Wald 1945) | built, **off**: on its toy (16 noise draws per variant) pairing found the planted value 11 times against 13, and once labelled a wrong answer confidently; adaptive repeats 12 against 13 |
+| F5 | Paper-era code for repositories that start after the paper (the first commits, the code as first published), and HARNESS.md says why a knob is missing | E7 | time-travel environments (mining software repositories) | done: env_year.paper_era_commit, "before" or "first" commit, HARNESS.md says why (test_paper_era) |
+| F6 | Large arrays memory-mapped (copy-on-write) by the runtime shim | harness | zero-copy mmap | done: runtime shim, arrays of 50 MB and more (test_runtime_mmap) |
+| F7 | Group screening of mutation sites: small compatible groups in one run, split when they move every claim toward the paper | E2 | sequential bifurcation (Bettonvil & Kleijnen 1997); ProbDD (FSE'21) | done: `group_screen`, on, when no single mutant fits (toy: test_group_screen) |
+| F8 | One scheduler across cause classes: each batch to the class with the highest posterior x detection gain / cost; failed screens lower a class's posterior | E1 | Bayesian search theory (Koopman, Stone); cost-aware active hypothesis testing (Vershinin et al. 2025) | done: `class_scheduler`, on, code share at most 0.3 (toy: test_class_scheduler) |
+| F9 | Ties: bind every metric the target run prints and the other reported cells as claims; when no reported condition separates the tied set, the report says "not identifiable from the paper's numbers"; paper priors from MDL codelengths (a weight, never a veto) | E4 | practical identifiability (profile likelihood, Liu, Maini & Baker 2025); GLUE; MDL (Rissanen 1978) | done: the "not identifiable" note and `identifiable` in the report (toy: test_identifiability); MDL priors built, **off** (`mdl_prior`: no paper in the curriculum to measure it) |
+| F10 | Curriculum: multi-claim tasks for settings; DeepCrime's real-fault operators for code and data; dev containers where reporting and library drift matter (SDCN, BOND); a reason when a family can't be planted | E4, E7 | DeepCrime (ISSTA'21); gDefects4DL (ICSE'22) | done: DeepCrime RRW, RAW, WRB, WAB and TRD on the files the run reaches; single-claim cases get a two-point paper sweep on every task, controls too; a printed reason per family (test_curriculum_deepcrime). SDCN and BOND containers deferred: 40-minute runs |
+| F11 | Cheaper ledgers: the paper sliced to the target table, setup and appendix tables, adopted only if the recall harness (D3.5) shows no loss | budget | (measured, not assumed) | measured at $0, **not adopted**: over the 19 cached ledgers, input tokens are 33% of the Ultra cost (output 67%); references and related work are about 29% of the claim call's text, and that call's input is about 10% of a ledger's cost, so slicing saves about 3% (under $0.005 a ledger). Output is the cost, and the claim prompt keeps baselines and every table row on purpose |
+
+**The full suite after F1-F10 (2026-10-22)** found four regressions, each fixed at its class:
+- **F2's early code screen ran before the repo's declared alternative settings blocks.** Those blocks ran only in
+  the combine round, after the early screen and F8's hold had taken their runs, and the budget ended before a
+  fitting block was verified (`test_alternative_configs`, which failed 1 time in 3 on c1 and every time with F2).
+  The blocks are now screened with the single settings, before either decision. Its older 1-in-3 failure had a
+  second cause: after the block's early confirmation, two dozen clearly worse pairs were raced and confirmed, and
+  the budget ended before the block's bisection. Once a confirmed combination fits every claim, only candidates
+  within the likelihood tie margin of it get confirmation runs now. The test passes 6 of 6.
+- **F2 changed which rounds run.** A patch the early screen ran that fits every claim puts the claims "in space",
+  so the patch round, which adopts it, was skipped. The patch round now also runs when the joint fits hold a
+  patch (`test_op_swaps`).
+- **F9 counted target-only ties as alternatives.** The "not identifiable" note now counts only configurations
+  no worse than the answer on every held-out claim.
+- **F2's interference guard judged "off as run" with the noise floor and the model discrepancy.** A 1% gap at a
+  spread of 0.001 counted as matched. It now uses the naive runs' own spread (`test_data_pipeline`). The
+  no-cause toy that motivated the guard still comes out Unexplained.
+- Two counterfactual tests ("without X the code isn't found") now switch F8 off, so they test only their own
+  feature.
 
 **Problems with the curriculum itself:**
 - Controls first took about half the slots. Fixed: at most one in five per case, and gap tasks and controls are
