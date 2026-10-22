@@ -390,6 +390,27 @@ new test round: planted seed 4 (fresh), the frozen c1 against the new frozen ver
 - Two counterfactual tests ("without X the code isn't found") now switch F8 off, so they test only their own
   feature.
 
+**The test round on planted seed 4 (2026-10-22, `eval/results/planted_curriculum.md`).** The batch was fresh, made
+after c3 was frozen, with 13 gap tasks and 11 controls.
+- **Result:**
+  - c1 got 4 of 13 correct, with 1 confidently wrong;
+  - c3 got 6 of 13, with 0 confidently wrong;
+  - controls were 11 of 11 for both;
+  - paired, c3 is better on 2 tasks and worse on none (p = 0.5).
+- **Dev suite:** run 7000 (c3) got 48 of 69 against run 5000's 52 (p = 0.45), with 0 confidently wrong on both.
+- **Gains:**
+  - the first planted code defect found (RippleNet `np.mean` -> `np.sum`, by the mutation round);
+  - c1's confidently wrong scale answer (pygcn weight decay) answered right.
+- **Next candidates, each class-level, to be judged on seed 5:**
+  - **G1.** The scale probe's "swept claims off as run" guard uses the noise floor. On seed 4 it reported 0 of 3
+    off on clear scale gaps, so no correct scale answer kept its confident label. This is the same fix as the
+    mutation round's guard.
+  - **G2.** The "not identifiable" note counts supersets of the answer (the answer plus a knob that does nothing)
+    as alternatives.
+  - **G3.** Removed training data (DeepCrime TRD) is outside every family. It went 0 of 3, each answered with an
+    unconfident setting. The class is real (published fault taxonomies), but an operator for it would be judged on
+    the curriculum's own generator: decide with care.
+
 **Problems with the curriculum itself:**
 - Controls first took about half the slots. Fixed: at most one in five per case, and gap tasks and controls are
   scored apart.

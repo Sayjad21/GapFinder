@@ -7,6 +7,8 @@ searched for them without the paper (`--hypotheses repomap`, no model call). Bui
 - [c1, seed 2](planted_curriculum_c1_seed2.md): engine tag `planted-c1`, 14 gap tasks and 11 controls.
 - [c1, seed 3](planted_curriculum_c1_seed3.md) and [c2, seed 3](planted_curriculum_c2_seed3.md): 16 fresh gap
   tasks, made after c2 was frozen, searched by both versions.
+- [c1, seed 4](planted_curriculum_c1_seed4.md) and [c3, seed 4](planted_curriculum_c3_seed4.md): 13 fresh gap
+  tasks and 11 controls, made after c3 was frozen, searched by both versions.
 
 These are development measurements. The builder knows every family, and the generator ran on six papers
 (pygcn, FastGCN, Fair Clustering, SparseTSF, RippleNet, VGAE). They are not blind evidence.
@@ -64,6 +66,53 @@ as the answer.
   sites are taken from the data flow of the known knobs and the metric code, and `gae/layers.py:30` is on neither.
 - **Recommendation:** don't freeze c2 as the next version on this evidence. The next code-defect bottleneck is
   mutation-site coverage, and that fix would need its own fresh batch.
+
+## c3 against c1 on a fresh batch (seed 4)
+
+c3 (`planted-c3`, 96f43d9) is plan F1-F10 (docs/CONTEXT_v11.md 7.1). The main changes:
+- mutation sites ranked on the metric's output slice;
+- the code rounds' first tests run early, and a class scheduler shares the budget between settings and code;
+- value intervals for the answer's knob;
+- group screening of mutation sites;
+- a "not identifiable" note.
+
+Seed 4 adds DeepCrime's real-fault operators to the code and data families, and gives pygcn's tasks a two-point
+paper sweep.
+
+| | c1 | c3 |
+|---|---|---|
+| Level 1 (9 gap tasks) | 3 | 4 |
+| Level 2 (4 gap tasks) | 1 | 2 |
+| Scale or unit convention (6) | 3 | 4 |
+| Setting (2) | 1 | 1 |
+| Code defect (2) | 0 | 1 |
+| Data: training data cut to a half or three quarters (DeepCrime TRD, 3) | 0 | 0 |
+| Confidently wrong, gap tasks | 1 | 0 |
+| Controls (11) | 11 correct | 11 correct |
+| Dev suite (69 cause runs; c1 = run 5000, c3 = run 7000) | 52 | 48 |
+| Dev suite, confidently wrong | 0 | 0 |
+
+- **Seed 4:** c3 is better on 2 tasks and worse on none (sign test p = 0.5).
+- **Dev suite:** c3 is better on 2 tasks and worse on 5 (p = 0.45), within the ±5 that replicates of identical
+  code swing. Its largest drop, `dev-rl-schedule` (3 of 3 to 1 of 3), is a tie between two settings in the first
+  pass. None of c3's new rounds ran there.
+- **The first planted code defect found.** RippleNet's `np.mean(auc_list)` -> `np.sum(auc_list)` was found by
+  c3's mutation round (labelled Fits but unsupported). c1 found nothing.
+- **c1's one confidently wrong answer is gone.** On a pygcn weight-decay convention, c1 gave `0.00075` as a
+  paper-artifact inconsistency. c3 gave the planted `0.001`.
+- **c3 gave no confident label on any gap task. Its correct scale answers are all "Fits but unsupported".**
+  - The scale probe's guard, added with F4, reports "0 of the 3 swept claims were off as run" on clear scale gaps.
+    It judges "off as run" with the noise floor, the same mistake fixed in the mutation round's guard (96f43d9).
+  - The "not identifiable" note also counts the answer plus a knob that does nothing as an alternative.
+  - Both are defects for the next version.
+- **Training data cut (DeepCrime TRD): 0 of 3.** GapFinder has no operator that removes training data. Each answer
+  was a setting that moves the number alike, labelled Fits but unsupported, which is the right label for a cause
+  outside its families.
+- **pygcn is still missed with its paper sweep** (a learning-rate convention x0.01, and `epochs=100`). The planted
+  knob is among the configurations c3 says the claims can't tell apart.
+- **Reporting rules, paper-era code and package releases still produced only controls** on the five rebuilt
+  harnesses.
+- **The gate is not passed:** 6 of 13 gap tasks (46%) against 70%.
 
 ## Infrastructure notes
 

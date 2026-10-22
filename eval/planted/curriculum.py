@@ -739,12 +739,13 @@ async def _make_case(level, name, per_case, seed, repeats, tries, concurrency, c
         print(f"{name}: short of tasks after {i} draws ({lost} lost to the infrastructure): "
               + ", ".join(f"L{k} {v}" for k, v in left.items()), flush=True)
     # plan F10: a family whose draws never reach a level's band can't be planted on this case either: its draws
-    # change the numbers too little (E7)
+    # change the numbers too little (E7). Written to the maker's own file, not the log: which families a case's
+    # draws missed says something about its tasks
     low = min(LEVELS[lv_]["min_sd"] for lv_ in bank)
-    for f, ms in sorted(tried.items()):
-        if max(ms) < low:
-            print(f"{name}: family {f} can't be planted: {len(ms)} draws measured, none moved {m} {low:g} sd "
-                  f"(largest {max(ms):.1f})", flush=True)
+    lines = [f"family {f} can't be planted: {len(ms)} draws measured, none moved {m} {low:g} sd (largest {max(ms):.1f})"
+             for f, ms in sorted(tried.items()) if max(ms) < low]
+    if lines:
+        (WORK / f"families-L{level}-{name}-s{seed}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _write(tag: str, case: str, level: int, targets: list[dict], answer: dict) -> None:
