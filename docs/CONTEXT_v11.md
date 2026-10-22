@@ -353,6 +353,24 @@ blocker stands behind the first, the evidence column says so. Counts are of miss
 | E6 | **Below the detection limit (level 2)** | 3: FastGCN learning_rate x0.5 (Inconclusive); FastGCN learning_rate=0.005 (no answer); VGAE epochs=800 (Inconclusive) | Gaps of 3-5 sd sit near the minimum detectable effect at 3 confirmation repeats, and the MDE rule calls them Inconclusive (correct abstentions, but misses) | Adaptive repeats when a gap lies between 1 and 3 MDE, as in sequential testing (SPRT), before calling it Inconclusive | open |
 | E7 | **Families the curriculum could not plant** | Data pipeline, reporting rule, paper-era code, package release: 17 draws measured, none moved a target 3 sd. The b3a rebuild doesn't bind, and pygcn's pins don't install. | On these papers those choices barely change the numbers | Plant them where they matter: SDCN (best epoch on the labels), BOND (PyGOD drift), GraphMAE, SparseTSF (`drop_last`). Or plant synthetic versions (a shim that changes a library default). | open |
 
+**Plan of 2026-10-22: the fixes (agreed with the owner).** Each is a published method or a class seen on
+several papers. Each gets an acceptance toy that is a new instance of its class, then the full suite. Then comes a
+new test round: planted seed 4 (fresh), the frozen c1 against the new frozen version, plus the dev suite.
+
+| ID | Fix | For | Published basis | Status |
+|---|---|---|---|---|
+| F1 | Rank mutation sites by a backward slice from the line that prints the metric, not by function names | E2 | thin slicing; mutation-based fault localisation (MUSE, Metallaxis) | todo |
+| F2 | Literal leads early: the patch round's top leads (at most 3 x 6 runs) run as soon as screening shows no single setting closes the gap | E1 | value of information in sequential diagnosis (GDE, de Kleer & Williams 1987) | todo |
+| F3 | Value interval for the answer's knob (a level-set search, about 6-10 runs, after the answer is chosen; the answer stays); all choices of a categorical knob that moves the target | E3 | level-set estimation (Gotovos et al. 2013); probabilistic bisection (Frazier, Henderson & Waeber 2019) | todo |
+| F4 | Sequential testing on paired seeds: the j-th repeat of every configuration uses the same seed; repeats added while a gap is between 1 and 3 MDE, under an anytime-valid test; the same test cuts slow screening runs (replacing the fixed 2-band rule) | E6, D7.7 | common random numbers; anytime-valid t-tests (Wang & Ramdas); SPRT (Wald 1945) | todo |
+| F5 | Paper-era code for repositories that start after the paper (the first commits, the code as first published), and HARNESS.md says why a knob is missing | E7 | time-travel environments (mining software repositories) | todo |
+| F6 | Large arrays memory-mapped (copy-on-write) by the runtime shim | harness | zero-copy mmap | todo |
+| F7 | Group screening of mutation sites: small compatible groups in one run, split when they move every claim toward the paper | E2 | sequential bifurcation (Bettonvil & Kleijnen 1997); ProbDD (FSE'21) | todo |
+| F8 | One scheduler across cause classes: each batch to the class with the highest posterior x detection gain / cost; failed screens lower a class's posterior | E1 | Bayesian search theory (Koopman, Stone); cost-aware active hypothesis testing (Vershinin et al. 2025) | todo |
+| F9 | Ties: bind every metric the target run prints and the other reported cells as claims; when no reported condition separates the tied set, the report says "not identifiable from the paper's numbers"; paper priors from MDL codelengths (a weight, never a veto) | E4 | practical identifiability (profile likelihood, Liu, Maini & Baker 2025); GLUE; MDL (Rissanen 1978) | todo |
+| F10 | Curriculum: multi-claim tasks for settings; DeepCrime's real-fault operators for code and data; dev containers where reporting and library drift matter (SDCN, BOND); a reason when a family can't be planted | E4, E7 | DeepCrime (ISSTA'21); gDefects4DL (ICSE'22) | todo |
+| F11 | Cheaper ledgers: the paper sliced to the target table, setup and appendix tables, adopted only if the recall harness (D3.5) shows no loss | budget | (measured, not assumed) | todo (model calls) |
+
 **Problems with the curriculum itself:**
 - Controls first took about half the slots. Fixed: at most one in five per case, and gap tasks and controls are
   scored apart.
