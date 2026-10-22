@@ -126,8 +126,10 @@ class SearchConfig:
     # patch round one run short of the planted constant (twice) and the RippleNet and FastGCN mutation rounds never
     # run. An unsupported fit also opens the mutation round, as it does the patch round; a mutant found then is an
     # alternative code lead beside the settings answer, never in its place (an equally unsupported mutant would
-    # otherwise displace a right setting).
-    code_hold: bool = True
+    # otherwise displace a right setting). Off by default: on a fresh planted batch c2 was 7 of 16 against 4, but
+    # every gain was a setting task (code defects 0 of 3 both), and the dev suite fell 52 -> 48 of 69 (neither
+    # significant; eval/results/planted_curriculum.md). Mutation-site coverage is the code bottleneck now.
+    code_hold: bool = False
     # plans D1.3-D1.5, D7.2: when the paper-year packages (or the paper-era code) change the numbers, which package
     # (delta debugging), which release or commit (binary search) and which call site (API and source diff); at most
     # library_budget_frac of the run budget; two configurations give "the same numbers" within library_z standard
