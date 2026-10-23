@@ -1245,7 +1245,20 @@ class GapSearch:
         if self.cfg.max_runs is None or not self.cfg.escrow_frac:
             return None
         hold = 2 * self.cfg.interval_steps if self.cfg.value_interval else 0
-        return max(0, int(self.cfg.max_runs * (1 - self.cfg.escrow_frac)) - self.runs_used - self._code_hold - hold)
+        return max(0, int(self.cfg.max_runs * (1 - self.cfg.escrow_frac)) - self.runs_used - self._code_hold - hold
+                   - self._scale_hold())
+
+    def _scale_hold(self) -> int:
+        """Plan H4: runs kept out of screening and combining for the scale probe's verification when the claims
+        sweep a knob: one factor's runs at g(v) for each swept claim (the probe runs late and got the leftovers)."""
+        if not self.cfg.scale_probe:
+            return 0
+        by: dict[str, int] = {}
+        for p in self.targets:
+            if p.held_out and p.at and len(p.at) == 1:
+                k = next(iter(p.at))
+                by[k] = by.get(k, 0) + 1
+        return max(((n + 1) * self.cfg.scale_repeats for n in by.values() if n >= 2), default=0)
 
     def _per_knob_cap(self, n_open: int) -> int:
         """Values per knob: at least coverage_candidates, more when the budget spread over the open knobs
@@ -1627,6 +1640,8 @@ class GapSearch:
             scored, unjudged = [], []
             for fam, c in fams:
                 g = (lambda v, c=c: v * c) if fam == "x" else (lambda v, c=c: v + c)
+                if not self._valid_scale(knob, [g(v) for v, _, _ in sweep]):
+                    continue  # plan H1: a value the knob can't take can't be run (seed 5: 1/3 of 10, 20, 40 epochs)
                 preds = [self._interp(curve, g(v), log=logx) for v, _, _ in sweep]
                 if any(y is None for y in preds):
                     unjudged.append((fam, c, g))
@@ -1641,8 +1656,9 @@ class GapSearch:
                 self.orch.events.emit("note", msg=f"{t.claim_id}: scale probe on {knob}: best g(v) = "
                                                   f"{'%g*v' % c if fam == 'x' else 'v%+g' % c} (worst claim {worst:.1f} "
                                                   f"sigma on the measured curve; as is {max(ident):.1f})")
-                if not (worst > FIT_I or worst >= max(ident)):
-                    candidates.append((fam, c, g))
+                # plan H1: the best two the curve supports, in turn: a measured curve is noisy, and the runner-up is
+                # run when the best doesn't verify
+                candidates = [(f_, c_, g_) for w_, _, f_, c_, g_ in scored[:2] if not (w_ > FIT_I or w_ >= max(ident))]
             real = not re.fullmatch(r"[-+]?\d+", str(self.spec.knobs[knob].default).strip())
             if not candidates and real:
                 # plan G4: a factor whose g(v) lies outside the measured curve can't be judged on it, so it is run
@@ -1661,6 +1677,14 @@ class GapSearch:
                 if await self._verify_scale(t, res, knob, sweep, diff, fam, c, g):
                     break
 
+    def _valid_scale(self, knob: str, values: list[float]) -> bool:
+        """Plan H1: every value is one the knob can take: a whole number of at least 1 for an integer knob, above
+        0 for a positive one."""
+        d = str(self.spec.knobs[knob].default).strip()
+        if re.fullmatch(r"[-+]?\d+", d):
+            return all(abs(x - round(x)) < 1e-9 and round(x) >= 1 for x in values)
+        return not (_num(d) is not None and _num(d) > 0 and any(x <= 0 for x in values))
+
     async def _verify_scale(self, t: Target, res: ClaimResult, knob: str, sweep: list, diff, fam: str, c: float,
                             g) -> bool:
         """The code run at g(v) for every swept claim; the relation recorded and, when it fits every swept claim,
@@ -1672,8 +1696,15 @@ class GapSearch:
             gv = self._snap_value(g(v), self.spec.knobs[knob].default)
             cfg = {} if _same_value(gv, self.spec.knobs[knob].default) else {knob: gv}
             configs.append((claim, cfg))
+        reps = self.cfg.scale_repeats
+        if self.cfg.max_runs is not None:
+            # plan H4: when the budget can't give every swept claim its repeats, one run each (seed 5: 7 of 10 runs
+            # on VGAE, one claim with none, and a convention that fits went unverified)
+            fresh = sum(1 for _, cfg in configs if len(self.measure_ok(cfg)) < reps)
+            if self.cfg.max_runs - self.runs_used < fresh * reps:
+                reps = 1
         try:
-            await _all(*(self.measure(cfg, self.cfg.scale_repeats, f"scale {knob}") for _, cfg in configs))
+            await _all(*(self.measure(cfg, reps, f"scale {knob}") for _, cfg in configs))
         except (RunBudgetExceeded, budget.BudgetExceeded):
             pass
         preds = {}
@@ -1756,7 +1787,7 @@ class GapSearch:
         except Exception:  # noqa: BLE001 (a hint only)
             hints = {}
         ms = find_mutants(root, knobs, executed, self.scale_relations, limit=limit or self.cfg.mutation_max, hints=hints,
-                          metrics=sorted({c.metric for c in self.targets}))
+                          metrics=sorted({c.metric for c in self.targets}), head=self.cfg.mutation_keep)
         return ms, knobs
 
     async def _group_screen(self, t: Target, cands: list, g0: float) -> list:

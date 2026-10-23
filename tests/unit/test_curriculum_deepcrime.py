@@ -84,11 +84,27 @@ def test_training_data_removed_keeps_a_share(cu, tmp_path):
     spec, art = _case(tmp_path)
     sites = cu.deepcrime_sites("data", art, spec)
     assert {op for _, _, op, _ in sites} == {"TRD"} and len(sites) == 2
-    rel, line, name = ast_patch.parse(sites[0][0])
-    src = ast_patch.apply_source(DATA, line, name, "1")
-    ns = {}
-    exec(src, ns)
-    assert len(ns["load"]()) == 50
+    kept = []
+    for knob, _, _, _ in sites:  # plan H5: a spread 40% or 60%, not the engine's first half or three quarters
+        rel, line, name = ast_patch.parse(knob)
+        ns = {}
+        exec(ast_patch.apply_source(DATA, line, name, "1"), ns)
+        kept.append(ns["load"]())
+    assert sorted(len(x) for x in kept) == [40, 60]
+    assert all(x != list(range(len(x))) for x in kept)  # spread over the data, not its first rows
+
+
+def test_the_generator_draws_from_frozen_operators(cu, tmp_path):
+    """Plan H5: the planted code and data tasks come from the operators as frozen at c1, never from the engine under
+    test (seed 5: the training-subset operator added in c4 generated two of c4's own gains)."""
+    import plant
+
+    from gapfinder.search.mutation import find_mutants
+
+    spec, art = _case(tmp_path)
+    engine = {t for m in find_mutants(art, ["wd"], limit=400) for t in m.tags}
+    frozen = {t for m in plant.frozen_mutants(art, ["wd"], limit=400) for t in m.tags}
+    assert "training subset" in engine and "training subset" not in frozen
 
 
 def test_a_family_that_cant_be_planted_says_why(cu, tmp_path):

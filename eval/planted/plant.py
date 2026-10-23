@@ -173,12 +173,29 @@ def draw_scale(rng: random.Random, flags) -> tuple[str, str, float] | None:
     return "scale", k, c
 
 
+_FROZEN = None
+
+
+def frozen_mutants(root: Path, knobs: list[str], limit: int = 400):
+    """Plan H5: the mutants of GapFinder's operators as frozen at tag planted-c1 (eval/planted/operators_c1.py), so a
+    planted code or data task never comes from the engine under test."""
+    global _FROZEN
+    if _FROZEN is None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("operators_c1", Path(__file__).resolve().parent / "operators_c1.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["operators_c1"] = mod  # its dataclasses look their module up while it loads
+        spec.loader.exec_module(mod)
+        _FROZEN = mod
+    return _FROZEN.find_mutants(root, knobs, limit=limit)
+
+
 def draw_code(rng: random.Random, root: Path, spec) -> tuple[str, str, str] | None:
     """(kind, mutant knob, its description): one mutant the patch hook reaches, from the mutation operators."""
     from gapfinder.sandbox import ast_patch
-    from gapfinder.search.mutation import find_mutants
 
-    ms = [m for m in find_mutants(root, [k for k in spec.knobs if not k.startswith("@")], limit=400)
+    ms = [m for m in frozen_mutants(root, [k for k in spec.knobs if not k.startswith("@")], limit=400)
           if not (ast_patch.entry_script(root / m.file) and not ast_patch.direct_entry(spec.run.command, m.file))
           and not m.op.startswith(("xmul10", "xdiv10", "mul10", "div10"))]
     if not ms:

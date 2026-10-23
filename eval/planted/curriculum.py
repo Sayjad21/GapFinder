@@ -141,9 +141,8 @@ def load_case(name: str):
 
 def draw_data(rng: random.Random, root: Path, spec) -> tuple[str, str, str] | None:
     from gapfinder.sandbox import ast_patch
-    from gapfinder.search.mutation import find_mutants
 
-    ms = [m for m in find_mutants(root, [k for k in spec.knobs if not k.startswith("@")], limit=400)
+    ms = [m for m in plant.frozen_mutants(root, [k for k in spec.knobs if not k.startswith("@")], limit=400)
           if "data pipeline" in m.tags
           and not (ast_patch.entry_script(root / m.file) and not ast_patch.direct_entry(spec.run.command, m.file))]
     if not ms:
@@ -172,7 +171,9 @@ TORCH_OPTIM = {"Adam", "AdamW", "SGD", "Adagrad", "RMSprop", "Adadelta", "Adamax
 LAYER_CALL = ("Linear", "Dense", "Conv1d", "Conv2d", "Conv3d", "Conv", "GraphConvolution", "GraphConv", "GCNConv",
               "SAGEConv", "GATConv", "ChebConv", "Bilinear")
 TRAIN_IDX = ("idx_train", "train_idx", "train_index", "train_indices", "train_ids", "train_nodes", "train_edges")
-TRD_KEEP = ((1, 2), (3, 4))  # the share of the training data kept
+# the share of the training data kept, spread over it (every i with 7i mod 10 below k): not the first half or three
+# quarters, which is the engine's own operator since c4 (plan H5: the engine must find the class, not its expression)
+TRD_KEEP = (4, 6)
 _DC_SITES: dict[tuple[str, str], list] = {}
 
 
@@ -255,11 +256,13 @@ def deepcrime_sites(fam: str, root: Path, spec) -> list[tuple[str, str, str, dic
             if fam == "data" and isinstance(n, ast.Assign) and len(n.targets) == 1 \
                     and isinstance(n.targets[0], ast.Name) and n.targets[0].id.lower() in TRAIN_IDX:
                 v = n.value
-                for a, b in TRD_KEEP:
-                    expr = f"(lambda _v: _v[:max(1, len(_v) * {a} // {b})])({ast.unparse(v)})"
+                for k in TRD_KEEP:
+                    keep = f"[i for i in range(len(_v)) if (i * 7) % 10 < {k}]"
+                    expr = (f"(lambda _v: _v[__import__('numpy').array({keep})] if hasattr(_v, 'shape') "
+                            f"else [_v[i] for i in {keep}])({ast.unparse(v)})")
                     out.append((at(v, ast_patch.set_op(expr)),
-                                f"{rel}:{v.lineno}: `{n.targets[0].id}` keeps the first {a}/{b} of the training "
-                                "data (DeepCrime TRD)", "TRD", {}))
+                                f"{rel}:{v.lineno}: `{n.targets[0].id}` keeps {k}0% of the training data, spread "
+                                "over it (DeepCrime TRD)", "TRD", {}))
     _DC_SITES[key] = out
     return out
 

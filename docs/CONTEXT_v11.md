@@ -442,15 +442,24 @@ Not adopted from that review:
   - On the other 10 tasks c4 got 2 against c3's 4.
 - **Next (c5), each class-level and judged on seed 6:**
   - **H1.** The scale probe's candidates for an integer knob are the factors that map every swept value to an
-    integer (seed 5: 1/3 on epochs, never runnable).
+    integer (seed 5: 1/3 on epochs, never runnable). **Done**, and the probe now verifies the runner-up when the best
+    factor fails (toy in test_scale_probe_c4: passes, fails on c4).
   - **H2.** The first mutants by plain priority stay first (the early screen's 6, the output slice of F1);
     stratification applies only after them (seed 5: the planted `0.5 -> 1.0` displaced from the early screen).
+    **Done** (test_mutation_stratified).
   - **H3.** The proposer's edits are textual replacements within one line: the file is re-parsed with the edit,
-    and the changed expression becomes the patch (seed 5: 7 of 8 edits refused as not parsing).
+    and the changed expression becomes the patch (seed 5: 7 of 8 edits refused as not parsing). **Done**: the
+    smallest changed subtree is the patch; a statement and a fragment of a multi-line call are grounded
+    (test_proposer).
   - **H4.** The scale probe's verification runs are reserved once it chooses a factor. The probe runs late and got
-    7 of 10 runs on VGAE, so a verified convention lost its label.
+    7 of 10 runs on VGAE, so a verified convention lost its label. **Done**: a hold for one factor's runs when the
+    claims sweep a knob, and one run per claim when the budget can't give the repeats (toy in test_scale_probe_c4:
+    passes, fails on c4).
   - **H5, curriculum.** Code and data tasks are drawn from a frozen operator set (c1's operators plus DeepCrime's),
-    never from the engine under test, so a new operator is not judged on faults it generated itself.
+    never from the engine under test, so a new operator is not judged on faults it generated itself. **Done**:
+    eval/planted/operators_c1.py (the module at tag planted-c1). Also, the DeepCrime data cut now keeps a spread 40%
+    or 60% of the training data, not the first half or three quarters, which is the engine's own operator since c4
+    (test_curriculum_deepcrime).
 
 **Problems with the curriculum itself:**
 - Controls first took about half the slots. Fixed: at most one in five per case, and gap tasks and controls are

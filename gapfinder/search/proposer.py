@@ -8,8 +8,10 @@ numbers. To keep the call small and the model's job concrete:
 - the code is the executed lines only (from the runtime trace), or the files the claims' metric is computed in;
 - the numbers come with their ratios computed here, and each ratio near an integer the run used (a batch count, a
   size, 2, 10, 100) is pointed out: a sum where a mean was meant shows up as a ratio equal to a count;
-- each edit replaces one expression on one line, copied exactly, and an edit that writes one of the paper's numbers
-  into the code is refused (it would explain nothing).
+- each edit is a replacement of text within one line (plan H3: the model writes statements and pieces of
+  multi-line expressions, so `old` is any text on that line, not a whole expression); the file is parsed with the
+  edit, the one expression that changed becomes the patch, and an edit that writes one of the paper's numbers into
+  the code is refused (it would explain nothing).
 The proposer is never the evidence: the runs are, and its fits get the mutation round's guards and label.
 """
 
@@ -35,9 +37,9 @@ operation, a constant, a data split, a reduction, a unit.
 ## The code the run executed (file:line: source)
 {code}
 
-Propose at most 3 edits, the likeliest first. Each edit replaces one expression on one line:
-- `file` and `line` from the listing above; `old`: the expression, copied exactly from that line; `new`: the
-  Python expression to put in its place;
+Propose at most 3 edits, the likeliest first. Each edit replaces text within one line:
+- `file` and `line` from the listing above; `old`: text copied exactly from that line; `new`: the text to put in
+  its place, so that the line still parses and one expression on it changes;
 - prefer one edit that explains every number at once. A ratio equal to a count the run used suggests a sum where
   a mean was meant (or the reverse); a factor of 2, 10 or 100 suggests a unit or a counting convention; numbers
   that all move the same way suggest the data or the evaluation;
@@ -97,8 +99,9 @@ def code_listing(root: Path, executed: dict[str, list[int]], files: list[str], m
 
 def ground(edits: list[Edit], root: Path, paper_values: list[float]) -> tuple[list[tuple[str, str]], list[str]]:
     """([(patch knob, description)], [why each other edit was refused]). An edit is kept when its file and line
-    exist, `old` is an expression on that line, `new` parses as an expression, and `new` writes none of the paper's
-    numbers."""
+    exist, `old` is text on that line, the file parses with `old` replaced by `new` there, the change is one
+    expression (plan H3: the smallest subtree that differs between the two parses), and `new` writes none of the
+    paper's numbers. At most 3 edits are read."""
     from gapfinder.sandbox import ast_patch
     from gapfinder.search.mutation import _number
 
@@ -110,27 +113,55 @@ def ground(edits: list[Edit], root: Path, paper_values: list[float]) -> tuple[li
             refused.append(f"{e.file}: no such file")
             continue
         src = p.read_text(encoding="utf-8", errors="replace")
-        try:
-            tree = ast.parse(src)
-            ast.parse(e.new, mode="eval")
-        except SyntaxError:
-            refused.append(f"{rel}:{e.line}: `{e.new}` doesn't parse")
+        lines = src.splitlines(keepends=True)
+        if not 1 <= e.line <= len(lines) or e.old not in lines[e.line - 1]:
+            refused.append(f"{rel}:{e.line}: `{e.old}` is not on that line")
             continue
         nums = [float(x) for x in re.findall(r"-?\d+\.?\d*(?:e-?\d+)?", e.new)]
         if any(abs(x - v) <= 1e-6 * max(1.0, abs(v)) for x in nums for v in paper_values if abs(v) >= 1e-9):
             refused.append(f"{rel}:{e.line}: `{e.new}` writes a reported number into the code")
             continue
-        want = re.sub(r"\s+", "", e.old)
-        nodes = [n for n in ast.walk(tree) if isinstance(n, ast.expr) and getattr(n, "lineno", None) == e.line
-                 and re.sub(r"\s+", "", ast.get_source_segment(src, n) or "") == want]
-        if not nodes:
-            refused.append(f"{rel}:{e.line}: `{e.old}` is not an expression on that line")
+        edited = "".join(lines[: e.line - 1] + [lines[e.line - 1].replace(e.old, e.new, 1)] + lines[e.line:])
+        try:
+            before, after = ast.parse(src), ast.parse(edited)
+        except SyntaxError:
+            refused.append(f"{rel}:{e.line}: the file doesn't parse with `{e.new}`")
             continue
-        n = max(nodes, key=lambda x: len(ast.get_source_segment(src, x) or ""))  # the outermost match
-        kind = "num" if _number(n) is not None else type(n).__name__  # "num" matches on every Python version
-        knob = f"{ast_patch.PREFIX}{rel}:{n.lineno}:@mut.{n.col_offset}.{kind}.{ast_patch.set_op(e.new)}"
-        kept.append((knob, f"{rel}:{n.lineno}: `{e.old}` -> `{e.new}`" + (f" ({e.why})" if e.why else "")))
+        node, new = _changed(before, after)
+        if node is None or not isinstance(node, ast.expr) or getattr(node, "lineno", None) != e.line:
+            refused.append(f"{rel}:{e.line}: `{e.old}` -> `{e.new}` changes no single expression on that line")
+            continue
+        text = ast.unparse(new)
+        kind = "num" if _number(node) is not None else type(node).__name__  # "num" matches on every Python version
+        knob = f"{ast_patch.PREFIX}{rel}:{node.lineno}:@mut.{node.col_offset}.{kind}.{ast_patch.set_op(text)}"
+        kept.append((knob, f"{rel}:{node.lineno}: `{ast.unparse(node)}` -> `{text}`" + (f" ({e.why})" if e.why else "")))
     return kept, refused
+
+
+def _changed(a: ast.AST, b: ast.AST) -> tuple[ast.AST | None, ast.AST | None]:
+    """The smallest subtree of `a` that differs from its counterpart in `b`, and that counterpart: where one child
+    differs, descend into it; where the node itself or more than one child differs, the node. (None, None) when
+    the trees are the same (positions are not compared)."""
+    if ast.dump(a) == ast.dump(b):
+        return None, None
+    if type(a) is not type(b):
+        return a, b
+    diffs = []
+    for f in a._fields:
+        x, y = getattr(a, f, None), getattr(b, f, None)
+        if isinstance(x, list) and isinstance(y, list):
+            if len(x) != len(y):
+                return a, b
+            diffs += [(u, v) for u, v in zip(x, y) if ast.dump(u) != ast.dump(v)] if all(
+                isinstance(u, ast.AST) for u in x + y) else ([(a, b)] if x != y else [])
+        elif isinstance(x, ast.AST) and isinstance(y, ast.AST):
+            if ast.dump(x) != ast.dump(y):
+                diffs.append((x, y))
+        elif x != y:
+            return a, b
+    if len(diffs) != 1 or diffs[0][0] is a:
+        return a, b
+    return _changed(*diffs[0])
 
 
 async def propose(router, claims: list[str], ints: dict[str, int], code: str) -> list[Edit]:

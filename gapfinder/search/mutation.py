@@ -441,12 +441,14 @@ def _data_mutants(rel: str, tree: ast.Module, add, parents, hints: set[int]) -> 
 
 def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[int]] | None = None,
                  relations: list[dict] | None = None, files: list[Path] | None = None, limit: int = 40,
-                 hints: dict[str, set[int]] | None = None, metrics: list[str] | None = None) -> list[Mutant]:
+                 hints: dict[str, set[int]] | None = None, metrics: list[str] | None = None,
+                 head: int = 6) -> list[Mutant]:
     """Candidate mutants, best first. `knobs`: the knobs the claims depend on (their slices are searched).
     `executed`: repo file -> executed lines (from the runtime trace). `relations`: verified scale relations
     ({"knob", "family", "c"}): their factor's operators on that knob's slice come first. `hints`: repo file ->
     lines a static check flagged (their data-pipeline mutants come first). `metrics`: the claims' metric names; the
-    statements that compute what is printed under them get a bonus (the output slice, plan F1)."""
+    statements that compute what is printed under them get a bonus (the output slice, plan F1). `head`: how many
+    of the first stay in plain priority order before the classes take turns (plan H2)."""
     from gapfinder.harness_auto import _import_closure
 
     root = Path(root).resolve()
@@ -602,7 +604,7 @@ def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[in
     # is the relation's origin); then by priority (the output slice's bonus cannot push them out of the first stage)
     out.sort(key=lambda m: (not any(t.startswith("implied by the verified relation") for t in m.tags), -m.priority,
                             m.dist, m.file, m.line, m.col, m.op))
-    return _stratified(out, limit)
+    return _stratified(out, limit, head)
 
 
 def _klass(m: Mutant) -> str:
@@ -615,17 +617,19 @@ def _klass(m: Mutant) -> str:
     return "loop" if "loop bound" in m.tags else "flow"
 
 
-def _stratified(ranked: list[Mutant], limit: int) -> list[Mutant]:
-    """The first `limit` mutants, taken in turn from each operator class (data pipeline, metric code, loop bounds,
-    the knobs' data flow), best first within a class, so no class's best are cut because another class has many
-    sites (operator-based mutant sampling, Zhang et al., ASE 2013). Seed 4: a training-data cut ranked 32nd of 38,
-    under 30 metric-output mutants, past the round's 24. The relation-implied operators stay first, all of them."""
+def _stratified(ranked: list[Mutant], limit: int, head: int = 6) -> list[Mutant]:
+    """The first `limit` mutants: the relation-implied operators and the first `head` by priority as ranked (the
+    early code screen's: plan H2, seed 5 lost a planted constant the plain order had among its first 6), then the
+    rest taken in turn from each operator class (data pipeline, metric code, loop bounds, the knobs' data flow),
+    best first within a class, so no class's best are cut because another class has many sites (operator-based
+    mutant sampling, Zhang et al., ASE 2013; seed 4: a training-data cut ranked 32nd of 38, past the round's 24)."""
     if len(ranked) <= limit:
         return ranked
-    first = [m for m in ranked if _klass(m) == "relation"]
+    rel = [m for m in ranked if _klass(m) == "relation"]
+    first = rel + [m for m in ranked if _klass(m) != "relation"][: max(0, head)]
     by: dict[str, list[Mutant]] = {}
     for m in ranked:
-        if _klass(m) != "relation":
+        if m not in first:
             by.setdefault(_klass(m), []).append(m)  # dicts keep insertion order: the class of the best mutant first
     out, i = first[:limit], 0
     while len(out) < limit and any(i < len(v) for v in by.values()):
