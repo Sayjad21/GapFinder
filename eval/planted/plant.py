@@ -363,7 +363,10 @@ def _hit(a: dict, res: dict, changes: dict, sets: dict) -> bool:
     """Whether the answer is the planted cause, by kind."""
     kind = a["kind"]
     if kind == "reporting":
-        return (res.get("reporting") or {}).get("rule") in ("best", "best+attarget")
+        # the planted reading, or one GapFinder reports as equally good on the claims (as a setting's planted value
+        # counts inside its set of equally good values)
+        rep = res.get("reporting") or {}
+        return bool({"best", "best+attarget"} & ({rep.get("rule")} | set(rep.get("equivalent") or [])))
     if kind == "library":
         from gapfinder import env_year
 

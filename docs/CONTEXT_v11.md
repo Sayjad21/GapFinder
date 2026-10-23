@@ -461,6 +461,25 @@ Not adopted from that review:
     or 60% of the training data, not the first half or three quarters, which is the engine's own operator since c4
     (test_curriculum_deepcrime).
 
+**The test round on planted seed 6 (2026-10-24).** The batch was fresh, made after c5 was frozen (with H5): 16 gap
+tasks and 9 controls.
+- **Result:**
+  - c3 got 5 of 16; c5 got 7, and the same 7 without the proposer;
+  - per task, c5 is better on 2 and worse on none (p = 0.5);
+  - 0 confidently wrong for both, and controls 9 of 9;
+  - c5 has 2 confident correct labels to c3's 1, and puts the cause in a credible set of at most 3 five times to
+    c3's two;
+  - dev suite, two replicates each: c1 100 and c5 99 of 138 (p = 0.75), 0 confidently wrong.
+- **c5 is adopted as the current version.** It is better or the same on a fresh batch and holds the dev suite. The
+  gain is not significant on its own.
+- **Still open:**
+  - the code proposer ran twice in the whole batch, because it triggers only when nothing fits;
+  - spread training-data cuts at 40% and 60% (1 of 4);
+  - a layer's bias (no operator);
+  - settings ties on single numbers.
+- **Scorer:** a planted reporting rule listed among the equally good readings counts as found, as with a setting's
+  equal values. Seed 6 was the first batch with a reporting task.
+
 **Problems with the curriculum itself:**
 - Controls first took about half the slots. Fixed: at most one in five per case, and gap tasks and controls are
   scored apart.

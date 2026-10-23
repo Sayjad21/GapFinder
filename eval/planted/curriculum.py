@@ -793,7 +793,8 @@ def search_one(tag: str, code: Path, max_runs: int, concurrency: int) -> int:
             time.sleep(30)
         rc = _search_once(tag, code, max_runs, concurrency)
         err = (TASKS / tag / f"search{_sfx()}.err").read_text(encoding="utf-8", errors="replace")[-4000:]
-        if rc == 0 or "InfraError" not in err:
+        # a Sandboxes operation that failed on its side (seed 6: four pygcn searches at one moment) is infrastructure
+        if rc == 0 or not any(x in err for x in ("InfraError", "FailedOperationError")):
             return rc
         shutil.copy(TASKS / tag / f"search{_sfx()}.err", TASKS / tag / f"search{_sfx()}.err.infra{attempt + 1}")
         time.sleep(120 * (attempt + 1))  # the next attempt resumes from this one's runs (_search_once)
@@ -873,7 +874,10 @@ def _part_found(p: dict, res: dict) -> bool:
     notes = " ".join(res.get("notes") or [])
     fam = p["family"]
     if fam == "reporting":
-        return (res.get("reporting") or {}).get("rule") in ("best", "best+attarget")
+        # the planted reading, or one GapFinder reports as equally good on the claims (as a setting's planted value
+        # counts inside its set of equally good values)
+        rep = res.get("reporting") or {}
+        return bool({"best", "best+attarget"} & ({rep.get("rule")} | set(rep.get("equivalent") or [])))
     if fam == "era":
         return str(changes.get(p["knob"], "0")) not in ("0", "")
     if fam == "library":

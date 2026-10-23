@@ -123,3 +123,13 @@ def test_the_scorer_takes_the_setting_a_deepcrime_edit_amounts_to(cu):
             "equiv": {"wd": "0"}}
     assert cu._part_found(part, {"changes": {"wd": "0.0"}})
     assert not cu._part_found(part, {"changes": {"wd": "0.001"}})
+
+
+def test_an_equally_good_reading_of_the_reporting_rule_is_found(cu):
+    """A planted reporting rule counts as found when GapFinder names it or lists it among the equally good readings
+    of the runs, as a planted value counts inside the set of equally good values (seed 6: `bestval` answered, the
+    planted `best` listed as equally good, scored confidently wrong)."""
+    part = {"family": "reporting", "knob": "@reporting", "value": "best", "desc": "each metric's best epoch"}
+    assert cu._part_found(part, {"reporting": {"rule": "bestval", "equivalent": ["best", "best+attarget"]}})
+    assert cu._part_found(part, {"reporting": {"rule": "best"}})
+    assert not cu._part_found(part, {"reporting": {"rule": "bestval", "equivalent": []}})

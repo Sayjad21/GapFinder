@@ -11,6 +11,8 @@ searched for them without the paper (`--hypotheses repomap`; the only model call
   tasks and 11 controls, made after c3 was frozen, searched by both versions.
 - [c3, seed 5](planted_curriculum_c3_seed5.md) and [c4, seed 5](planted_curriculum_c4_seed5.md): 14 fresh gap
   tasks and 9 controls, made after c4 was frozen, searched by both versions (c4 with the code proposer).
+- [c3, seed 6](planted_curriculum_c3_seed6.md) and [c5, seed 6](planted_curriculum_c5_seed6.md): 16 fresh gap
+  tasks and 9 controls, made after c5 was frozen, searched by both versions (c5 with the code proposer).
 
 These are development measurements. The builder knows every family, and the generator ran on six papers
 (pygcn, FastGCN, Fair Clustering, SparseTSF, RippleNet, VGAE). They are not blind evidence.
@@ -154,6 +156,50 @@ kept, so this one batch also scores c4 without it.
   whole expression. The one edit that ran didn't fit. The model calls for the whole round cost $0.024.
 - **Dev suite: no regression.** Fresh replicates of c1 and c4, run side by side, gave 48 and 50 of 69. Two
   replicates each give 100 and 96 of 138 (p = 0.39), with 0 confidently wrong.
+
+## c5 against c3 on a fresh batch (seed 6)
+
+c5 (`planted-c5`, deea98f) is c4 with plan H1-H4: valid scale factors for an integer knob, with the runner-up
+verified; the first mutants in plain priority order; line-text edits for the code proposer; and the scale probe's
+verification fitted to the budget.
+
+The batch was made with H5:
+- code and data tasks are drawn from the operators frozen at c1, never from the engine under test;
+- the DeepCrime data cut keeps a spread 40% or 60% of the training data, not the engine's first half or three
+  quarters.
+
+| | c3 | c5 | c5 without the proposer |
+|---|---|---|---|
+| Gap tasks (16) | 5 | 7 | 7 |
+| Confidently wrong | 0 | 0 | 0 |
+| Correct with a confident label | 1 | 2 | |
+| In a credible set of at most 3 | 2 | 5 | |
+| Mean reciprocal rank | 0.30 | 0.40 | |
+| Controls (9) | 9 correct | 9 correct | |
+| Dev suite, two replicates each (138 cause runs; c1 against c5) | 100 (c1) | 99 | |
+
+- **Per task, c5 is better on 2 and worse on none** (sign test p = 0.5). The gains:
+  - a DeepCrime training-data cut on VGAE (a spread 60%), found by the engine's first-half operator at the cut's site:
+    the class, not its expression;
+  - FastGCN's epochs convention (x0.5), where c3 answered a learning rate.
+- **Confidence returned where it is due.** Fair Clustering's x0.5 convention is a Paper-artifact inconsistency in
+  c5; c3 gave Fits but unsupported (G1).
+- **Dev suite:** c5's two replicates give 52 and 47 of 69, 99 of 138 against c1's 100 (p = 0.75). 0 confidently
+  wrong, and all 114 abstentions correct.
+- **The code proposer barely ran.** It runs only when nothing fits every claim, and here that happened twice. Of
+  its 2 edits, 1 was grounded and didn't fit. The model calls for the round cost $0.012. It remains unmeasured.
+- **What is still missed:**
+  - 3 of the 4 training-data cuts: the engine's 1/2 and 3/4 don't match a spread 40% or 60% within noise on
+    RippleNet and FastGCN, or 40% on VGAE;
+  - a layer bias added (DeepCrime WAB): no operator does it;
+  - 6 settings: ties on pygcn's single number, and literal split fractions off the grid (`test_ratio=0.05`,
+    `test_percent=7.5`).
+- **Fixed in the scorer, not the engine.** A planted reporting rule now counts as found when GapFinder lists it among
+  the equally good readings of the runs, as a planted value counts inside the set of equally good values. On seed 6
+  both versions answered "best validation epoch" with the planted "each metric's best epoch" listed as equally good,
+  and the old check scored that confidently wrong. This is the first batch with a reporting task.
+- **Infrastructure:** four pygcn searches failed at one moment on a Sandboxes operation error the searcher did not
+  retry. They were resumed from their runs, and that error is now retried.
 
 ## Infrastructure notes
 
