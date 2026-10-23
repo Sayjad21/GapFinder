@@ -29,7 +29,10 @@ _TRAIN = {"batch", "lr", "learning", "momentum", "decay", "l2", "lengthscale", "
           "epochs", "iter", "iters", "iterations", "steps", "warmup", "clip", "hidden", "units", "layers",
           "temperature", "eps", "epsilon", "beta1", "beta2", "gamma", "alpha", "lambda", "reg", "patience",
           "prior", "noise", "precision", "width", "depth"}
-_EVAL = {"samples", "mc", "passes", "draws", "topk", "beam", "threshold"}
+_EVAL = {"samples", "mc", "passes", "draws", "topk", "beam", "threshold",
+         # a data split's size (plan I1: `test_ratio = 0.2`, `test_percent = 30.`, `eval_ratio`: a planted cause on
+         # three papers that was a lead only when the runtime trace caught the literal)
+         "ratio", "percent", "pct", "frac", "fraction", "split", "portion", "holdout"}
 _EXACT = {"T": 1, "K": 1}  # single-letter names used for sample counts
 _EVAL_CALLS = {"predict", "evaluate", "eval", "test", "score", "sample"}
 # keyword switches that only say how to run, never what is computed (left out of the switch leads)

@@ -117,6 +117,11 @@ class SearchConfig:
     # plan G6: one Super call proposes at most 3 code edits when the deterministic rounds end with no configuration
     # that fits every claim (gapfinder/search/proposer.py); off until a fresh batch measures it
     code_proposer: bool = False
+    # plan I1: the early code screen right after the settings screen whether or not a screened setting fits every
+    # claim. Off: where a setting fits every claim, a constant screened early can only join the tie (choosing it
+    # would be a tie-break), and its toy showed no difference; seed 6's "starved" constants were not leads, or not on
+    # the patch ladder (fixed by the split vocabulary in code_checks and _lead_secants)
+    early_code_always: bool = False
     # plan D5: mutation-based localisation, when no setting fits every claim or a scale relation needs its code site;
     # at most mutation_max mutants, in three stages (one run each; the best mutation_keep at every claim's condition;
     # the best two repeated), within mutation_budget_frac of the run budget
@@ -1246,7 +1251,14 @@ class GapSearch:
             return None
         hold = 2 * self.cfg.interval_steps if self.cfg.value_interval else 0
         return max(0, int(self.cfg.max_runs * (1 - self.cfg.escrow_frac)) - self.runs_used - self._code_hold - hold
-                   - self._scale_hold())
+                   - self._scale_hold() - self._proposer_hold())
+
+    def _proposer_hold(self) -> int:
+        """Plan I2: runs kept out of screening and combining for the code proposer's edits (at most 3, each with
+        its confirmation repeats); seed 6: the proposer stopped at the budget's end on RippleNet."""
+        if not (self.cfg.code_proposer and self.router is not None and self.targets):
+            return 0
+        return 3 * self.confirm_repeats(self.targets[0])
 
     def _scale_hold(self) -> int:
         """Plan H4: runs kept out of screening and combining for the scale probe's verification when the claims
@@ -1900,6 +1912,7 @@ class GapSearch:
         if not ran:
             res.notes.append(f"mutation round: none of {len(ms)} mutants ran")
             return
+        ran += await self._fraction_steps(t, ran)
         g0 = abs(self.gap(t, {}))
 
         def target_score(m):
@@ -2607,7 +2620,8 @@ class GapSearch:
                          for c in alts))
         if self.cfg.class_scheduler:
             self._schedule_classes(t, [h.changes for h in hyps] + alts, thr)
-        if self.cfg.early_code_screen and not any(self._fits_all(t, c) for c in [h.changes for h in hyps] + alts):
+        if self.cfg.early_code_screen and (self.cfg.early_code_always or not any(
+                self._fits_all(t, c) for c in [h.changes for h in hyps] + alts)):
             await self._early_code_screen(t, res)
 
         # 2. confirm: survivors get repeats; effects that fade are pruned
@@ -3323,8 +3337,9 @@ class GapSearch:
                       (self._lead_values(x) for x in self._patch_leads(static, grounded))]
             configs = [g[i] for i in range(max((len(g) for g in groups), default=0)) for g in groups if i < len(g)]
             configs = configs[: int((self.cfg.max_runs or 10 ** 6) * self.cfg.patch_budget_frac)]
-            n_lead = len(configs)
             await _all(*(self.measure(c, 1, "patch screen (early)") for c in configs))
+            configs += await self._lead_secants(t, configs, "patch screen (early, secant)")
+            n_lead = len(configs)
         rel = [r for r in self.scale_relations if r.get("verified")]
         if self.cfg.mutations and (rel or d.kind.startswith("out_of_space") or label in (
                 ConfidenceLabel.unexplained.value, ConfidenceLabel.conflicts_held_out.value)):
@@ -3383,6 +3398,7 @@ class GapSearch:
         self.orch.events.emit("note", msg=f"{t.claim_id}: patch round: {len(leads)} code lead(s), {len(configs)} "
                                           f"configurations (base {base or 'naive'})")
         await _all(*(self.measure(c, 1, "patch screen") for c in configs))
+        configs += await self._lead_secants(t, configs, "patch screen (secant)")
 
         def rediagnose():
             runs, claims, extra = self._hm_inputs(t)
@@ -3425,6 +3441,67 @@ class GapSearch:
             f"{ast_patch.parse(k)[0]} line {ast_patch.parse(k)[1]}: {ast_patch.parse(k)[2]} = "
             f"{self.spec.knobs[k].default} -> {v}" for k, v in patches.items()))
 
+    async def _lead_secants(self, t: Target, configs: list[Changes], label: str) -> list[Changes]:
+        """Plan I1: a literal lead whose screened values bracket the paper's number gets the crossing too, one run,
+        as a setting does in the screen (secant_values: the crossing nearest the code's value). Only when none of the
+        screened configurations fits every claim, the settings secant's guard against manufactured fits (seed 6:
+        `test_ratio` 0.2 -> 0.05 and `test_percent` 30 -> 7.5 lay between the patch ladder's values)."""
+        singles = [c for c in configs if len(c) == 1]
+        y0 = self.value({}, t.metric)
+        if y0 is None or not singles or any(self._fits_all(t, c) for c in configs):
+            return []
+        extra: list[Changes] = []
+        for k in dict.fromkeys(next(iter(c)) for c in singles):
+            kn = self.spec.knobs.get(k)
+            if kn is None:
+                continue
+            pts = [(kn.default, y0)] + [(c[k], self.value(c, t.metric)) for c in singles if k in c]
+            have = [v for v, _ in pts]
+            for v in secant_values(pts, t.paper_value, None, kn.default)[:1]:
+                if not any(_same_number(v, w) or v == w for w in have) and not self.measure_ok({k: v}):
+                    extra.append({k: v})
+        if self.cfg.max_runs is not None:
+            extra = extra[: max(0, self.cfg.max_runs - self.runs_used - self.confirm_repeats(t))]
+        if extra:
+            self.orch.events.emit("note", msg=f"{t.claim_id}: {label}: the paper's number is bracketed; screening "
+                                              + ", ".join(f"{next(iter(c))}={next(iter(c.values()))}" for c in extra))
+            await _all(*(self.measure(c, 1, label) for c in extra))
+        return extra
+
+    async def _fraction_steps(self, t: Target, ran: list) -> list:
+        """Plan I3: a training-data cut that moved the target toward the paper without reaching it gives the
+        fraction to try next: the secant through the naive run (all the data) and the cut on a log scale of the
+        fraction (learning curves are near linear in log n: a straight line in the fraction itself put 40% at 30%),
+        snapped to 0.05 in [0.2, 0.95], one run (seed 6: cuts to 40% and 60% lay between the operator's 1/2 and
+        3/4). The new mutant joins the round like the others."""
+        import dataclasses
+
+        from gapfinder.sandbox import ast_patch
+        from gapfinder.sandbox.spec import Knob
+
+        v0, out, seen = self.value({}, t.metric), [], set()
+        for m in ran:
+            frac = next((re.search(r"^(.*): the first (\d+)/(\d+)$", x) for x in m.tags if ": the first " in x), None)
+            v1 = self.value({m.name: "1"}, t.metric)
+            if frac is None or v0 is None or v1 is None or abs(v1 - v0) < 1e-12:
+                continue
+            f1 = int(frac.group(2)) / int(frac.group(3))
+            f = f1 ** ((t.paper_value - v0) / (v1 - v0))  # v(f) = v0 + (v1 - v0) log f / log f1
+            k = round(f * 20)
+            if not 4 <= k <= 19 or abs(k / 20 - f1) < 1e-9 or (m.file, m.line, k) in seen:
+                continue
+            seen.add((m.file, m.line, k))
+            expr = f"(lambda _v: _v[:max(1, len(_v) * {k} // 20)])({m.before})"
+            m2 = dataclasses.replace(m, op=ast_patch.set_op(expr), after=expr,
+                                     tags=[x for x in m.tags if ": the first " not in x]
+                                     + [f"{frac.group(1)}: the first {k}/20 (the secant from {frac.group(2)}/"
+                                        f"{frac.group(3)})"])
+            self.spec.knobs.setdefault(m2.name, Knob(layer="environment", default="0", env=True, choices=["0", "1"]))
+            await self.measure({m2.name: "1"}, 1, "mutation screen (fraction)")
+            if self.measure_ok({m2.name: "1"}):
+                out.append(m2)
+        return out
+
     async def _propose_code(self, t: Target, res: ClaimResult) -> None:
         """Plan G6 (code_proposer, gapfinder/search/proposer.py): when the deterministic rounds end with no
         configuration that fits every claim, one Super call reads the executed code and the claims' ratios and
@@ -3438,9 +3515,10 @@ class GapSearch:
         kind = (res.diagnosis or {}).get("kind", "")
         label = res.attribution.confidence_label if res.attribution else ConfidenceLabel.unexplained.value
         root = self.spec.code_root()
-        if self.router is None or root is None or not (kind.startswith("out_of_space") or label in (
-                ConfidenceLabel.unexplained.value, ConfidenceLabel.inconclusive.value,
-                ConfidenceLabel.conflicts_held_out.value)):
+        # plan I2: any answer short of a confident one (seed 6: 7 of 9 misses had a coincidental unsupported fit,
+        # which kept the proposer from running)
+        confident = (ConfidenceLabel.explained.value, ConfidenceLabel.inconsistency.value)
+        if self.router is None or root is None or (label in confident and not kind.startswith("out_of_space")):
             return
         res.pre_proposer = {"changes": dict(res.changes), "label": label}
         held = [h for h in self.targets if h.held_out and not h.tuned_separately and h.metric in self.bands]
@@ -3476,6 +3554,12 @@ class GapSearch:
             await self._measure_points([cfg], "code proposer point")
             h = diff.add(self._config_hypothesis(diff, cfg, 0.05, title=f"proposed edit {desc}"))
             moved = [cid for cid, v in h.per_claim.items() if v["I"] <= FIT_I and self._off_as_run(diff, cid)]
+            if h.max_I <= FIT_I and len(moved) >= 2 and res.changes and self._fits_all(t, res.changes):
+                # the answer (a setting that fits every claim) and the edit are both unsupported: a tie, not a swap
+                self._add_equivalent(t, res, cfg, "code proposer")
+                res.notes.append(f"code proposer: {desc} fits every claim as well as the answer; the claims can't tell "
+                                 "them apart")
+                return
             if h.max_I <= FIT_I and len(moved) >= 2:
                 res.changes, res.gap_after = cfg, self.gap(t, cfg)
                 res.closes = res.gap_after is not None and abs(res.gap_after) <= self.band_at(t, cfg)

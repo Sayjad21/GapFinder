@@ -11,7 +11,8 @@ and no ledger (`--hypotheses repomap`, no model call). Causes are drawn by a see
 from the families below; the answers are sealed (eval/planted/curriculum/sealed/) and read only by `score`.
 
 Levels (each mixes in gap-free controls, about one task in five):
-1. one clear cause (>= 5 pooled standard deviations; a draw between 3 and 5 is banked as a level-2 task): a setting,
+1. one clear cause (>= 5 pooled standard deviations and at least 1% of the value, the engine's reproduce floor;
+   a draw between 3 and 5 is banked as a level-2 task): a setting,
    a scale or unit convention, a code defect, a data-pipeline defect, and on a rebuilt harness (`<case>-h`:
    eval/planted/rebuild_harnesses.py) a reporting rule (each metric's best epoch), the paper-era code, or a package
    release from the paper's time;
@@ -64,6 +65,10 @@ CASES = {  # name -> (spec, a recorded run whose events hold the base checkpoint
     "vgae": ("devset/vgae/vgae.yaml", "devset/vgae/run"),
 }
 CONFIDENT = ("Explained", "Paper-artifact inconsistency", "Explained by the reporting rule")
+# plan I4: a planted gap is at least the engine's reproduce floor (`noise_floor_frac`, 1% of the value): a smaller
+# one is called Reproduced by design, so the engine keeps real papers from chasing environment noise (seed 6: a 5-sd
+# bias change under 1% on SparseTSF). It was 0.5% through seed 6
+MIN_REL = 0.01
 LEVELS = {
     1: {"families": ["setting", "scale", "code", "data", "reporting", "era", "library"], "causes": 1, "min_sd": 5.0,
         "max_sd": None},
@@ -621,7 +626,7 @@ async def _make_case(level, name, per_case, seed, repeats, tries, concurrency, c
         best = [x.get(f"{m}__x_best") for x in ok]
         gaps = [abs(b - x[m]) for b, x in zip(best, ok) if b is not None]
         lowest = min(LEVELS[lv_]["min_sd"] for lv_ in bank)
-        if gaps and (statistics.mean(gaps) < lowest * max(sd0, 1e-12) or statistics.mean(gaps) <= 0.005 * abs(mu0)):
+        if gaps and (statistics.mean(gaps) < lowest * max(sd0, 1e-12) or statistics.mean(gaps) <= MIN_REL * abs(mu0)):
             print(f"{name}: family reporting can't be planted: the runs' best and final {m} differ by "
                   f"{statistics.mean(gaps):.3g}, under {lowest:g} sd ({sd0:.3g})", flush=True)
             fams.remove("reporting")
@@ -722,7 +727,7 @@ async def _make_case(level, name, per_case, seed, repeats, tries, concurrency, c
         pooled = math.sqrt((sd0 ** 2 + statistics.stdev([x[m] for x in got]) ** 2) / 2) or 1e-12
         moved = abs(mu - mu0) / pooled
         tried.setdefault("+".join(q[0] for q in parts), []).append(moved)
-        fits = [lv_ for lv_ in open_ if _band_ok(lv_, moved)] if abs(mu - mu0) > 0.005 * abs(mu0) else []
+        fits = [lv_ for lv_ in open_ if _band_ok(lv_, moved)] if abs(mu - mu0) > MIN_REL * abs(mu0) else []
         if fits and len(parts) == 2:  # each cause must matter alone, and both are needed
             for fam, k, v, desc, extra in parts:
                 one = await orch.fanout([{k: v}] * 2, [f"{tag0}-alone-{j}" for j in range(2)])

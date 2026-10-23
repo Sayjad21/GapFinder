@@ -266,6 +266,46 @@ operators), so they don't count as evidence. H5 fixed the generator.
 
 ## 6. Open
 
+### 6.1 Plan of 2026-10-24 (c6), from seed 6's misses and an outside review
+
+The review's numbers were checked against the code. Its MDE arithmetic assumed df = n - 1 (ours is 2n - 2), its
+x0.01 factor was already probed, and its "starvation" chain is only part of the story: two of the four misses had
+no lead to starve.
+
+The seed-6 misses (c5, 9 of 16) are mostly one chain:
+- a setting matches the few reported numbers by coincidence;
+- the settings stages spend the 150 runs confirming it, before the code stages screen the planted constant;
+- the fit, though unsupported, keeps the proposer from running.
+
+Each item is class-level with its own toy, and is judged only on a fresh seed 7. Nothing is guaranteed in advance.
+
+| ID | Change | For | Status |
+|---|---|---|---|
+| I1 | The early code screen right after the settings screen **always**, not only when no setting fits every claim | 4 misses that hit the budget (pygcn lr, RippleNet `test_ratio`, VGAE `test_percent`, RippleNet x2) | built, **off** (`early_code_always`): its toy showed no difference, and where a setting fits every claim a constant screened early can only join the tie. The toy found the real cause of the `test_ratio`/`test_percent` misses instead: split constants were **no leads** (no split word in the lead vocabulary) and their values were **off the patch ladder**. Fixed: split words in `code_checks` (`ratio`, `percent`, `frac`, `split`, ...), and `_lead_secants`, the crossing of a lead's bracketing values screened as the settings secant does (toy test_c6_toys I1: passes, fails on c5) |
+| I2 | The code proposer runs on any non-confident result (Fits but unsupported included), with runs held for its edits | 7 of 9 misses never reached it | done: an edit that fits as well as a fitting answer joins the tie, it doesn't replace it (toy I2: passes, fails on c5) |
+| I3 | A training-data cut's fraction from the measured cut: the secant through the naive run and the cut, snapped to 0.05 in [0.2, 0.95], one run | 3 cuts at 40% and 60% missed by the fixed 1/2 and 3/4 | done, **on a log scale of the fraction**: the review's straight-line secant put a 40% cut at 30% (learning curves are near linear in log n) (toy I3: passes, fails on c5) |
+| I5 | A structural-switch operator: boolean constructor keywords (`bias`, `use_bias`, `affine`, `elementwise_affine`, `track_running_stats`, `normalize`, `residual`) flipped, or set False where the layer's default is True | a layer bias (no operator). DeepCrime WRB/WAB plant the same edit, so those tasks are reported apart | done: its own operator class in the mutation round (toy I5: passes, fails on c5) |
+| I4 | Curriculum: plant gaps of at least 1% of the value, the engine's reproduce floor (it was 0.5%) | SparseTSF's bias: 5 run-sd but under 1%, so "Reproduced" | done (`MIN_REL` in curriculum.py) |
+| I6 | Evaluation: a fresh seed 7 of about 45 gap tasks (4 tasks per case and level on the hand harnesses, 2 on `-h`), c5 against c6, both frozen. Stated before it runs: a sign test reaches p < 0.05 with at least 6 tasks differing all one way, or 8 of 9 | the tests so far couldn't show significance | todo: about 12 hours of Sandboxes, waiting for the owner's go |
+
+Not adopted from the review, and why:
+- **Lowering the 1% reproduce floor to 2.5 run-sd.** The floor keeps real papers from chasing environment noise
+  between the paper's machine and ours, which the planted tasks don't have. I4 aligns the curriculum to it
+  instead.
+- **Five confirmation runs instead of three.** The review's arithmetic assumed df = n - 1; our MDE uses df = 2n - 2,
+  and more repeats cost the budget the starvation is about.
+- **The model ranking tied candidates.** The curriculum has no paper text and draws its causes uniformly, so this
+  can't be measured, and the rule forbids tuning tie-breaks on dev cases.
+- **Judging c6 on seeds 4-6 pooled.** Those seeds revealed these errors, so they are a sanity check, never evidence.
+- **Crediting VGAE's `test_percent=60` as the planted cut.** A cause at another line is a near miss, not the
+  planted site.
+- **Two or three claims per task, with validation loss.** pygcn already gets a paper sweep, and papers don't report
+  test loss.
+- **Era and library tasks from commits that change constants.** The era family means the code as of the paper's
+  date, and a later commit's constant is the code family; deferred.
+
+### 6.2 Other open items
+
 - **Measurement first:**
   - a fresh batch large enough to detect a difference: about 50 gap tasks (more tasks per case and level, more
     cases), with the detectable effect stated before it runs;
