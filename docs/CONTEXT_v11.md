@@ -430,6 +430,28 @@ Not adopted from that review:
 - A lookup table of breaking library defaults: a planted shim can't be found by installing old releases, which is
   what the library probe does.
 
+**The test round on planted seed 5 (2026-10-23).** The batch was fresh, made after c4 was frozen: 14 gap tasks and
+9 controls.
+- **Result:**
+  - c3 got 4 of 14; c4 got 5, and the same 5 without the proposer;
+  - 0 confidently wrong for both, and controls 9 of 9;
+  - dev suite, two replicates each: c1 100 and c4 96 of 138 (p = 0.39), 0 confidently wrong.
+- **c4 is not adopted.**
+  - Its 3 gains are training-data cuts, two of them drawn from its own new operator, because the generator samples
+    the engine's operators.
+  - On the other 10 tasks c4 got 2 against c3's 4.
+- **Next (c5), each class-level and judged on seed 6:**
+  - **H1.** The scale probe's candidates for an integer knob are the factors that map every swept value to an
+    integer (seed 5: 1/3 on epochs, never runnable).
+  - **H2.** The first mutants by plain priority stay first (the early screen's 6, the output slice of F1);
+    stratification applies only after them (seed 5: the planted `0.5 -> 1.0` displaced from the early screen).
+  - **H3.** The proposer's edits are textual replacements within one line: the file is re-parsed with the edit,
+    and the changed expression becomes the patch (seed 5: 7 of 8 edits refused as not parsing).
+  - **H4.** The scale probe's verification runs are reserved once it chooses a factor. The probe runs late and got
+    7 of 10 runs on VGAE, so a verified convention lost its label.
+  - **H5, curriculum.** Code and data tasks are drawn from a frozen operator set (c1's operators plus DeepCrime's),
+    never from the engine under test, so a new operator is not judged on faults it generated itself.
+
 **Problems with the curriculum itself:**
 - Controls first took about half the slots. Fixed: at most one in five per case, and gap tasks and controls are
   scored apart.

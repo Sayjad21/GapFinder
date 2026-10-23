@@ -9,6 +9,8 @@ searched for them without the paper (`--hypotheses repomap`; the only model call
   tasks, made after c2 was frozen, searched by both versions.
 - [c1, seed 4](planted_curriculum_c1_seed4.md) and [c3, seed 4](planted_curriculum_c3_seed4.md): 13 fresh gap
   tasks and 11 controls, made after c3 was frozen, searched by both versions.
+- [c3, seed 5](planted_curriculum_c3_seed5.md) and [c4, seed 5](planted_curriculum_c4_seed5.md): 14 fresh gap
+  tasks and 9 controls, made after c4 was frozen, searched by both versions (c4 with the code proposer).
 
 These are development measurements. The builder knows every family, and the generator ran on six papers
 (pygcn, FastGCN, Fair Clustering, SparseTSF, RippleNet, VGAE). They are not blind evidence.
@@ -113,6 +115,45 @@ paper sweep.
 - **Reporting rules, paper-era code and package releases still produced only controls** on the five rebuilt
   harnesses.
 - **The gate is not passed:** 6 of 13 gap tasks (46%) against 70%.
+
+## c4 against c3 on a fresh batch (seed 5)
+
+c4 (`planted-c4`, 268e52c) is plan G1-G8 (docs/CONTEXT_v11.md 7.1): the off-as-run guards on the runs' own spread,
+passengers not counted as rivals, the scale probe on a log scale, a training-subset operator with stratified
+mutant selection, and a code proposer (one Super call when nothing fits). Its answer before the proposer ran is
+kept, so this one batch also scores c4 without it.
+
+| | c3 | c4 | c4 without the proposer |
+|---|---|---|---|
+| Gap tasks (14) | 4 | 5 | 5 |
+| Gap tasks without the training-data cuts (10) | 4 | 2 | 2 |
+| Training-data cuts (4) | 0 | 3 | 3 |
+| Confidently wrong | 0 | 0 | 0 |
+| Correct with a confident label | 1 | 0 | 0 |
+| Controls (9) | 9 correct | 9 correct | |
+| In a credible set of at most 3 | 3 | 3 | |
+| Dev suite, two replicates each (138 cause runs; c1 against c4) | 100 (c1) | 96 | |
+
+- **c4's net +1 is not a gain.**
+  - All 3 gains are training-data cuts. Two were drawn from GapFinder's own new operator: the generator draws code
+    and data tasks from the engine's mutation operators, and it ran on c4's code. Those tasks test the operator on
+    itself.
+  - On the other 10 tasks c4 is worse: 2 against 4.
+- **The two losses come from c4's own changes:**
+  - **Stratified mutant selection.** The early code screen's first 6 mutants are now taken from each operator
+    class in turn. Data and loop mutants displaced Fair Clustering's planted `0.5 -> 1.0`, which c3 ran among its
+    first 6, and the mutation round then ran out of budget.
+  - **The log-scale scale probe.** For RippleNet's epochs (paper's v = code's 0.5 x v), it picked a factor of 1/3.
+    That maps the swept values to 3.33, 6.67 and 13.3 epochs, which can't be run. c3, reading the curve linearly,
+    picked 0.5 and verified it.
+- **G1 did not restore confident labels.** c3's one confident correct answer (VGAE's x0.01 learning rate) lost its
+  label in c4: the scale probe's verification got 7 of its 10 runs before the budget ended, so one swept claim had
+  none.
+- **The code proposer was not really tested.** It made 6 calls and proposed 8 edits. 7 were refused as not parsing:
+  the model writes statements (`X = X_org`) and pieces of multi-line expressions, and the grounding accepts one
+  whole expression. The one edit that ran didn't fit. The model calls for the whole round cost $0.024.
+- **Dev suite: no regression.** Fresh replicates of c1 and c4, run side by side, gave 48 and 50 of 69. Two
+  replicates each give 100 and 96 of 138 (p = 0.39), with 0 confidently wrong.
 
 ## Infrastructure notes
 
