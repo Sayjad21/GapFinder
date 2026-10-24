@@ -147,9 +147,9 @@ A lead like `batch_size = 128` can't be changed with a setting. So GapFinder cha
   like a result.
 - For the script the command runs directly, a small runner (`gf_patch_run`) does the same.
 
-It only runs when the claims look out of space, it has its own share of the budget, and a patch is
-reported only if it makes **every** claim fit after repeats. It's always reported as a *code change*,
-never as a setting.
+It runs when the claims look out of space, or when the answer is only an unsupported fit (and its cheapest
+tests also run early, section 4.27). It has its own share of the budget, and a patch is reported only if it
+makes **every** claim fit after repeats. It's always reported as a *code change*, never as a setting.
 
 ## 4.12 When runs fail: triage (`gapfinder/search/triage.py`)
 
@@ -287,5 +287,126 @@ If you have your own reproduction and the authors' code:
 
 This is the setting-level version of TTrace (which compares a training implementation with a reference) and
 of delta debugging (which shrinks a set of differences to the ones that matter).
+
+## Added with plan D1-D7: six cause classes (2026-10-20/21)
+
+### 4.23 The differential over cause classes (`gapfinder/diagnose/core.py`)
+
+Every candidate from every class becomes a hypothesis with a predicted number for every claim. The classes:
+- settings;
+- reporting rules;
+- library releases and the paper-era code;
+- code edits;
+- the data pipeline;
+- **"outside every class"**: a wide, flat prediction that wins when nothing else fits.
+
+Each hypothesis is scored by how likely the paper's numbers are under it. The likelihood includes:
+- the run noise;
+- the paper's own noise;
+- a small **model-discrepancy** term, so an exact hit on one number by chance can't beat a close fit on all of
+  them.
+
+The report shows the top three with their evidence and how to check them. It works like a doctor's
+differential diagnosis, with "none of these" as a real answer.
+
+### 4.24 Reporting rules, read for free (`gapfinder/diagnose/reporting.py`)
+
+Did the paper report the final epoch, the best epoch, the epoch best on validation, or the best of N seeds?
+The answer is read from the per-epoch values of runs already made, without new runs. A reading that makes
+every claim fit is a candidate answer: "Explained by the reporting rule". Choosing the best epoch on the test
+labels is also flagged as a flaw in the paper's protocol.
+
+### 4.25 Library releases and the paper-era code (`gapfinder/env_year.py`, `gapfinder/diagnose/library.py`)
+
+- The packages as released on the paper's date are installed in their own directories and can be switched on
+  as a knob.
+- So can the repository's code as of the paper's date: the last commit before it, or the first commit when
+  the repository starts after the paper.
+- If switching to the old releases closes the gap, a **delta-debugging** search finds the smallest set of
+  packages that matters. A binary search over releases then finds the release that changed it, and the
+  signature diff shows the function.
+
+### 4.26 Breaking ties and finding conventions
+
+- **Discrimination** (`diagnose/discriminate.py`): when several answers tie, GapFinder picks runs at the
+  paper's other reported conditions (another dataset, another sweep value) where the tied answers predict
+  different numbers, by expected information gain. Ties are first broken by **paper priors**: a value the
+  paper states 0.9, a mentioned setting 0.6, an unmentioned one 0.4.
+- **The scale probe** (in `engine.py`): when the paper reports a sweep of a setting, it asks whether the
+  paper's value is a fixed multiple of the code's (×2, ÷2, ×10, ×0.01, or +1 for counting from zero):
+  - the measured curve is read on a log scale for rates and weights;
+  - only factors that give whole numbers are tried for a whole-number setting;
+  - the best factor, then the runner-up, are verified by running the code at the converted values.
+  - A confident "Paper-artifact inconsistency" needs at least two swept claims that were off as run.
+  - **Open defect:** trying several factors lets a wrong one fit by chance on noisy data.
+- **Value intervals:** after the answer is chosen, its setting is bisected on both sides to the range of
+  values that fit every claim.
+- **Identifiability:** when other settings fit every claim just as well and no reported condition separates
+  them, the report says "not identifiable from the paper's numbers". The answer plus settings that change
+  nothing is not counted as a rival.
+
+### 4.27 Looking inside the code: the mutation round (`gapfinder/search/mutation.py`)
+
+When no setting explains everything, GapFinder makes small edits to the code, in memory, with the same hook
+as the patch knobs.
+
+**The edits:**
+- ×2 and ÷2;
+- swapping a mean for a sum;
+- a loop bound ±1;
+- flipping a comparison;
+- data-loading switches (`drop_last`, `shuffle`);
+- split fractions, and what a scaler is fit on;
+- the training data cut to a half or three quarters.
+
+**Where:** the edits are made at sites on the data flow of the settings the claims depend on, and above all
+on the **output slice**: the statements that compute the number the program prints.
+
+**The order:**
+- the first 6 edits are the highest-priority ones;
+- after that, each kind of edit takes a turn, so no kind crowds out the others;
+- when none of the first edits fits, the rest are applied **in groups**, and a group that moves the numbers
+  is split until the site is found.
+
+**When an edit counts:** a fitting edit must move at least two claims that were off. Otherwise an edit right
+next to the output could "fix" one number by force. A fit is always a **code lead**, never "Explained".
+
+**The budget:** the **early code screen** runs the cheapest code tests right after the settings screen. The
+**class scheduler** keeps up to 30% of the runs for code when the settings don't look likely to explain the
+claims.
+
+### 4.28 The automatic harness (`gapfinder/harness_build.py`, `gapfinder harness`)
+
+Steps 2 to 8 of the harness are automatic:
+1. data download;
+2. the command that prints each claim's metric;
+3. a metric parser that refuses ambiguous bindings;
+4. the knobs, confirmed by the trace;
+5. fitting the 3.9 GB Sandbox (shards, segments, a scaled run with an allowance);
+6. self-checks (do the seeds vary? is every claim printed?);
+7. the claims.
+
+`HARNESS.md` records every choice and its reason. A person still approves it.
+
+### 4.29 The runtime shim (`gapfinder/sandbox/runtime_shim.py`)
+
+Loaded into every run:
+- it forces CPU code paths;
+- it memory-maps arrays over 50 MB (copy-on-write), so large datasets fit in the small machines.
+
+## Built but switched off, or in versions that were not adopted
+
+- **The code proposer** (`gapfinder/search/proposer.py`, `--code-proposer`): one Super call reads the executed
+  code and the ratios between the paper's and the code's numbers, and proposes at most 3 line edits. Each edit
+  is re-parsed into an in-memory patch, refused if it writes a reported number into the code, and run like any
+  patch. No gain in three batches.
+- **Paired seeds and adaptive repeats** (common random numbers, sequential testing): measured worse on their
+  toy.
+- **MDL priors:** unmeasured.
+- **In c6 only** (not adopted), still in the main branch's code:
+  - split sizes (`test_ratio`) as leads, with their in-between values screened;
+  - the training-data fraction estimated on a log scale;
+  - a switch-flip operator for layer `bias` and `affine`;
+  - the proposer on unsupported fits.
 
 Next: [Why it's built this way →](05_design_decisions.md)

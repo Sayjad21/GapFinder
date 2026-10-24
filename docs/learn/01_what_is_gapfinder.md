@@ -48,7 +48,7 @@ Years later, the authors explained the difference:
 So the right answer for this paper is: "two settings explain part of it, and the rest is in the code".
 What does GapFinder say?
 
-The current version (v1.3) says, in short:
+Version v1.3 said, in short:
 
 > "Setting `epochx=10` and `hidden=1` makes the main number match the paper. But a second number from
 > the paper (Yacht) then gets worse. No combination of settings matches both, so part of the cause is
@@ -62,16 +62,39 @@ That is very close to the authors' own explanation. Version 1.0 had simply said 
 
 1. **It runs real experiments.** It doesn't guess from reading. Every claim is backed by runs you can
    replay.
-2. **It's careful about being wrong.** A wrong answer stated confidently is worse than "I don't know". So
+2. **It looks beyond the settings.** A gap can come from:
+   - a setting;
+   - how the paper chose which number to report;
+   - an old library release;
+   - a unit convention ("the paper's v is the code's 2 × v");
+   - a small difference in the code or the data;
+   - or none of these.
+   GapFinder tests all six kinds and says which one fits.
+3. **It's careful about being wrong.** A wrong answer stated confidently is worse than "I don't know". So
    GapFinder checks every answer three ways (see [design decisions](05_design_decisions.md)), and says
    "Unexplained" or "Inconclusive" when it should.
-   - **On practice papers** (three sealed tests) it was confidently wrong **0 times in 90 runs**. A
-     general coding agent given the same tasks was confidently wrong in 49 of those 90 runs.
+   - **On practice papers** (three sealed tests) it was confidently wrong **0 times in 90 runs**. A general
+     coding agent given the same tasks was confidently wrong in 49 of those 90 runs.
    - **On real papers it is not that safe yet.** In the second blind real-paper test (GraphMAE) it was
-     confidently wrong once. That led to new rules: a confident answer now needs a complete search and
-     real evidence ([the journey](07_the_journey.md)).
-3. **It saves time and money with "forks".** It sets up the experiment once, saves that moment like a
-   save point in a video game, and starts every test from that save point instead of from scratch.
+     confidently wrong once. That led to new rules: a confident answer now needs a complete search and real
+     evidence ([the journey](07_the_journey.md)).
+4. **It saves time and money with "forks".** It sets up the experiment once, saves that moment like a save
+   point in a video game, and starts every test from that save point instead of from scratch.
+
+## Where it stands today (2026-10-24)
+
+- **Real papers:** 1 correct, 1 partial, 5 missed and 1 confidently wrong out of 8 sealed blind papers. All
+  were run before the latest work, so the current version has no blind result yet.
+- **Planted gaps in papers that already reproduce:**
+  - it mostly finds unit and scale conventions;
+  - it finds settings about 3 times in 10 (most misses are ties on few numbers);
+  - it rarely finds code defects.
+- **Safety:**
+  - every "nothing planted" control in every round was answered correctly;
+  - the current version had no confident mistakes;
+  - a newer version (c6) made two and was not adopted.
+- **Compared with the state of the art:** nobody has published a tool for this exact task, so there is
+  nothing to beat head to head. [Page 11](11_versus_the_state_of_the_art.md) explains what is known.
 
 ## Who is it for?
 

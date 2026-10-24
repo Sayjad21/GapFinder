@@ -43,11 +43,12 @@ This produces a list of the paper's claims and a list of settings that might mat
 
 **Step 2. Describe how to run the code (the "harness spec").**
 ```bash
-gapfinder spec-draft path/to/code
+gapfinder harness <github url> --commit <sha> --local <checkout> --ledger runs/my-paper --target C7 --out runs/my-paper/harness
+gapfinder spec-draft path/to/code   # or: just draft the YAML file
 ```
-This drafts a small YAML file: how to build the code, how to run it, which settings (knobs) can be
-changed, and how to read the result. **A person must read and approve it**, because only a human should
-decide how the code is run.
+This produces a small YAML file: how to build the code, how to run it, which settings (knobs) can be changed,
+and how to read the result. `gapfinder harness` also writes `HARNESS.md`, with every choice and its reason.
+**A person must read and approve it**, because only a human should decide how the code is run.
 
 **Step 3. Pick the target numbers.** These go in a small JSON file:
 - the main paper number to explain (the *target*);

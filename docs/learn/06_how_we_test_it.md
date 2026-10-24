@@ -77,10 +77,9 @@ The coding-agent baseline was confidently wrong in 19, 8 and 22 of 30 runs.
   when there wasn't". A tool that always says "Unexplained" scores 0.50, so 0.50 is the floor to beat.
 - **The sets are small.** Each test has only 15 runs with a cause, over 5 tasks. Different tests draw
   tasks of different difficulty, so 12 then 9 doesn't mean v1.3 got worse.
-- **We compare versions properly, too.** The **dev suite** (`eval/dev_suite.py`) re-runs old and new
-  versions on the same public tasks, and `eval/compare_suites.py` compares them task by task with a
-  statistical test. It showed that most engine changes after v1.1 were within noise. Only the safety
-  result and the real-paper results are clear.
+- **We compare versions properly, too.** The **dev suite** (below) re-runs old and new versions on the same
+  public tasks and compares them task by task. It showed that most engine changes after v1.1 were within
+  noise. Only the safety result is clear.
 
 ## Real papers
 
@@ -89,29 +88,87 @@ kinds of real-paper test, from weakest to strongest evidence:
 
 | Kind | What it means | Results so far |
 |---|---|---|
-| **Known answer** (MC Dropout, the development set) | the cause is documented and we know it; useful for building, but every success can be the result of tuning to it | MC Dropout names the documented settings (v1.3); VGAE found end to end; pygcn honestly "Unexplained" |
-| **Frozen batch** | papers with known causes, but the code is frozen first and not changed between them, and the harness writers don't see the causes | devbatch-1 (5 papers, all in Sandboxes): 1 correct, 0 confidently wrong |
-| **Sealed blind** | another model picks the paper and seals the answer; GapFinder is frozen; the key is opened only after the run is committed | blind-1 FastGCN: missed. blind-2 GraphMAE: confidently wrong |
+| **Known answer** (MC Dropout, the development set) | the cause is documented and we know it; useful for building, but every success can be the result of tuning to it | MC Dropout names the documented settings; VGAE found end to end; pygcn honestly "Unexplained" |
+| **Frozen batch** | papers with known causes; the code is frozen first, and the harness writers don't see the causes | devbatch-1 (5 papers): 1 correct, 0 confidently wrong. devbatch-2 (3 papers): 0 causes found, 3 correct abstentions (all three reproduced: their causes were noise and protocol inside the paper's own number) |
+| **Sealed blind** | another model picks the paper and seals the answer; GapFinder is frozen; the key is opened only after the run is committed | 8 papers: **1 correct** (Fair Clustering, λ=100), **1 partial** (RippleNet, the learning rate), 5 missed, **1 confidently wrong** (GraphMAE, before the confidence rules) |
 
-The sealed blind cases are the only ones that count as proof. Both were on older versions, and both led to
-the rebuild described in [the journey](07_the_journey.md).
+The sealed blind cases are the only ones that count as proof. **All 8 were run before 2026-10-20**, so none of
+the work since (the six cause classes, the planted curriculum, versions c1-c6) has blind evidence yet.
 
-## Planted causes in real repositories (`eval/planted/plant.py`)
+## The dev suite: a free regression check
 
-Documented reproduction gaps are rare, so the measuring itself is slow. A planted-cause task skips the wait:
-1. take a real repository that already runs in Sandboxes;
-2. a random generator with a fixed seed hides **one** change: a setting given another value, or a constant
-   in the code changed in memory;
-3. the change runs a few times, and the average becomes the "paper" number;
-4. the change is kept only if it moves the number by more than 3 times the noise;
-5. the answer is sealed, and GapFinder searches without seeing it.
+`eval/dev_suite.py` re-runs the search on every public GapBench task (69 runs with a cause, 57 without),
+locally and for free. `eval/compare_suites.py` compares two versions task by task with a sign test.
 
-The answers are read only by the scoring step, and no change to GapFinder is ever judged on these tasks.
-They measure; they don't train. Scoring splits each miss into two kinds: "the planted change was among the
-configurations that fit" means the claims can't tell the options apart; "not found" means the search missed
-it.
+| Version | Runs with a cause correct | Confidently wrong |
+|---|---|---|
+| c1 (two replicates) | 100 of 138 | 0 |
+| c4 (two replicates) | 96 of 138 | 0 |
+| c5 (two replicates) | 99 of 138 | 0 |
+| c6 (two replicates) | 97 of 138 | 0 |
 
-First result (pygcn, 3 tasks): 2 correct, 0 confidently wrong. The miss was a case where two different
-changes give the same single number.
+Identical code swings by about ±5 per run, so all of these are the same within noise. Every run had all 57
+abstentions correct. It guards against regressions; it is too easy and too synthetic to show progress.
+
+## The planted-gap curriculum (`eval/planted/curriculum.py`)
+
+Documented reproduction gaps are rare, so measuring on them is slow. Since 2026-10-21 the main development
+measurement plants hidden changes into papers whose code already reproduces.
+
+**How a task is made:**
+1. **Papers:** six that already reproduce: pygcn, FastGCN, Fair Clustering, SparseTSF, RippleNet, VGAE. Also
+   their harnesses rebuilt automatically (named `-h`), which add per-epoch values and paper-year packages.
+2. **Planting:** a seeded generator picks a family and hides **one** change:
+   - a setting at another value;
+   - a scale convention ("the paper's v is the code's 2 × v"), with a two-point sweep reported as extra claims;
+   - a code defect (an arithmetic or reduction edit, or DeepCrime's "bias added/removed");
+   - a data-pipeline change (DeepCrime's "training data cut");
+   - a reporting rule (each metric's best epoch).
+3. **The paper's numbers:** the change runs 3 times, and the average becomes "the paper's number".
+4. **Keeping it:** only if the change moves the number by at least 5 run-to-run standard deviations (level 1)
+   or 3-5 (level 2), and by at least 1% of the value. About one task in five is a **control**: nothing
+   planted, so saying nothing is right.
+5. **Sealing:** the answer is sealed. The search runs without the paper and without a ledger.
+
+**How a round works:**
+- the new version is frozen first;
+- then a fresh seed makes the tasks;
+- both the old and the new frozen versions search every task;
+- the scorer compares them task by task.
+
+**Every round so far:**
+
+| Round | Versions | Gap tasks | Old correct | New correct | New better / worse | Confidently wrong (old / new) | Adopted? |
+|---|---|---|---|---|---|---|---|
+| seed 2 | c1 alone | 14 | 4 | - | - | 0 | baseline |
+| seed 3 | c1 vs c2 | 16 | 4 | 7 | 4 / 1 | 0 / 0 | no: gains were picks among ties |
+| seed 4 | c1 vs c3 | 13 | 4 | 6 | 2 / 0 | 1 / 0 | **yes** |
+| seed 5 | c3 vs c4 | 14 | 4 | 5 | 3 / 2 | 0 / 0 | no: its gains were faults its own operator generated |
+| seed 6 | c3 vs c5 | 16 | 5 | 7 | 2 / 0 | 0 / 0 | **yes** |
+| seed 7 | c5 vs c6 | 27 | 10 | 7 | 1 / 4 | 0 / 2 | no: worse, two confident mistakes, two crashes |
+
+Every control in every round was answered correctly (69 control searches).
+
+**What kinds of gap are found (the adopted line, c1 → c3 → c5):**
+- **Scale conventions:** mostly found.
+- **Settings:** about 3 in 10. Most misses are ties on few numbers.
+- **Code defects:** rare (the first in c3).
+- **Data cuts:** sometimes since c5.
+- **Reporting rule:** 1 of 1.
+- **Paper-era code and package releases:** never plantable on these papers.
+
+**Lessons the curriculum taught about testing itself:**
+- **Too small to decide.** Each comparison had only 2-5 tasks where the versions differed. A sign test needs at
+  least 6 all one way for p < 0.05, so **no comparison has been significant**. Two adopted steps each went
+  +2 with 0 losses: a consistent direction, not proof.
+- **Circular tasks.** On seed 5 the generator drew faults from the engine's newest operator. Now it uses
+  operators frozen at an old version, and its data cuts differ from the engine's.
+- **Scoring mistakes.** A tied reading of the reporting rule was first scored "confidently wrong". A tie
+  now counts like a planted value inside the set of equal values. Ties are also scored apart ("in a credible
+  set of at most 3").
+- **Planted gaps the engine treats as reproduced.** Gaps between 0.5% and 1% were planted before the 1% rule
+  matched the engine's floor.
+
+These are development measurements: the builder knows every family. They are never blind evidence.
 
 Next: [The journey →](07_the_journey.md)

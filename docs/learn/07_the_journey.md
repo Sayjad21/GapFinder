@@ -166,28 +166,173 @@ Two lessons from testing these:
    was found end to end: a changed function default, matched to the paper's own sentence, tested in memory
    and verified on all 8 numbers.
 
-What is still unproven: all the successes since blind-2 are on papers whose answers we knew. The next step
-is a frozen batch of papers, run in Sandboxes without changes in between, to measure a rate.
+What was still unproven: all the successes since blind-2 were on papers whose answers we knew.
+
+## Frozen and sealed batches of real papers (2026-10-18/19)
+
+**Frozen batches with known causes:**
+- **devbatch-1** (5 papers): 1 correct.
+- **devbatch-2** (3 papers): 0 causes found, 3 correct abstentions.
+
+**Sealed batches 3-5 (6 papers):**
+- **Fair Clustering correct:** the paper's λ=10 is wrong; the authors' real value is 100, and all four claims
+  matched.
+- **RippleNet partial:** the learning rate found; the second needed setting (l2) missed for budget.
+- **Missed:** SparseTSF, the GCN attack, SDCN and BOND.
+
+**What the misses had in common:** across batch-5, settings causes were found 1 time in 4, and causes in code,
+evaluation and libraries 0 times in 4. GapFinder could only answer "a setting", and the real causes were
+often elsewhere:
+- an edge counted twice;
+- the best epoch chosen on the test labels;
+- an API that changed between library releases.
+
+**The rule that changed everything after this.** The owner was tired of fixes that made one paper pass. From
+then on, for the life of the project:
+- a change must fix a class of failure seen on at least two papers, or follow a published method;
+- it is never judged on the paper that revealed it;
+- progress is a rate on fresh, frozen batches.
+
+## Plan D1-D7: six cause classes (2026-10-20/21)
+
+Seven pieces of work, each with its own small acceptance test:
+- **D1:** a differential over six cause classes:
+  - settings;
+  - reporting rules (best epoch, best by validation, best of N seeds, read from runs already made);
+  - library releases and the paper-era code;
+  - code defects;
+  - the data pipeline;
+  - "outside every class".
+- **D2:** breaking ties with runs at the paper's other conditions (Bayesian experimental design); the scale
+  probe for unit and counting conventions; paper priors.
+- **D3:** better paper reading:
+  - numbers grounded in any spelling;
+  - table grids from the LaTeX source and the PDF, checked against each other;
+  - a recall harness.
+- **D4:** paper words linked to code flags by meaning (BM25, then checked at runtime).
+- **D5:** the mutation round: small edits to the code, tested in memory, scored on every claim.
+- **D6:** the harness built automatically, step by step (`gapfinder harness`).
+- **D7:** the calibration gate, multi-fidelity screening, the planted archetypes.
+
+Everything passed its toys, and the dev suite stayed the same within noise (52 of 69). But no fresh real
+paper was run, so there was no way to know whether it helped.
+
+## The planted-gap curriculum (2026-10-21 onwards)
+
+The owner asked: plant gaps into papers that already reproduce, from easy to hard, and see which kinds
+GapFinder finds. Page 6 explains how it works. What happened, version by version:
+
+### c1: the baseline (seeds 2 and 3, 30 gap tasks)
+- **Results by family:**
+  - scale conventions 6 of 7;
+  - settings 2 of 18;
+  - code defects 0 of 5;
+  - data, reporting, era and library never moved a number enough to plant.
+- **0 confidently wrong.**
+- **The misses were sorted into seven classes:**
+  - **E1:** code rounds starved by the run budget;
+  - **E2:** mutation sites ranked out of reach;
+  - **E3:** the right knob at a value off the grid;
+  - **E4:** ties on a single number;
+  - **E5:** a wrong knob with no tie (watched only);
+  - **E6:** gaps below the detection limit;
+  - **E7:** families that couldn't be planted.
+
+### c2: a fixed run budget for the code rounds (seed 3), not adopted
+7 of 16 against c1's 4. But every gain was a setting, one of them a lucky pick among ties, and code stayed at
+0 of 3. The dev suite fell from 52 to 48. Lesson: **gains can come from somewhere other than the target**, so
+look at which tasks moved, not just the total.
+
+### c3: plan F1-F10 (seed 4), adopted
+- **What changed:**
+  - mutation sites ranked by the code that computes the printed number;
+  - code tests run early;
+  - value intervals;
+  - group screening of mutation sites;
+  - a class scheduler;
+  - the "not identifiable" note;
+  - DeepCrime fault operators in the curriculum.
+- **The full test suite caught four regressions first**, each fixed at its class. Two examples: the early code
+  screen ran before the repo's own alternative settings block; a guard judged "off as run" with the noise
+  floor.
+- **Result:** 6 of 13 against c1's 4: better on 2, worse on 0.
+  - **The first planted code defect found:** RippleNet's `np.mean` that should be `np.sum`.
+  - **c1's one confident mistake gone.**
+
+### c4: plan G1-G8 from an outside review (seed 5), not adopted
+- **What changed:**
+  - a log-scale scale probe;
+  - a training-data-cut operator;
+  - mutation operator classes taking turns;
+  - a cheap AI code proposer.
+- **Result:** 5 of 14 against c3's 4, but its three gains were all training-data cuts, two of them made by
+  its own new operator: the generator drew faults from the engine it was testing. On the other 10 tasks it
+  got 2 against 4.
+- **Its two losses were its own changes:**
+  - the turn-taking pushed a planted constant out of the first tries;
+  - the log scale picked a factor that makes the epochs 3.33.
+- **The proposer's edits mostly didn't parse** (7 of 8).
+
+### c5: plan H1-H5 (seed 6), adopted and current
+- **What changed:**
+  - scale factors must give whole numbers for whole-number settings, and the second-best factor is tried when
+    the best fails;
+  - the first 6 mutants stay in priority order;
+  - the proposer's edits are text replacements, re-parsed;
+  - the scale probe's verification runs are reserved.
+- **The curriculum generator was fixed:** it now draws its faults from operators frozen at an old version.
+- **Result:** 7 of 16 against c3's 5: better on 2, worse on 0.
+  - a 60% training-data cut found at its site;
+  - a FastGCN epochs convention found;
+  - confident labels back on a scale convention.
+- **The dev suite was unchanged** (99 against c1's 100 of 138).
+
+### The test-design mistake
+Asked "what kinds of gaps does it find, compared with previous versions", the honest answer was: no
+comparison so far was statistically significant. Each batch had only 2-5 tasks where two versions differed,
+and a sign test needs at least 6. That should have been said before the first round. The owner's frustration
+was fair. From then on, every round states in advance what it can detect.
+
+### c6: plan I, from a second outside review (seed 7), not adopted
+- **What changed:**
+  - split sizes (`test_ratio`) became leads, with their in-between values screened;
+  - the proposer runs on unsupported fits;
+  - the training-data fraction is estimated on a log scale;
+  - a switch-flip operator for layer `bias` and `affine`;
+  - planted gaps of at least 1%.
+- **Several of the review's claims were wrong when checked against the code:**
+  - its statistics formula didn't match ours;
+  - a factor it wanted added was already there;
+  - its straight-line formula would have put a 40% cut at 30%.
+  These were corrected before building.
+- **Result** (27 gap tasks, the largest batch yet): 7 against c5's 10, better on 1, worse on 4, **two confident
+  mistakes**, two crashes.
+- **The confident mistakes exposed a defect that c5 also has.** The scale probe tries several factors, and on
+  noisy or flat data a wrong one can fit by chance. Its confident label doesn't account for how many were
+  tried.
 
 ## Before and after, in one table
 
-| | v1.0 | v1.3 |
-|---|---|---|
-| Where candidate values come from | AI suggestions only | AI + code (choices, ladder, multipliers, edges) |
-| When several answers fit | picks one, silently | picks the simplest and lists the others |
-| "Unexplained" | the end of the story | "out of space suspected", with code leads and tested code patches |
-| Small gaps | could be blamed on something | "Inconclusive" when under the detectable size |
-| Budget | first come, first served | escrow for confirmation, a reserve for patch tests, racing |
-| Cloud hiccups | could lose the right answer | retried with the same value |
-| MC Dropout verdict | Unexplained | documented settings named + out of space |
-| Confident mistakes (blind) | 0 | 0 |
+| | v1.0 | v1.3 | c5 (now) |
+|---|---|---|---|
+| Where candidate values come from | AI suggestions only | AI + code (choices, ladder, multipliers, edges) | + roles from the trace, the secant step, value intervals |
+| Kinds of cause it can test | settings | settings + hard-coded numbers | six classes: settings, reporting rules, libraries and paper-era code, code edits, data pipeline, "none of these" |
+| When several answers fit | picks one, silently | picks the simplest and lists the others | + "not identifiable from the paper's numbers" |
+| "Unexplained" | the end of the story | "out of space suspected", with code leads | + the mutation round, tested in memory |
+| Unit and counting conventions | not tested | not tested | the scale probe |
+| Budget | first come, first served | escrow, a patch reserve, racing | + a class scheduler and an early code screen |
+| Confident label | after three checks | after three checks | after three checks + a finished search, every setting tried, evidence beyond the code |
+| Confident mistakes | 0 (GapBench) | 0 (GapBench), 1 (blind GraphMAE) | 0 on real papers since the rules; 1 in 132 planted searches (c1), but 2 on seed 7 for c6 |
 
 ## What this journey teaches
 
 1. **Read the logs before changing anything.** Most real causes were different from our first guess.
-2. **Measure every change against noise.** Several "obvious" improvements made things worse.
-3. **Say less when the data say less.** Sets, Inconclusive and out of space are honest answers, not
-   failures.
-4. **Keep the tests sealed.** Otherwise you only measure how well you tuned to them.
+2. **Measure every change against noise, on a fresh batch, against the old version.** c2, c4 and c6 all
+   looked like progress until they were.
+3. **Say less when the data say less.** Sets, Inconclusive and "out of space" are honest answers.
+4. **Keep the tests sealed, and keep the test generator separate from the engine.** Otherwise you measure
+   how well you tuned to them, or how well the engine finds its own faults.
+5. **Size the test before running it.** A test that can't show a difference wastes everyone's time.
+6. **Check outside advice against the code.** Both reviews had good ideas and several wrong claims.
 
 Next: [Limits and what's next →](08_limits_and_next.md)

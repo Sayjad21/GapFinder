@@ -68,4 +68,39 @@ Short definitions of every special word used in these pages, in alphabetical ord
 | **Triage** | reading why a run failed and, if a value was rejected, trying a valid one |
 | **Verification** | the three checks: counterfactual, held-out claims, evidence |
 
-← Back to [the start](README.md)
+## Words added since the planted curriculum (2026-10-21 onwards)
+
+| Word | Meaning |
+|---|---|
+| **c1 ... c6** | frozen versions of GapFinder (git tags `planted-c1` ... `planted-c6`); c5 is the current adopted one |
+| **Cause class** | one kind of cause: setting, reporting rule, library or paper-era code, code defect, data pipeline, or "outside every class" |
+| **Circular task** | a planted task made by the same operator the engine searches with; it tests the engine on its own faults, so it doesn't count |
+| **Class scheduler** | the rule that keeps part of the budget for code tests when no setting looks likely |
+| **Code lead** | a code edit or a line that could hold the cause; never labelled "Explained" |
+| **Code proposer** | one cheap AI call that proposes at most 3 code edits when nothing fits; off by default |
+| **Control** | a planted task with nothing planted; the right answer is to blame nothing |
+| **Credible set** | the answer plus the configurations the claims can't tell apart from it; "in a credible set of at most 3" means the cause is among at most 3 |
+| **DeepCrime** | a published set of fault types taken from real deep-learning bugs (removing training data, a bias, weight decay) |
+| **Differential** | every candidate cause from every class, scored against all the claims together, like a doctor's list of possible diagnoses |
+| **Discrimination** | runs chosen so that tied candidate answers predict different numbers |
+| **Early code screen** | cheap code tests (top constants, first mutants) run right after the settings screen |
+| **Family** | the kind of change the curriculum plants (setting, scale, code, data, reporting, ...) |
+| **Fresh batch** | planted tasks made after the version being tested was frozen; the only fair test of it |
+| **Group screening** | many code edits applied at once, the group split in half when it moves the numbers |
+| **Identifiable** | the claims can tell the cause apart from every other candidate; "not identifiable" means they can't |
+| **Interference control** | the rule that a code edit must move at least two claims that were off, so an edit next to the output can't "fix" one number by force |
+| **Level (curriculum)** | how hard a planted task is: level 1 is a clear effect (at least 5 run-to-run spreads), level 2 subtle (3-5) |
+| **MRR (mean reciprocal rank)** | 1 if the cause is the answer, 1/2 if it's second in the tied set, and so on, averaged |
+| **Mutation round** | small edits to the code (×2, ÷2, mean ↔ sum, a loop bound, a data switch), each tested in memory on every claim |
+| **Operator** | one kind of mutation edit (for example "swap mean and sum") |
+| **Output slice** | the part of the code that computes the number the program prints; edits there are tried first |
+| **Planted-gap curriculum** | the test bench of hidden changes in papers that already reproduce |
+| **Reporting rule** | how the paper chose which number to report (the final epoch, the best epoch, the best seed) |
+| **Scale probe** | the test for "the paper's v is the code's c × v": a unit or counting convention between paper and code |
+| **Seed (curriculum)** | the number that decides which tasks a batch contains; a new seed makes a fresh batch |
+| **Sign test** | counts the tasks where the new version won against those where it lost; it needs enough differing tasks to mean anything |
+| **Structural switch** | a layer's on/off setting, such as `bias=True` or `affine=True` |
+| **Training-data cut** | the paper trained on part of the data (a half, 40%, ...) |
+| **Value interval** | the range of values of the answer's setting that fit every claim, not just one point |
+
+Next: [Where the ideas came from →](10_where_the_ideas_came_from.md) · ← Back to [the start](README.md)
