@@ -13,6 +13,8 @@ searched for them without the paper (`--hypotheses repomap`; the only model call
   tasks and 9 controls, made after c4 was frozen, searched by both versions (c4 with the code proposer).
 - [c3, seed 6](planted_curriculum_c3_seed6.md) and [c5, seed 6](planted_curriculum_c5_seed6.md): 16 fresh gap
   tasks and 9 controls, made after c5 was frozen, searched by both versions (c5 with the code proposer).
+- [c5, seed 7](planted_curriculum_c5_seed7.md) and [c6, seed 7](planted_curriculum_c6_seed7.md): 27 fresh gap
+  tasks and 14 controls, made after c6 was frozen; c5 as adopted against c6 with the code proposer.
 
 These are development measurements. The builder knows every family, and the generator ran on six papers
 (pygcn, FastGCN, Fair Clustering, SparseTSF, RippleNet, VGAE). They are not blind evidence.
@@ -200,6 +202,43 @@ The batch was made with H5:
   and the old check scored that confidently wrong. This is the first batch with a reporting task.
 - **Infrastructure:** four pygcn searches failed at one moment on a Sandboxes operation error the searcher did not
   retry. They were resumed from their runs, and that error is now retried.
+
+## c6 against c5 on a fresh batch (seed 7)
+
+c6 (`planted-c6`, 4c7c679) is plan I (docs/CONTEXT_v11.md 6.1):
+- split constants as leads, with their crossing screened;
+- the code proposer on unsupported fits;
+- a data-cut fraction from a log-scale secant;
+- a structural-switch operator;
+- planted gaps at least 1% of the value.
+
+The batch was meant to be about 45 gap tasks. It came to 27: the 1% rule and families short of draws.
+
+| | c5 (adopted) | c6 | c6 without the proposer |
+|---|---|---|---|
+| Gap tasks (27) | 10 | 7 | 7 |
+| Confidently wrong | 0 | **2** | |
+| Searches that crashed | 0 | 2 | |
+| Correct with a confident label | 2 | 2 | |
+| Controls (14) | 14 correct | 14 correct | |
+| Dev suite, two replicates (138 cause runs) | 99 | 97 | |
+
+By family (c5 / c6): setting 4/8 and 3/8, scale 3/9 and 3/9, data 2/5 and 1/5, code 0/4 and 0/4, reporting 1/1
+and 0/1 (a crash).
+
+- **Per task, c6 is better on 1 and worse on 4** (sign test p = 0.375). **c6 is not adopted; c5 stays.**
+- **The two confidently wrong answers come from the scale probe trying more than one factor:**
+  - RippleNet: the true x0.5 failed verification on noisy runs, and the runner-up x1/3 (added in c5, H1) then
+    fit by chance;
+  - pygcn: a training-data cut, answered as weight decay x0.01, a factor the curve can't judge that is run
+    (added in c4, G4), which fit pygcn's flat response.
+  - The confident label doesn't account for how many factors were tried, and c5 has the same logic.
+- **Two c6 searches crashed on its own new code:**
+  - the split vocabulary made a string constant (`'movie'`) a lead, and its values failed the shell check;
+  - the data-cut secant overflowed (0.5 raised to a huge power) when the cut barely moved the number.
+- **The proposer added nothing** (7 with and without it).
+- **The planned power was not reached.** 5 tasks differed, so a sign test could not have shown significance,
+  whichever way they went.
 
 ## Infrastructure notes
 

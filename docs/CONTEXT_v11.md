@@ -110,6 +110,7 @@ Every version was frozen as a tag and worktree before the batch that judged it w
 | c3 | `planted-c3` (96f43d9) | F1-F10: output-slice mutation ranking, early code screen, value intervals, group screening, class scheduler, the "not identifiable" note, paper-era first commit, mmap shim; full-suite fixes (alternative blocks screened early, confirmation spent only on candidates that can still win) | seed 4 vs c1 | 6 vs 4 of 13; better on 2, worse on 0 (p = 0.5); c1's confidently wrong answer gone | **yes** |
 | c4 | `planted-c4` (268e52c) | G1-G8: off-as-run on the runs' own spread, passengers not rivals, log-scale scale probe, training-subset operator with stratified mutants, the code proposer | seed 5 vs c3 | 5 vs 4 of 14, but the 3 gains were training-data cuts its own operator generated; on the other 10 tasks 2 vs 4 | **no** |
 | c5 | `planted-c5` (deea98f) | H1-H4: integer-valid scale factors and the runner-up verified, the first 6 mutants in priority order, line-text proposer edits, the probe's verification fitted to the budget | seed 6 vs c3 | 7 vs 5 of 16; better on 2, worse on 0 (p = 0.5); dev suite 99 vs c1's 100 of 138 | **yes, current** |
+| c6 | `planted-c6` (4c7c679) | plan I (6.1): split constants as leads with their crossing screened, the proposer on unsupported fits, a log-scale data-cut fraction, a structural-switch operator | seed 7 vs c5 | 7 vs 10 of 27; better on 1, worse on 4 (p = 0.375); **2 confidently wrong, 2 crashes**; dev suite 97 vs c5's 99 of 138 | **no** |
 
 **Not adopted from reviews:**
 - a split-sum conservation check (it fires on the standard Planetoid split);
@@ -255,11 +256,25 @@ operators), so they don't count as evidence. H5 fixed the generator.
 - **Honesty:** one confidently wrong answer in 132 gap-task searches over 73 distinct tasks (c1, seed 4); all 69
   control searches correct.
 
+**Seed 7 (c5 against c6; 27 gap tasks, 14 controls, made after c6 was frozen):**
+- c5 got 10 of 27, with 0 confidently wrong; c6 got 7, with 2 confidently wrong and 2 crashes.
+- Per task: better on 1, worse on 4 (p = 0.375).
+- By family (c5 / c6): setting 4/8 and 3/8, scale 3/9 and 3/9, data 2/5 and 1/5, code 0/4 and 0/4, reporting 1/1
+  and 0/1 (a crash).
+- Controls 14 of 14 for both. The proposer added nothing.
+- **The confidently wrong answers** came from the scale probe trying more than one factor: the runner-up (c5, H1)
+  and factors the curve can't judge (c4, G4). With noisy or flat responses a wrong factor fits by chance, and the
+  confident label doesn't account for the number tried. **c5 has the same logic**: it is the open defect of the
+  adopted version.
+- **The crashes:** a string constant became a split lead and failed the shell check; the data-cut secant
+  overflowed.
+
 **The limit of these tests:**
 - Each comparison had 13-16 gap tasks, and only 2-5 tasks came out differently between two versions. A sign test
   can't reach p < 0.05 below 5 differing tasks, so **no comparison could show a significant difference**, and none
   did.
 - The adopted steps went +2 with 0 losses twice (4 and 0 together, p = 0.13).
+- Seed 7 aimed at about 45 gap tasks to fix this and reached 27; only 5 tasks differed.
 - c5 has never been run against c1 on the same batch.
 
 ---
@@ -286,7 +301,7 @@ Each item is class-level with its own toy, and is judged only on a fresh seed 7.
 | I3 | A training-data cut's fraction from the measured cut: the secant through the naive run and the cut, snapped to 0.05 in [0.2, 0.95], one run | 3 cuts at 40% and 60% missed by the fixed 1/2 and 3/4 | done, **on a log scale of the fraction**: the review's straight-line secant put a 40% cut at 30% (learning curves are near linear in log n) (toy I3: passes, fails on c5) |
 | I5 | A structural-switch operator: boolean constructor keywords (`bias`, `use_bias`, `affine`, `elementwise_affine`, `track_running_stats`, `normalize`, `residual`) flipped, or set False where the layer's default is True | a layer bias (no operator). DeepCrime WRB/WAB plant the same edit, so those tasks are reported apart | done: its own operator class in the mutation round (toy I5: passes, fails on c5) |
 | I4 | Curriculum: plant gaps of at least 1% of the value, the engine's reproduce floor (it was 0.5%) | SparseTSF's bias: 5 run-sd but under 1%, so "Reproduced" | done (`MIN_REL` in curriculum.py) |
-| I6 | Evaluation: a fresh seed 7 of about 45 gap tasks (4 tasks per case and level on the hand harnesses, 2 on `-h`), c5 against c6, both frozen. Stated before it runs: a sign test reaches p < 0.05 with at least 6 tasks differing all one way, or 8 of 9 | the tests so far couldn't show significance | todo: about 12 hours of Sandboxes, waiting for the owner's go |
+| I6 | Evaluation: a fresh seed 7 of about 45 gap tasks (4 tasks per case and level on the hand harnesses, 2 on `-h`), c5 against c6, both frozen. Stated before it runs: a sign test reaches p < 0.05 with at least 6 tasks differing all one way, or 8 of 9 | the tests so far couldn't show significance | done (2026-10-24): 27 gap tasks and 14 controls (the 1% rule and short families). c6 7 against c5's 10; better on 1, worse on 4 (p = 0.375); c6 confidently wrong twice and crashed twice. **c6 not adopted** (5.3) |
 
 Not adopted from the review, and why:
 - **Lowering the 1% reproduce floor to 2.5 run-sd.** The floor keeps real papers from chasing environment noise
@@ -304,7 +319,15 @@ Not adopted from the review, and why:
 - **Era and library tasks from commits that change constants.** The era family means the code as of the paper's
   date, and a later commit's constant is the code family; deferred.
 
-### 6.2 Other open items
+### 6.2 After seed 7
+
+- **The scale probe's confident label must account for the factors tried** (a multiple-comparison correction, or
+  confidence only for the curve's own best factor verified on the first try). This is a defect of the adopted c5,
+  not only of c6. It can't be judged on seed 7, which revealed it.
+- **c6's two crashes:** split leads only for numbers; the secant's exponent bounded.
+- **The proposer has shown nothing** in three batches (5, 6, 7).
+
+### 6.3 Other open items
 
 - **Measurement first:**
   - a fresh batch large enough to detect a difference: about 50 gap tasks (more tasks per case and level, more
