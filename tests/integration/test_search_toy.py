@@ -319,7 +319,8 @@ async def test_a_value_that_always_fails_is_not_rerun_on_every_call(tmp_path):
     for _ in range(4):  # e.g. screened, then asked for again while explaining another claim
         assert await s.measure({"alpha": "two"}, 1, "screen") == []
     assert await s.measure({"alpha": "two"}, 5, "confirm") == []  # more repeats asked: still not re-run
-    assert len(s._runs[frozenset({"alpha": "two"}.items())]) == 2 and s.runs_used == 2
+    # one run: the program rejects the value, no infrastructure at fault, so no retry (c8; before, one retry)
+    assert len(s._runs[frozenset({"alpha": "two"}.items())]) == 1 and s.runs_used == 1
     # and a value with no successful run never survives the screen, even as a strong ledger lead
     lead = [A("A1", "alpha", ["two"], supported=["two"], prior=0.95)]
     s2 = GapSearch(orch(tmp_path, "lead"), targets(m), lead, SearchConfig(coverage=False))

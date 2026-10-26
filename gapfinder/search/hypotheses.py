@@ -131,6 +131,10 @@ def patch_values(name: str, literal: str) -> list[str]:
     d = literal.strip()
     if d in ("True", "False"):  # a switch has one other value
         return ["False" if d == "True" else "True"]
+    if re.fullmatch(r"[-+]?(\d+\.|\.\d+)([eE][-+]?\d+)?", d):
+        # Python's `30.` and `.5`, which the ladder doesn't parse: no values at all (VGAE c7 rerun: the split
+        # constants `test_percent=30., val_percent=20.` got none, and the patch round ran neither)
+        d = repr(float(d))
     out: list[str] = []
     if re.fullmatch(r"\d+", d) and int(d) >= 2 and _SIZE_NAME.search(name):
         x = int(d)

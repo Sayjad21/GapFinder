@@ -78,6 +78,26 @@ class Differences(BaseModel):
     differences: list[Difference] = Field(default_factory=list)
 
 
+FILL_PROMPT = """A paper and its code differ in these hard-coded values. For each, give the number the paper itself
+states for it (only the number, as the paper writes it), or null when the paper states none.
+
+## What the paper says
+{paper}
+
+## The differences
+{items}
+"""
+
+
+class PaperValue(BaseModel):
+    name: str
+    paper_value: str | None = None
+
+
+class PaperValues(BaseModel):
+    values: list[PaperValue] = Field(default_factory=list)
+
+
 # method details a re-implementation often does differently: a window around each mention goes into the excerpt
 # (pygcn c5 rerun: the excerpt had the setup section only, not the renormalization trick or which layer is regularized)
 _METHOD_WORDS = ("normaliz", "normalis", "renormaliz", "dropout", "regulariz", "regularis", "weight decay",
@@ -143,7 +163,23 @@ async def contrast(router, paper_text: str, records: list[dict], leads: list[dic
     msg = CONTRAST_PROMPT.format(premise=PREMISE_OUT if out_of_space else PREMISE_IN, paper=_excerpt(paper_text),
                                  config=config, sinks=sinks, loops=loops, code=code or "none", leads=lead_text)
     out = await router.structured("super", [{"role": "user", "content": msg}], Differences)
-    return out.differences[:5]
+    diffs = out.differences[:5]
+    # a literal difference named without the paper's number can only be swept, never set to the paper's value (VGAE
+    # c7 rerun: test_percent and val_percent named, "5% and 10%" quoted, no paper_value): one short call fills it
+    missing = [d for d in diffs if d.kind == "literal" and d.name and not _NUM.search(d.paper_value or "")]
+    if missing:
+        items = "\n".join(f"- {d.name} at {d.file}:{d.line}: the code has {d.code_does}; the paper says: {d.paper_says}"
+                          for d in missing)
+        try:
+            got = await router.structured("super", [{"role": "user", "content": FILL_PROMPT.format(
+                paper=_excerpt(paper_text, 6000), items=items)}], PaperValues)
+            by = {v.name: v.paper_value for v in getattr(got, "values", []) if v.paper_value}
+            for d in missing:
+                if _NUM.search(by.get(d.name) or ""):
+                    d.paper_value = by[d.name]
+        except Exception:  # noqa: BLE001 (an aid: the difference stays a sweep lead)
+            pass
+    return diffs
 
 
 _NUM = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")

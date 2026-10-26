@@ -646,6 +646,7 @@ class GapSearch:
         self._patch_reserve = 0  # runs held back for the patch round (set after the combine round)
         self._scale_reserve = 0  # runs held back for the scale probe's verification until it runs (claims sweep a knob)
         self._protocol_reserve = 0  # runs held back for the protocol tests, which run last (evaluation leads on live code)
+        self._interval_reserve = 0  # runs held back for the answer's value interval, the last stage of a claim
         self._code_hold = 0  # runs kept out of the settings exploration for the code rounds (code_hold)
         self._early_screened: set[str] = set()  # claims whose code rounds' first tests already ran (plan F2)
         self._looks: dict[frozenset, int] = {}  # extra looks per configuration (adaptive repeats, plan F4)
@@ -664,9 +665,17 @@ class GapSearch:
         ok = [b for b in have if b.status == BranchStatus.succeeded]
         need, fails = n - len(ok), len(have) - len(ok)
         if need > 0 and fails:
+            from gapfinder.search.triage import looks_like_infra
+
             # a configuration that keeps failing (e.g. a value the program rejects) is not re-run on
-            # every call: one retry for a transient failure, none once it failed twice and never ran
-            need = 0 if not ok and fails >= 2 else max(0, min(need, n + 1 - len(have)))
+            # every call: one retry for a transient failure, none once it failed twice and never ran; none at all when
+            # it never ran and no failure shows the environment at fault (a crash or an empty output repeats: PatchTST
+            # c5 and c7 reruns, 13 configurations run twice for nothing, 27 of 100 runs)
+            infra = any(looks_like_infra(b) for b in have if b.status != BranchStatus.succeeded)
+            if not ok and not infra:
+                need = 0
+            else:
+                need = 0 if not ok and fails >= 2 else max(0, min(need, n + 1 - len(have)))
         if need > 0:
             cap = self.cfg.max_runs
             if cap is not None and self._patch_reserve and not label.startswith("patch"):
@@ -675,6 +684,8 @@ class GapSearch:
                 cap -= self._scale_reserve  # the scale probe's verification, which runs after history matching
             if cap is not None and self._protocol_reserve and not label.startswith("protocol"):
                 cap -= self._protocol_reserve  # the protocol tests, which run after every claim's search
+            if cap is not None and self._interval_reserve and not label.startswith("interval"):
+                cap -= self._interval_reserve  # the value interval, a claim's last stage
             if cap is not None and self.runs_used + need > cap:
                 raise RunBudgetExceeded(f"run budget of {self.cfg.max_runs} reached "
                                         f"(wanted {need} more run(s) of {dict(changes) or 'naive'} for {label!r})")
@@ -882,7 +893,7 @@ class GapSearch:
         for t in self.targets:
             if not t.held_out:
                 results.append(await self.explain(t))
-        self._protocol_reserve = 0
+        self._protocol_reserve = self._interval_reserve = 0
         if self.cfg.protocol_tests:
             try:
                 await self._protocol_tests()
@@ -1352,6 +1363,9 @@ class GapSearch:
         # c5 rerun: verification's held-out runs, the history-matching points and discrimination spent it, and the
         # probe ran with 1 run of 200 left)
         self._scale_reserve = self._scale_hold() if self.cfg.history_matching else 0
+        # the value interval's runs, held like the others: the planner counted them (_exploration_room) but nothing
+        # kept them, and the stages before spent them (BOND c7 reruns: stopped one run short at 48, 60 and 80 runs)
+        self._interval_reserve = 2 * self.cfg.interval_steps if self.cfg.value_interval and self.cfg.max_runs else 0
         tried: set[frozenset] = set()
         try:
             await self._search(t, res, tried)
@@ -1404,6 +1418,7 @@ class GapSearch:
             except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
                 res.notes.append(f"code proposer stopped early: {exc}")
         self._refuted_label(t, res)
+        self._interval_reserve = 0
         if self.cfg.value_interval:
             try:
                 await self._value_intervals(t, res)

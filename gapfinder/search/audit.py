@@ -80,7 +80,9 @@ def audit(search, results) -> dict:
         from gapfinder.ingest.code_checks import code_checks
 
         try:
-            leads = code_checks(root, set(search.spec.knobs), limit=60)
+            # code that ran first (PatchTST c7 rerun: the audit listed a vendored copy's drop_last, not the live one)
+            leads = code_checks(root, set(search.spec.knobs), limit=60,
+                                executed=getattr(search, "_executed", lambda: None)())
         except Exception:  # an aid: unreadable code leaves the audit without this part
             leads = []
         for x in leads:
