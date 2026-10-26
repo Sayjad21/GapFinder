@@ -389,6 +389,10 @@ where the arms differ.
 
 Otherwise c7 stays.
 
+**c10's dev suite** (bases 16000 and 16100): 100 of 138, the same as c7's 100. Against c7, 4 tasks were better
+and 4 worse, each by one run of six. There were no confident mistakes, and all 114 abstentions were correct.
+Condition 4 holds.
+
 ## Infrastructure notes
 
 - The machine lost DNS for minutes at a time. Task making waits for the network and doesn't count draws lost to

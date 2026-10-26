@@ -129,6 +129,7 @@ DEV_SUITE = [  # pooled over two replicates, 138 cause runs, 114 abstentions all
     {"version": "c7", "runs": [12000, 12100], "correct": 100, "adopted": True},
     {"version": "c8", "runs": [13000, 13100], "correct": 92, "adopted": False},
     {"version": "c9", "runs": [15000, 15100], "correct": 96, "adopted": False},
+    {"version": "c10", "runs": [16000, 16100], "correct": 100, "adopted": False},
 ]
 
 
