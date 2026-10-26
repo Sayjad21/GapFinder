@@ -3,10 +3,10 @@ import { Glyph, VERDICT, Verdict, useTooltip } from "./ui.jsx";
 
 const ORDER = ["found", "partial", "no_gap", "missed"];
 const GOOD = new Set(["found", "no_gap"]);
-const VERSION_NOTE = { c5: "adopted 2026-10-23", c7: "frozen 2026-10-26", c8: "frozen 2026-10-26" };
+const VERSION_NOTE = { c5: "adopted 2026-10-23", c7: "adopted 2026-10-27", c8: "withdrawn: dev suite", c9: "frozen 2026-10-27" };
 
 // Every real paper, one square each, per engine version: a part-to-whole that keeps each paper clickable.
-export function VersionStrips({ real, versions = ["c5", "c7", "c8"] }) {
+export function VersionStrips({ real, versions = ["c5", "c7"] }) {
   const tip = useTooltip();
   const [table, setTable] = useState(false);
   const rows = versions.map((v) => {
@@ -24,7 +24,7 @@ export function VersionStrips({ real, versions = ["c5", "c7", "c8"] }) {
         const good = cells.filter((c) => GOOD.has(c.r.verdict)).length;
         return (
           <div className="strip-row" key={v}>
-            <div className="ver">{v}<small>{cells.length < n ? `${cells.length} of ${n} papers run` : VERSION_NOTE[v] || ""}</small></div>
+            <div className="ver">{v}<small>{[cells.length < n && `${cells.length} of ${n} papers`, VERSION_NOTE[v]].filter(Boolean).join(" · ")}</small></div>
             <div className="strip" style={{ "--n": n }} role="list" aria-label={`${v}: one square per paper`}>
               {cells.map(({ p, r }) => (
                 <a key={p.slug} role="listitem" className={`cell ${r.verdict}`} href={`#/case/${p.slug}`}

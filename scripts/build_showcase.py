@@ -3,8 +3,9 @@
     python scripts/build_showcase.py            # writes meta.json per run and demo/runs/showcase.json
 
 Three groups, each labelled for what it is:
-- real: earlier real papers re-run post-hoc on c5, c7 and c8 (demo/runs/real, real-c7, real-c8). Their causes are
-  documented, and the engine's fixes since c5 were found on these very runs: a demonstration, never evidence.
+- real: earlier real papers re-run post-hoc on c5 and c7 (all 16; demo/runs/real, real-c7), and some again on c8
+  and c9 (real-c8, real-c9). Their causes are documented, and the engine's fixes since c5 were found on these very
+  runs: a demonstration, never evidence. The tally is c7's, the one version every paper was re-run on.
 - planted: planted-gap curriculum tasks a frozen version solved, copied from eval/planted/curriculum/tasks, with
   the planted change and the verdict from the scorer's own output (scores-*.json). The scorer opened the sealed
   answers; this script reads only its output.
@@ -27,11 +28,12 @@ CUR = ROOT / "eval" / "planted" / "curriculum"
 C5_RUNS = ROOT.parent / "gf-c5" / "eval" / "gapbench" / "runs"
 COPY = ("events.jsonl", "gap_report.json", "gap_report.md", "claims.json", "assumptions.json", "prediction.json")
 
-VERSIONS = {  # scores file run -> version, frozen date, adopted (c1 the baseline; c7, c8 until their batches decide)
+VERSIONS = {  # scores file run -> version, frozen date, adopted (c1 the baseline; c7 adopted on seed 8)
     "run-c5": ("c5", "2026-10-23", True), "run-c3": ("c3", "2026-10-22", True),
     "run-c2": ("c2", "2026-10-22", False), "run": ("c1", "2026-10-21", True),
     "run-c4": ("c4", "2026-10-22", False), "run-c6": ("c6", "2026-10-24", False),
-    "run-c7": ("c7", "2026-10-26", False), "run-c8": ("c8", "2026-10-26", False),
+    "run-c7": ("c7", "2026-10-26", True), "run-c8": ("c8", "2026-10-26", False),
+    "run-c9": ("c9", "2026-10-27", False), "run-c10": ("c10", "2026-10-27", False),
 }
 PAPERS = {"pygcn": "pygcn (GCN, Kipf & Welling)", "fastgcn": "FastGCN", "b3a": "Variational Fair Clustering",
           "b3c": "SparseTSF", "b4a": "RippleNet", "vgae": "VGAE (graph autoencoder)"}
@@ -72,7 +74,8 @@ REAL = {
     "gmixup": ("G-Mixup", "ICML 2022", "The gain over plain GNNs is within the run-to-run noise."),
     "pyg": ("GAT vs GCN in PyTorch Geometric", "benchmark", "The ranking of GAT and GCN depends on the data split."),
 }
-VERSION_DIRS = {"c5": "real", "c7": "real-c7", "c8": "real-c8"}
+VERSION_DIRS = {"c5": "real", "c7": "real-c7", "c8": "real-c8", "c9": "real-c9"}
+TALLY_VERSION = "c7"  # every paper was re-run on it; c8 and c9 re-ran a few
 RUN_DIR = {("c7", "bond"): "bond.cut2"}  # BOND on c7: three searches (48, 60, 80 runs); the 60-run one is shown
 
 # slug -> version -> (verdict, one line): our reading of each run against the documented cause
@@ -85,19 +88,28 @@ READING = {
     "fair-clustering": {"c5": ("found", "λ=100 fits all 8 claims; unsupported, since the paper prints 10."),
                         "c7": ("found", "λ=100 fits all 8 claims; unsupported, since the paper prints 10.")},
     "ripplenet": {"c5": ("partial", "lr=0.002 closes half the gap; the documented lr=0.001 tied and lost."),
-                  "c7": ("partial", "lr=0.001, the documented value; the L2 weight is still missing.")},
+                  "c7": ("partial", "lr=0.001, the documented value; the L2 weight is still missing."),
+                  "c9": ("missed", "Unexplained: the documented lr 1e-3 and L2 1e-5 block fit closest, one run short of "
+                                   "its confirmation, while 30 runs sat held for a patch round that needed none.")},
     "mc-dropout": {"c5": ("missed", "The search crashed three times before a report."),
-                   "c7": ("partial", "epochx=10 and hidden=1, the documented pair: it fits Energy, breaks held-out Yacht.")},
+                   "c7": ("partial", "epochx=10 and hidden=1, the documented pair: it fits Energy, breaks held-out Yacht."),
+                   "c8": ("partial", "epochx=10 and hidden=1 again: Energy fits, held-out Yacht breaks.")},
     "bond": {"c5": ("missed", "Unexplained; the library probe never ran on the old harness."),
              "c7": ("partial", "The balance weight, patched 0.5 to 0.95; the key accepts 0.75-0.9. An 80-run search "
-                               "missed it.")},
+                               "missed it."),
+             "c8": ("missed", "Unexplained: the balance weight at 0.95 fit the target on one run and was never repeated, "
+                              "with 13 of 60 runs left.")},
     "vgae": {"c5": ("missed", "The split pair fits, but a cut made on one run demoted it."),
-             "c7": ("missed", "The split constants are written `30.`, a form the value ladder couldn't read.")},
+             "c7": ("missed", "The split constants are written `30.`, a form the value ladder couldn't read."),
+             "c9": ("found", "A paper-code inconsistency: the split constants at the paper's 10% and 5% close the gap "
+                             "(-5.4% to +0.3%).")},
     "pygcn": {"c5": ("missed", "weight_decay=0, unsupported."),
-              "c7": ("partial", "Lists the validation split (500 vs 300) and the missing early stopping.")},
+              "c7": ("partial", "Lists the validation split (500 vs 300) and the missing early stopping."),
+              "c9": ("missed", "weight_decay=1e-5, unsupported; this time the paper-code contrast named no difference.")},
     "patchtst": {"c5": ("missed", "Unexplained."),
                  "c7": ("missed", "drop_last tested on the live line: no effect here. The target is the 512-step "
-                                  "PatchTST/64; the harness runs /42.")},
+                                  "PatchTST/64; the harness runs /42."),
+                 "c8": ("missed", "Unexplained, as on c7: the 512-step variant the paper reports isn't in the harness.")},
     "gat": {"c5": ("missed", "Inconclusive: the gap is under the minimum detectable effect."),
             "c7": ("no_gap", "Reproduced: this run's naive spread covers the -2.2% gap.")},
     "sparsetsf": {"c5": ("no_gap", "Reproduced within noise (-0.4%)."), "c7": ("no_gap", "Reproduced within noise.")},
@@ -110,9 +122,13 @@ POSTHOC = ("Post-hoc rerun. The cause is documented, and the engine's fixes sinc
            "so this is a demonstration, not evidence. The blind record is in docs/CONTEXT_v11.md 5.1.")
 BLIND = {"papers": 8, "correct": 1, "partial": 1, "missed": 5, "confidently_wrong": 1,
          "note": "Sealed blind real papers, all run before the planted curriculum (c1-c8)."}
-DEV_SUITE = [  # pooled over two replicates, 138 cause runs, 114 abstentions (eval/results/dev_suite_run*.json)
-    {"version": "c1", "runs": [5000, 9100], "correct": 100}, {"version": "c4", "runs": [8000, 8100], "correct": 96},
-    {"version": "c5", "runs": [10000, 10100], "correct": 99}, {"version": "c7", "runs": [12000, 12100], "correct": 100},
+DEV_SUITE = [  # pooled over two replicates, 138 cause runs, 114 abstentions all correct (eval/results/dev_suite_run*.json)
+    {"version": "c1", "runs": [5000, 9100], "correct": 100, "adopted": True},
+    {"version": "c4", "runs": [8000, 8100], "correct": 96, "adopted": False},
+    {"version": "c5", "runs": [10000, 10100], "correct": 99, "adopted": True},
+    {"version": "c7", "runs": [12000, 12100], "correct": 100, "adopted": True},
+    {"version": "c8", "runs": [13000, 13100], "correct": 92, "adopted": False},
+    {"version": "c9", "runs": [15000, 15100], "correct": 96, "adopted": False},
 ]
 
 
@@ -170,16 +186,17 @@ def real() -> list[dict]:
             versions[ver] = {"id": _rid(d), "verdict": verdict, "reading": line, "gauge": gauge(rep)}
         if not versions:
             continue
-        current = max(versions, key=lambda v: (versions[v]["verdict"] is not None, int(v[1:])))
+        current = TALLY_VERSION if versions.get(TALLY_VERSION, {}).get("verdict") else max(
+            versions, key=lambda v: (versions[v]["verdict"] is not None, int(v[1:])))
         rows.append({"slug": slug, "title": title, "venue": venue, "documented_cause": cause, "current": current,
                      "versions": versions})
     return rows
 
 
 def planted() -> tuple[list[dict], list[dict]]:
-    """Every gap task a frozen adopted version scored correct, newest version first, and c5's controls."""
+    """Every gap task a frozen adopted version scored correct, newest version first, and the newest adopted version's controls."""
     best, totals = {}, []
-    order = ["run-c5", "run-c3", "run-c2", "run"]
+    order = ["run-c7", "run-c5", "run-c3", "run-c2", "run"]
     for f in sorted(CUR.glob("scores-*.json")):
         s = _json(f)
         ver, frozen, adopted = VERSIONS[s["run"]]
@@ -199,7 +216,7 @@ def planted() -> tuple[list[dict], list[dict]]:
         if s["run"] not in order:
             continue
         for r in rows:
-            keep = r["verdict"] == "correct" and (r["kind"] != "control" or s["run"] == "run-c5")
+            keep = r["verdict"] == "correct" and (r["kind"] != "control" or s["run"] == order[0])
             if not keep:
                 continue
             prev = best.get(r["task"])
@@ -275,7 +292,8 @@ def main() -> None:
         "note": ("Recorded runs for the web app. Real papers are post-hoc reruns; planted and GapBench cases are "
                  "development measurements. The only clean evidence is the sealed blind record (docs/CONTEXT_v11.md "
                  "5.1). Totals include every miss."),
-        "verdict_words": VERDICT_WORDS, "real": r, "real_tally": dict(tally), "blind": BLIND, "dev_suite": DEV_SUITE,
+        "verdict_words": VERDICT_WORDS, "real": r, "real_tally": dict(tally), "tally_version": TALLY_VERSION,
+        "real_versions": list(VERSION_DIRS), "blind": BLIND, "dev_suite": DEV_SUITE,
         "planted": p, "planted_totals": totals, "gapbench": g, "gapbench_totals": suite})
     print(f"real {len(r)} {dict(tally)}, planted {len(p)}, gapbench {len(g)}; demo/runs {size / 1e6:.1f} MB")
 

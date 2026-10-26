@@ -1,0 +1,395 @@
+{
+  "paper": "planted L2-vgae-h-s8-1",
+  "artifact": "vgae",
+  "generated": "2026-10-26 23:57",
+  "partial": false,
+  "runs": 14,
+  "setup_runs": 0,
+  "cost": {
+    "sandbox_usd": 25.120755,
+    "sandbox_runs": 15,
+    "setup_runs": 0,
+    "tokens": {},
+    "total_usd": 25.120755,
+    "cap_usd": null
+  },
+  "naive": {
+    "c46_auc": 85.5828,
+    "c47_ap": 87.8608
+  },
+  "noise": {
+    "c46_auc": {
+      "metric": "c46_auc",
+      "n": 5,
+      "median": 85.5828,
+      "band": 0.855828,
+      "cv": 0.002713680356091704
+    },
+    "c47_ap": {
+      "metric": "c47_ap",
+      "n": 5,
+      "median": 87.8608,
+      "band": 0.878608,
+      "cv": 0.002770360219044837
+    }
+  },
+  "unmapped_assumptions": [],
+  "renamed_assumptions": {},
+  "spec_only_knobs": [],
+  "corrected_defaults": [],
+  "unverified_defaults": [],
+  "trace": {
+    "processes": 5,
+    "steps": 0,
+    "roles": {
+      "learning_rate": {
+        "knob": "learning_rate",
+        "role": "rate",
+        "sink": "optimizer.learning_rate (AdamOptimizer)",
+        "site": "gae/optimizer.py:37",
+        "value": "0.01"
+      },
+      "epochs": {
+        "knob": "epochs",
+        "role": "count",
+        "sink": "range() bound",
+        "site": "gae/train.py:142",
+        "value": "200"
+      }
+    },
+    "ambiguous": [],
+    "leads": [],
+    "runtime_values": {
+      "learning_rate": "0.01",
+      "epochs": "200",
+      "hidden1": "32",
+      "hidden2": "16",
+      "weight_decay": "0",
+      "dropout": "0",
+      "features": "1",
+      "gf_paper_year_env": "0"
+    },
+    "executed_lines": 493
+  },
+  "untestable": [],
+  "closest_overall": [
+    {
+      "changes": {
+        "@ast:gae/preprocessing.py:106:assume_unique": "False"
+      },
+      "runs": 3,
+      "gaps": {
+        "C46": 0.0008190055762081269,
+        "C47": 0.001423225221138446
+      },
+      "mean_abs_gap": 0.0011211153986732864
+    },
+    {
+      "changes": {
+        "@ast:gae/preprocessing.py:76:replace": "False"
+      },
+      "runs": 3,
+      "gaps": {
+        "C46": -0.00102462825278811,
+        "C47": -0.0015320934452257703
+      },
+      "mean_abs_gap": 0.0012783608490069401
+    },
+    {
+      "changes": {
+        "@ast:gae/preprocessing.py:79:assume_unique": "False"
+      },
+      "runs": 3,
+      "gaps": {
+        "C46": -0.0023187732342007873,
+        "C47": -0.0018144704014516986
+      },
+      "mean_abs_gap": 0.0020666218178262427
+    },
+    {
+      "changes": {},
+      "runs": 5,
+      "gaps": {
+        "C46": -0.005776022304832625,
+        "C47": -0.0036198684508959994
+      },
+      "mean_abs_gap": 0.004697945377864312
+    }
+  ],
+  "audit": {
+    "held_out": [],
+    "comparisons": [],
+    "leakage": [],
+    "stated_untestable": [],
+    "paper_comparisons": [],
+    "protocol_tests": [
+      {
+        "failed": 0,
+        "failure": "",
+        "family": "eval_switch",
+        "file": "gae/preprocessing.py",
+        "line": 76,
+        "code": "idx = np.random.choice(adj.shape[0]**2, 2*(num_test-len(test_edges_false)), replace=True)",
+        "detail": "`choice(..., replace=True)` on evaluation data: it changes how the evaluation is computed",
+        "knob": "@ast:gae/preprocessing.py:76:replace",
+        "value": "False",
+        "runs": 3,
+        "claims": [
+          {
+            "claim": "C46",
+            "metric": "c46_auc",
+            "paper": 86.08,
+            "naive": 85.5828,
+            "without": 85.9918,
+            "ci": [
+              -0.07734666666665646,
+              0.4695866666666433
+            ],
+            "held_out": false,
+            "depends": false
+          },
+          {
+            "claim": "C47",
+            "metric": "c47_ap",
+            "paper": 88.18,
+            "naive": 87.8608,
+            "without": 88.0449,
+            "ci": [
+              -0.2835799999999864,
+              0.3530399999999929
+            ],
+            "held_out": true,
+            "depends": false
+          }
+        ]
+      },
+      {
+        "failed": 0,
+        "failure": "",
+        "family": "eval_switch",
+        "file": "gae/preprocessing.py",
+        "line": 79,
+        "code": "idx = idx[~np.in1d(idx,idx_test_edges_false,assume_unique=True)]",
+        "detail": "`in1d(..., assume_unique=True)` on evaluation data: it changes how the evaluation is computed",
+        "knob": "@ast:gae/preprocessing.py:79:assume_unique",
+        "value": "False",
+        "runs": 3,
+        "claims": [
+          {
+            "claim": "C46",
+            "metric": "c46_auc",
+            "paper": 86.08,
+            "naive": 85.5828,
+            "without": 85.8804,
+            "ci": [
+              -0.4088199999999915,
+              0.9242200000000054
+            ],
+            "held_out": false,
+            "depends": false
+          },
+          {
+            "claim": "C47",
+            "metric": "c47_ap",
+            "paper": 88.18,
+            "naive": 87.8608,
+            "without": 88.02,
+            "ci": [
+              -0.3119999999999834,
+              0.5311999999999983
+            ],
+            "held_out": true,
+            "depends": false
+          }
+        ]
+      },
+      {
+        "failed": 0,
+        "failure": "",
+        "family": "eval_switch",
+        "file": "gae/preprocessing.py",
+        "line": 106,
+        "code": "idx = idx[~np.in1d(idx,idx_test_edges_false,assume_unique=True)]",
+        "detail": "`in1d(..., assume_unique=True)` on evaluation data: it changes how the evaluation is computed",
+        "knob": "@ast:gae/preprocessing.py:106:assume_unique",
+        "value": "False",
+        "runs": 3,
+        "claims": [
+          {
+            "claim": "C46",
+            "metric": "c46_auc",
+            "paper": 86.08,
+            "naive": 85.5828,
+            "without": 86.1505,
+            "ci": [
+              0.13666666666667027,
+              0.8631600000000077
+            ],
+            "held_out": false,
+            "depends": true
+          },
+          {
+            "claim": "C47",
+            "metric": "c47_ap",
+            "paper": 88.18,
+            "naive": 87.8608,
+            "without": 88.3055,
+            "ci": [
+              0.008639999999999759,
+              0.5572999999999979
+            ],
+            "held_out": true,
+            "depends": true
+          }
+        ]
+      }
+    ]
+  },
+  "triaged_failures": [],
+  "setup_check": null,
+  "effect_threshold": 1.0,
+  "provenance": {
+    "gapfinder": {
+      "commit": "74c9414da0388b40a5f1bbeaaf040a4ed05a6bdb",
+      "dirty": true
+    },
+    "models": {
+      "ultra": "nvidia/Nemotron-3-Ultra-550b-a55b",
+      "super": "nvidia/nemotron-3-super-120b-a12b",
+      "nano": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+      "omni": "nvidia/Nemotron-3-Nano-Omni"
+    },
+    "prompt_sha256": {
+      "CLAIM_PROMPT": "79757ce60aaaf5377dde8465230665347bfca143f0f05b752c9efa3b5bde5e34",
+      "FILTER_PROMPT": "439a83d5b510aa71fcfc50c1fdf62816af0a26cce0a8403ac89618d16cabbe32",
+      "ASSUMPTION_PROMPT": "c3eb66989927b367ea581a7b15e2a10cce28685eb22df703c39223b64c3dacea",
+      "TRIAGE_PROMPT": "26293319ecd0ace0815fb8293cf05b4cbb11142f0c2e3e05e580faa74e1e9d5e",
+      "MISSING_SENTENCE_PROMPT": "b935383290f13c0a18521b2e0db1b556e66f5e5e61de1318671d8ad09dcb72e0"
+    },
+    "harness_spec_sha256": "f834b91915d18e8df77b309b8dfa2b22d5d914828f89e865a0c9a7bc8226132c",
+    "cost": {
+      "nemotron_billed_usd": 0,
+      "sandbox_reported_usd": 25.120755,
+      "total_usd": 25.120755,
+      "scope": "this search; ledger extraction is included only if it shared the search's router"
+    }
+  },
+  "claims": [
+    {
+      "status": "reproduced",
+      "gap_before": -0.005776022304832625,
+      "band": 0.009942239776951673,
+      "changes": {},
+      "gap_after": null,
+      "held_out": {},
+      "counterfactual": {},
+      "screen": [],
+      "hypotheses_tested": 0,
+      "replay": [],
+      "notes": [
+        "naive run is within the noise band of the paper's value"
+      ],
+      "value_sets": {},
+      "value_intervals": {},
+      "identifiable": null,
+      "pre_proposer": null,
+      "diagnosis": null,
+      "closes": false,
+      "equivalent": [],
+      "relations": {},
+      "differential": null,
+      "reporting": null,
+      "library": null,
+      "discrimination": null,
+      "target": {
+        "claim_id": "C46",
+        "metric": "c46_auc",
+        "paper_value": 86.08,
+        "held_out": false,
+        "tuned_separately": false,
+        "figure": "Table 1 (AUC, method=VGAE, dataset=Cora, features=true)",
+        "relation": null,
+        "quote": null,
+        "at": null
+      },
+      "attribution": null,
+      "plausibility": {},
+      "paper_claim": {
+        "quote": null,
+        "page": null,
+        "figure": "Table 1 (AUC, method=VGAE, dataset=Cora, features=true)",
+        "unit": null,
+        "headline": null,
+        "metric": "c46_auc",
+        "paper_value": 86.08,
+        "recorded": false
+      },
+      "measured": {
+        "metric": "c46_auc",
+        "median": 85.5828,
+        "repeats": [
+          85.7071,
+          85.5439,
+          85.5828,
+          86.0242,
+          85.411
+        ],
+        "n": 5,
+        "min": 85.411,
+        "max": 86.0242,
+        "band": 0.855828,
+        "cv": 0.002713680356091704,
+        "gap": -0.005776022304832625,
+        "band_rel": 0.009942239776951673,
+        "status": "reproduced",
+        "setup_check": null
+      },
+      "experiment": {
+        "found": false,
+        "note": "none was needed: the naive run is inside the noise band of the paper's value"
+      },
+      "belief": {
+        "checks": [],
+        "note": "nothing to verify: no explanation was proposed"
+      },
+      "unknown": {
+        "untestable": [],
+        "unmapped": [],
+        "setup": null,
+        "leads": [],
+        "alternatives": [
+          {
+            "changes": {
+              "@ast:gae/preprocessing.py:106:assume_unique": "False"
+            },
+            "runs": 3,
+            "gap": 0.0008190055762081269,
+            "mean_abs_gap": 0.0011211153986732864
+          },
+          {
+            "changes": {
+              "@ast:gae/preprocessing.py:76:replace": "False"
+            },
+            "runs": 3,
+            "gap": -0.00102462825278811,
+            "mean_abs_gap": 0.0012783608490069401
+          },
+          {
+            "changes": {
+              "@ast:gae/preprocessing.py:79:assume_unique": "False"
+            },
+            "runs": 3,
+            "gap": -0.0023187732342007873,
+            "mean_abs_gap": 0.0020666218178262427
+          }
+        ]
+      },
+      "cause": {
+        "kind": null,
+        "text": null,
+        "confirmed": null
+      },
+      "effect": null
+    }
+  ]
+}

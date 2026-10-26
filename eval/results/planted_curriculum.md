@@ -298,6 +298,25 @@ or more.
 
 Otherwise c5 stays.
 
+**Result.** Seed 8 made 29 gap tasks and 14 controls (scores in `eval/planted/curriculum/scores-run-c{5,7}-s8.json`):
+
+| | Gap tasks correct | Level 1 | Level 2 | Confidently wrong | Controls |
+|---|---|---|---|---|---|
+| c5 | 13 of 29 | 8 of 17 | 5 of 12 | 0 | 14 of 14 |
+| c7 | 17 of 29 | 11 of 17 | 6 of 12 | 0 | 14 of 14 |
+
+c7 was better on 4 tasks and worse on none (sign test p = 0.125). By kind, the gain is in scale (c5 5 of 8, c7 8 of
+8) and data (c5 3 of 8, c7 4 of 8); settings, code and reporting are unchanged. Each difference traces to the plan:
+- L1-b3c-s8-4 and L2-pygcn-s8-1 (scale): c5's probe found the factor on the measured curve but had 0 runs at g(v)
+  left. c7's hold (D) kept 6 and 11 runs for it, and the factor fit every swept claim.
+- L1-b3c-s8-2 (scale): c5 ran out of budget in the combine round. c7's early code screen ran 3 literal-lead
+  configurations on code that ran (E), and the settings search named batch_size=512.
+- L1-vgae-s8-2 (data): the arms' runs differ. c7 used 130 of 150 runs, and its mutation round found the training
+  cut; c5 named test_percent=60 and had no room for the mutation round.
+
+No c7 search crashed, and every task has a report. All four conditions hold, so **c7 is adopted**. Seed 8 is dev
+data from here on.
+
 ## c8, withdrawn after the dev suite; c9 without its M
 
 c8 (`planted-c8`, 1b6bf29) is c7 plus I, J, L, M and K, all found on c7's real-paper reruns:
@@ -328,6 +347,47 @@ that break ties between values (`max_steps` 1000 or 400 for the true 500). M is 
 **c9 is c8 without M**, plus the report fix for scale answers: a scale answer now carries its own reversal and
 evidence rows, not the replaced settings answer's. It is judged on the dev suite (two replicates) and then on a
 fresh planted batch.
+
+**c9's dev suite** (`planted-c9`, f90b212; bases 15000 and 15100): 96 of 138, against c7's 100 and c5's 99. Against
+c7, 2 tasks were better and 4 worse (sign test p = 0.69). There were no confident mistakes, and all 114 abstentions
+were correct. 96 is within 5 of c5's 99, so c9 passes the no-harm check. It had no planted batch of its own: its
+real-paper reruns found two more defects first (next section), so the fresh batch judges c10.
+
+## c10: two holds and a repeat (N, O, P)
+
+c9's reruns of RippleNet and BOND (`demo/runs/real-c9`, `real-c8`) ended unexplained with budget unspent:
+- **N.** The runs held for the patch round after the combine round were released only under `code_hold`, which
+  is off by default (c2 was not adopted). So a hold, once set, kept its runs from every later stage: the
+  mutation round, the protocol tests and any later claim. It is now released when the patch round is done.
+- **O.** The hold was the whole patch share (15% of the budget), even when the early code screen had already run
+  every configuration the round would screen. It now covers only the round's configurations without a run, plus
+  one fit's confirmation and counterfactual repeats. When the contrast step will name leads later (a model
+  reading of the paper), the round's configurations are unknown, and the whole share is still held.
+- **P.** History matching names no fit that has a single run, and nothing gave one a second. Before it labels an
+  unexplained claim, it now runs the target's two closest fits a second time when the budget allows.
+
+On RippleNet c9, a 30-run hold blocked the bisection of the repo's declared block (lr 1e-3, L2 1e-5, its closest
+fit). The patch round then needed none of those runs, and the mutation round stopped at 170 of 200. On BOND c8, the
+closest fit (the balance weight at 0.95) had one run, with 13 of 60 runs left. These two papers revealed N, O and P,
+so they are not evidence for c10. Each fix has a toy that fails on c9 (`tests/integration/test_c10_toys.py`).
+
+**Plan for seed 9, written before the batch was made.** c10 (`planted-c10`) is c7 plus I, J, L, K (c8 without M),
+the scale-answer report fix (c9), and N, O, P. Seed 9 has the size of seeds 7 and 8: 4 tasks per case and level
+on the hand harnesses, 2 on the -h ones. It is searched by c7 as adopted and by c10, both with the proposer off.
+The dev suite is run twice on c10 (bases 16000 and 16100) against c7's 12000 and 12100.
+
+On the planted batch, I, O and N act when a task is out of space with literal leads (code and data tasks mostly),
+P when the claims are out of space (suspected) with the target's closest fit run once, and I on a failed run. J, L
+and K act only with a paper or on literals written `30.`, which the planted cases rarely have. Expect few tasks
+where the arms differ.
+
+**Decision rule**, as for seed 8. c10 is adopted if all four hold:
+1. no confidently wrong answer and no crash in the c10 arm;
+2. no more tasks worse than better;
+3. every task where the arms differ is traced to a note from one of c10's changes, or to the arms' different runs;
+4. the dev suite pooled over two replicates is within 5 of c7's 100.
+
+Otherwise c7 stays.
 
 ## Infrastructure notes
 

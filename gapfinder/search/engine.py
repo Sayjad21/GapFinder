@@ -1387,6 +1387,7 @@ class GapSearch:
                     await self._discriminate(t, res)
                 except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
                     res.notes.append(f"discrimination stopped early: {exc}")
+            await self._repeat_fits(t, res)
             self._history_match(t, res)
             self._scale_reserve = 0
             if self._usable_points():
@@ -1399,8 +1400,10 @@ class GapSearch:
                     await self._patch_round(t, res)
                 except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
                     res.notes.append(f"patch round stopped early: {exc}")
-        if self.cfg.code_hold:
-            self._patch_reserve = 0  # what the patch round left goes on to the mutation round
+        # what the patch round left goes on to the mutation round, the protocol tests and the next claim; c2 released it
+        # only under code_hold, so with the default a hold set once kept its runs from every later stage (RippleNet c9
+        # rerun: the mutation round stopped at 170 of 200 runs)
+        self._patch_reserve = 0
         if self.cfg.history_matching and self.cfg.mutations:
             try:
                 await self._mutation_round(t, res)
@@ -2542,7 +2545,7 @@ class GapSearch:
         self.orch.events.emit("note", msg=f"contrast: {len(patch)} literal and {len(structural)} structural difference(s) "
                                           f"from the paper" + (f"; rejected: {'; '.join(rejected)}" if rejected else ""))
 
-    def _match_constants(self, res: ClaimResult) -> None:
+    def _match_constants(self, res: ClaimResult, quiet: bool = False) -> None:
         """Stated paper values with no knob, against the code's literals of the same name (no model call)."""
         root = self.spec.code_root()
         if not self.cfg.match_constants or root is None:
@@ -2552,12 +2555,12 @@ class GapSearch:
         pending = [a for a in self._unmapped_assumptions if a.knob in self.unmapped]
         found = match_constants(pending, root)
         res.diagnosis["matcher_leads"] = found
-        if found:
+        if found and not quiet:
             self.orch.events.emit("note", msg=f"constant matcher: {len(found)} literal(s) differ from the paper: "
                                               + "; ".join(f"{x['name']} {x['value']} -> {x['paper_value']}"
                                                           f" ({x['file']}:{x['line']})" for x in found[:6]))
 
-    def _match_ops(self, res: ClaimResult) -> None:
+    def _match_ops(self, res: ClaimResult, quiet: bool = False) -> None:
         """Operations the paper names against the ones the code calls (no model call): swap leads."""
         root = self.spec.code_root()
         if not self.cfg.op_swaps or root is None or not self.paper_text:
@@ -2566,7 +2569,7 @@ class GapSearch:
 
         found = op_swap_leads(root, self.paper_text)
         res.diagnosis["swap_leads"] = found
-        if found:
+        if found and not quiet:
             self.orch.events.emit("note", msg=f"operation swaps: {len(found)} the paper grounds: " + "; ".join(
                 f"{x['value']} -> {x['paper_value']} ({x['file']}{':' + str(x['line']) if x['line'] else ''})"
                 for x in found[:6]))
@@ -3173,9 +3176,38 @@ class GapSearch:
         leads = [x for x in code_checks(root, set(self.spec.knobs), executed=self._executed()) if x.family == "unexposed_setting" and x.value
                  and (not ast_patch.entry_script(root / x.file) or ast_patch.direct_entry(self.spec.run.command, x.file))]
         if leads:
-            self._patch_reserve = int(self.cfg.max_runs * self.cfg.patch_budget_frac)
+            self._patch_reserve = min(int(self.cfg.max_runs * self.cfg.patch_budget_frac), self._patch_need(t, d))
             self.orch.events.emit("note", msg=f"{t.claim_id}: out of space after the combine round; {self._patch_reserve} "
                                               f"runs held for a patch round ({len(leads)} literal code leads)")
+
+    def _patch_need(self, t: Target, d) -> int:
+        """The runs the patch round can still use: each configuration it would screen that has no run yet, and one
+        fit's confirmation and counterfactual repeats. With the contrast step ahead (a model reading of the paper
+        names its leads later) the round's every configuration is unknown, so the whole share. The whole share held
+        regardless starved verification when the early code screen had already run the round's configurations
+        (RippleNet c9 rerun: 30 runs held, none used, and the declared block's bisection stopped at 1 run of 3)."""
+        cap = int(self.cfg.max_runs * self.cfg.patch_budget_frac)
+        if self.cfg.contrast and self.router is not None and self.paper_text and self.trace_records:
+            return cap
+        root = self.spec.code_root()
+        from gapfinder.ingest.code_checks import code_checks
+        import types
+
+        try:
+            static = [x.to_dict() for x in code_checks(root, set(self.spec.knobs), executed=self._executed())]
+        except Exception:  # noqa: BLE001 (no leads read: the whole share, as before)
+            return cap
+        tmp = types.SimpleNamespace(diagnosis={})
+        self._match_constants(tmp, quiet=True)
+        self._match_ops(tmp, quiet=True)
+        grounded = list(tmp.diagnosis.get("matcher_leads") or []) + list(tmp.diagnosis.get("swap_leads") or [])
+        leads = self._patch_leads(static, grounded)
+        alone = [{k: v} for k, vals in (self._lead_values(x) for x in leads) for v in vals]
+        based = any(r["config"] for r in d.per_claim.get(t.claim_id, []))  # the round also tries each on the best fit
+        stated = sum(1 for x in leads if x.get("paper_value") and x.get("source") in ("contrast", "matcher", "swap"))
+        need = (sum(1 for c in alone if not self._runs.get(frozenset(c.items()))) + (len(alone) if based else 0)
+                + (2 if stated > 1 else 0) + 2 * self.confirm_repeats(t))
+        return min(cap, need)
 
     async def _value_intervals(self, t: Target, res: ClaimResult) -> None:
         """Plan F3 (value_interval): which values of the answer's knobs fit every claim, beyond the one chosen. A
@@ -3821,6 +3853,27 @@ class GapSearch:
             res.notes.append(f"{dict(c)} matches {t.claim_id} (I={best['I'][t.claim_id]:g}) but breaks "
                              f"{broken or 'a held-out claim'}; no tested condition matches all claims, so the rest of "
                              "the gap probably lies in code, data or evaluation, which GapFinder doesn't change")
+
+    async def _repeat_fits(self, t: Target, res: ClaimResult) -> None:
+        """Before history matching labels an unexplained claim: its closest fits to the target that have a single run
+        get a second, when the budget has it, so the label is decided on repeats instead of left out for want of
+        them (BOND c8 rerun: the closest fit had 1 run and 13 of 60 runs were left unspent)."""
+        label = res.attribution.confidence_label if res.attribution else None
+        if label != ConfidenceLabel.unexplained.value:
+            return
+        from gapfinder.search.history import diagnose
+
+        runs, claims, extra = self._hm_inputs(t)
+        d = diagnose(runs, claims, t.claim_id, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc, **extra)
+        if d.kind != "out_of_space_suspected":
+            return
+        worst = lambda r: (max(r["I"].values()), r["I"][t.claim_id])  # noqa: E731 (as _history_match ranks them)
+        fits = sorted((r for r in d.per_claim.get(t.claim_id, []) if r["config"]), key=worst)[:2]
+        try:
+            await _all(*(self.measure(r["config"], 2, "history matching (repeat)") for r in fits
+                         if len(self.measure_ok(r["config"])) < 2))
+        except (RunBudgetExceeded, budget.BudgetExceeded):
+            pass  # left as it was: _history_match names no single-run fit
 
     def _order_candidates(self, t: Target, candidates: list[Changes], gap_before: float) -> list[Changes]:
         """Best first, the same order on every path (the full search and the budget-exhausted one):

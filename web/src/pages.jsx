@@ -50,8 +50,8 @@ export function Home() {
   const c = cases.find((x) => x.slug === pick) || cases[0];
   const cur = c?.versions[c.current];
   const tally = data.real_tally || {};
-  const p7 = data.planted_totals.find((t) => t.version === "c5" && t.seed === 7);
-  const dev = data.dev_suite[data.dev_suite.length - 1];
+  const p7 = data.planted_totals.filter((t) => t.adopted).sort((a, b) => b.seed - a.seed || +b.version.slice(1) - +a.version.slice(1))[0];
+  const dev = [...data.dev_suite].reverse().find((d) => d.adopted !== false) || data.dev_suite[data.dev_suite.length - 1];
   return (
     <div className="shell">
       <section className="hero" aria-labelledby="hero-title">
@@ -81,12 +81,12 @@ export function Home() {
       <section className="section" aria-labelledby="record-title">
         <header>
           <h2 id="record-title">Sixteen earlier papers, misses included</h2>
-          <p>Each square is one paper whose cause is documented, re-run on each version of the engine. The fixes in c7 and c8 were
+          <p>Each square is one paper whose cause is documented, re-run on each version of the engine. The fixes since c5 were
             found on these same papers, so the rows show what the engine does now, not what it would do on a paper it has never seen.</p>
         </header>
-        <VersionStrips real={data.real} />
+        <VersionStrips real={data.real} versions={data.real_versions} />
         <p className="small" style={{ marginTop: 16 }}>
-          On the current version: {tally.found || 0} found, {tally.partial || 0} partly found, {tally.no_gap || 0} correctly reported no gap,
+          On {data.tally_version || "the current version"}, the version every paper was re-run on: {tally.found || 0} found, {tally.partial || 0} partly found, {tally.no_gap || 0} correctly reported no gap,
           and {tally.missed || 0} missed. <a href={href("/cases")}>Read every case</a>.
         </p>
       </section>
@@ -104,13 +104,13 @@ export function Home() {
           {p7 && (
             <div className="fact">
               <div className="figure">{p7.found} <small>of {p7.gaps}</small></div>
-              <p>fresh planted gaps found by c5, the adopted version, on seed 7, with {p7.confidently_wrong} confidently wrong and {p7.controls_correct} of {p7.controls} controls left alone.</p>
+              <p>fresh planted gaps found by {p7.version}, the adopted version, on seed {p7.seed}, with {p7.confidently_wrong} confidently wrong and {p7.controls_correct} of {p7.controls} controls left alone.</p>
             </div>
           )}
           {dev && (
             <div className="fact">
               <div className="figure">{dev.correct} <small>of 138</small></div>
-              <p>dev-suite runs with a cause found by {dev.version}, pooled over two replicates, and every one of the 114 abstentions correct.</p>
+              <p>dev-suite runs with a cause found by {dev.version}, the adopted version, pooled over two replicates, and every one of the 114 abstentions correct.</p>
             </div>
           )}
         </div>
@@ -129,7 +129,7 @@ export function Home() {
 export function Cases() {
   const { data, error } = useShowcase();
   if (!data) return <div className="shell"><Loading error={error} /></div>;
-  const versions = ["c5", "c7", "c8"].filter((v) => data.real.some((p) => p.versions[v]));
+  const versions = (data.real_versions || ["c5", "c7"]).filter((v) => data.real.some((p) => p.versions[v]));
   const order = { found: 0, partial: 1, no_gap: 2, missed: 3 };
   const rows = [...data.real].sort((a, b) => order[a.versions[a.current].verdict] - order[b.versions[b.current].verdict]);
   return (
@@ -200,7 +200,7 @@ export function Case({ slug, query }) {
           <Verdict v={sel.verdict} big />
           <span>{c.venue}</span>
           <nav className="toggle" aria-label="Engine version">
-            {["c5", "c7", "c8"].filter((x) => c.versions[x]).map((x) => (
+            {(data.real_versions || ["c5", "c7"]).filter((x) => c.versions[x]).map((x) => (
               <a key={x} href={href(`/case/${slug}`, { v: x })} aria-current={x === v ? "page" : undefined}>{x}</a>
             ))}
           </nav>
@@ -233,7 +233,7 @@ export function Case({ slug, query }) {
       <section className="document" aria-labelledby="versions-title">
         <h2 id="versions-title">Across versions</h2>
         <ol className="timeline">
-          {["c5", "c7", "c8"].filter((x) => c.versions[x]).map((x) => (
+          {(data.real_versions || ["c5", "c7"]).filter((x) => c.versions[x]).map((x) => (
             <li key={x}>
               <div className="v">{x}</div>
               <div>
@@ -422,7 +422,7 @@ export function Evidence() {
       <section className="section" aria-labelledby="ev-real">
         <header><h2 id="ev-real">Real papers, re-run post-hoc</h2>
           <p>Sixteen papers with documented causes. A demonstration: the fixes were found on them.</p></header>
-        <VersionStrips real={data.real} />
+        <VersionStrips real={data.real} versions={data.real_versions} />
       </section>
       <section className="section" aria-labelledby="ev-planted">
         <header><h2 id="ev-planted">Planted gaps on fresh batches</h2>
@@ -449,8 +449,8 @@ export function Evidence() {
         <header><h2 id="ev-dev">The development suite</h2>
           <p>GapBench tasks run locally at no cost, two replicates per version. Identical code swings by about five between runs.</p></header>
         <div className="ledger-wrap"><table>
-          <thead><tr><th scope="col">Version</th><th scope="col" className="num">Runs with a cause found (of 138)</th><th scope="col">Replicates</th></tr></thead>
-          <tbody>{data.dev_suite.map((d) => <tr key={d.version}><td>{d.version}</td><td className="num">{d.correct}</td><td className="num">{d.runs.join(", ")}</td></tr>)}</tbody>
+          <thead><tr><th scope="col">Version</th><th scope="col">Status</th><th scope="col" className="num">Runs with a cause found (of 138)</th><th scope="col">Replicates</th></tr></thead>
+          <tbody>{data.dev_suite.map((d) => <tr key={d.version}><td>{d.version}</td><td>{d.adopted === false ? <span className="muted">not adopted</span> : "adopted"}</td><td className="num">{d.correct}</td><td className="num">{d.runs.join(", ")}</td></tr>)}</tbody>
         </table></div>
       </section>
       <section className="section" aria-labelledby="ev-agent">
