@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { STATIC, api } from "./api.js";
 import { ROUNDS, chipClass, initialState, play, reduce } from "./replay.js";
-import { changesText, num, signedPct } from "./ui.jsx";
+import Gauge from "./Gauge.jsx";
+import { changesText, signedPct } from "./ui.jsx";
 
 const SPEEDS = [4, 16, 64];
 const STAGE_NAME = { noise: "Measuring the noise", screen: "Screening settings", confirm: "Confirming with repeats",
@@ -43,26 +44,14 @@ function ClaimTracks({ claims, state }) {
           const v = b.parsed_metrics[target.metric];
           if (best === null || Math.abs(v - target.paper_value) < Math.abs(best.v - target.paper_value)) best = { v, b };
         }
-        const naive = nb?.median;
-        const vals = [target.paper_value, naive, best?.v].filter((x) => x !== undefined && x !== null);
-        const hi = Math.max(...vals) * 1.15 || 1;
-        const x = (v) => `${Math.max(0, Math.min(100, (v / hi) * 100))}%`;
-        const band = nb ? nb.band : 0;
-        const inside = best && Math.abs(best.v - target.paper_value) <= band;
         return (
           <div className="claim" key={target.claim_id}>
             <div className="claim-head"><b>{target.claim_id}</b> {target.metric}{target.held_out && <span className="tag">held out</span>}</div>
-            <div className="track" aria-hidden="true">
-              <div className="window" style={{ left: x(target.paper_value - band), width: `calc(${x(target.paper_value + band)} - ${x(target.paper_value - band)})` }} />
-              {naive !== undefined && <div className="bar naive" style={{ width: x(naive) }} />}
-              {best && <div className={`bar best${inside ? " inside" : ""}`} style={{ width: x(best.v) }} />}
-              <div className="paper" style={{ left: x(target.paper_value) }} />
-            </div>
-            <div className="claim-legend">
-              <span>paper <b>{target.paper_value}</b></span>
-              <span className="lg naive">as run {naive !== undefined ? num(naive, 3) : "…"}</span>
-              <span className="lg best">closest single run {best ? `${num(best.v, 3)} (${changesText(best.b.knob_changes)})` : "…"}</span>
-            </div>
+            {nb ? (
+              <Gauge compact g={{ paper: target.paper_value, code: nb.median, after: null, band: nb.band / Math.abs(target.paper_value || 1) }}
+                     live={best ? best.v : null} label={`${target.claim_id}, run by run`} />
+            ) : <p className="small">Waiting for the runs that measure the noise…</p>}
+            {best && <p className="small" style={{ margin: "2px 0 0" }}>The closest single run so far: {changesText(best.b.knob_changes)}. A label needs confirmed repeats.</p>}
           </div>
         );
       })}

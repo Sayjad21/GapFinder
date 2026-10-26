@@ -3,10 +3,12 @@ import { digits, num, prefersReducedMotion, signedPct } from "./ui.jsx";
 
 // The gap gauge: a measuring rule with two jaws, the paper’s reading and the code’s, and the gap highlighted between
 // them. With an answer, the code’s jaw moves to its reading after GapFinder’s change and the highlight shrinks to what
-// is left. `g`: {paper, code, after, band (relative), metric, figure}. `show`: "before" or "after".
+// is left. `g`: {paper, code, after, band (relative), metric, figure}. `show`: "before" or "after". `compact`: one-line
+// labels and no caption (the replay's claims); `live`: a reading the code's jaw follows (the closest run so far).
 
-const H = 204;
-const Y = { pLabel: 20, pVal: 46, jawTop: 58, gapTop: 94, gapBot: 112, axis: 120, tickLab: 142, jawBot: 152, cLabel: 176, cVal: 198 };
+const H0 = 204, HC = 108;
+const Y0 = { pLabel: 20, pVal: 46, jawTop: 58, gapTop: 94, gapBot: 112, axis: 120, tickLab: 142, jawBot: 152, cLabel: 176, cVal: 198 };
+const YC = { pLabel: 14, jawTop: 22, gapTop: 38, gapBot: 50, axis: 56, tickLab: 74, jawBot: 80, cLabel: 100 };
 
 function niceTicks(lo, hi, n = 6) {
   const raw = (hi - lo) / n;
@@ -19,7 +21,9 @@ function niceTicks(lo, hi, n = 6) {
 
 const easeOut = (t) => 1 - (1 - t) ** 3;
 
-export default function Gauge({ g, show = "after", playKey = 0, autoplay = false, label }) {
+export default function Gauge({ g, show = "after", playKey = 0, autoplay = false, label, compact = false, live = null,
+                                liveLabel = "closest run so far" }) {
+  const H = compact ? HC : H0, Y = compact ? YC : Y0;
   const ref = useRef(null);
   const [w, setW] = useState(760);
   useEffect(() => {
@@ -53,7 +57,7 @@ export default function Gauge({ g, show = "after", playKey = 0, autoplay = false
 
   if (!g) return null;
   const band = (g.band || 0) * Math.abs(g.paper);
-  const vals = [g.paper, g.code, ...(hasAfter ? [g.after] : []), g.paper - band, g.paper + band];
+  const vals = [g.paper, g.code, ...(hasAfter ? [g.after] : []), ...(live !== null ? [live] : []), g.paper - band, g.paper + band];
   const lo0 = Math.min(...vals), hi0 = Math.max(...vals);
   const pad = (hi0 - lo0) * 0.28 || Math.abs(g.paper) * 0.04 || 1;
   const lo = lo0 - pad, hi = hi0 + pad;
@@ -65,7 +69,7 @@ export default function Gauge({ g, show = "after", playKey = 0, autoplay = false
   const d = digits([g.paper, g.code, ...(hasAfter ? [g.after] : [])]);
   const td = Math.max(0, Math.min(4, Math.ceil(-Math.log10(step)) + (step / 10 ** Math.floor(Math.log10(step)) === 2.5 ? 1 : 0)));
 
-  const codeNow = hasAfter ? g.code + (g.after - g.code) * p : g.code;
+  const codeNow = live !== null ? live : hasAfter ? g.code + (g.after - g.code) * p : g.code;
   const xp = x(g.paper), xc = x(codeNow), xc0 = x(g.code);
   const gapNow = (codeNow - g.paper) / Math.abs(g.paper);
   const gapW = Math.abs(xp - xc);
@@ -94,26 +98,34 @@ export default function Gauge({ g, show = "after", playKey = 0, autoplay = false
         {gapW > 0.5 && (
           <path className="gap" d={`M${left + slant},${Y.gapTop} L${left + gapW},${Y.gapTop} L${left + gapW - slant},${Y.gapBot} L${left},${Y.gapBot} Z`} />
         )}
-        {gapW > 78
+        {gapW > (compact ? 58 : 78)
           ? <text className="gaptext" x={left + gapW / 2} y={(Y.gapTop + Y.gapBot) / 2 + 4.5} textAnchor="middle">{signedPct(gapNow)}</text>
           : <text className="gaptext out" x={left + gapW / 2} y={Y.gapTop - 10} textAnchor="middle">{signedPct(gapNow)}</text>}
         {/* where the code started, once it has moved */}
-        {hasAfter && p > 0.02 && <line className="ghost" x1={xc0} x2={xc0} y1={Y.gapTop - 2} y2={Y.axis + 10} />}
+        {((hasAfter && p > 0.02) || (live !== null && live !== g.code)) && <line className="ghost" x1={xc0} x2={xc0} y1={Y.gapTop - 2} y2={Y.axis + 10} />}
         {/* the paper’s jaw */}
         <line className="jaw-paper" x1={xp} x2={xp} y1={Y.jawTop} y2={Y.axis + 6} />
-        <text className="lbl serif" x={xp} y={Y.pLabel} textAnchor={anchor(xp)}>the paper</text>
-        <text className="val" x={xp} y={Y.pVal} textAnchor={anchor(xp)}>{num(g.paper, d)}</text>
+        {compact ? (
+          <text className="lbl" x={xp} y={Y.pLabel} textAnchor={anchor(xp)}><tspan className="serif-i">the paper</tspan> <tspan className="v">{num(g.paper, d)}</tspan></text>
+        ) : (<>
+          <text className="lbl serif" x={xp} y={Y.pLabel} textAnchor={anchor(xp)}>the paper</text>
+          <text className="val" x={xp} y={Y.pVal} textAnchor={anchor(xp)}>{num(g.paper, d)}</text>
+        </>)}
         {/* the code’s jaw */}
         <line className="jaw-code" x1={xc} x2={xc} y1={Y.gapTop - 4} y2={Y.jawBot} />
-        <text className="lbl" x={xc} y={Y.cLabel} textAnchor={anchor(xc)}>{codeLabel}</text>
-        <text className="val" x={xc} y={Y.cVal} textAnchor={anchor(xc)}>{num(codeNow, d)}</text>
+        {compact ? (
+          <text className="lbl" x={xc} y={Y.cLabel} textAnchor={anchor(xc)}>{live !== null ? liveLabel : "as run"} <tspan className="v">{num(codeNow, d)}</tspan></text>
+        ) : (<>
+          <text className="lbl" x={xc} y={Y.cLabel} textAnchor={anchor(xc)}>{codeLabel}</text>
+          <text className="val" x={xc} y={Y.cVal} textAnchor={anchor(xc)}>{num(codeNow, d)}</text>
+        </>)}
       </svg>
-      <figcaption className="gauge-caption">
+      {!compact && <figcaption className="gauge-caption">
         <span className="key"><span className="sw paper" />the paper{g.figure ? `, ${g.figure}` : ""}</span>
         <span className="key"><span className="sw code" />the code{hasAfter ? `: as run ${num(g.code, d)}, after ${num(g.after, d)}` : `, as run`}</span>
         <span className="key"><span className="sw gap" />the gap</span>
         {band > 0 && <span className="key"><span className="sw band" />the run-to-run noise around the paper’s number</span>}
-      </figcaption>
+      </figcaption>}
     </figure>
   );
 }
