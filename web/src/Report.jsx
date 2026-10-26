@@ -130,7 +130,8 @@ function Unknown({ u }) {
   );
 }
 
-const CAUSE_NAME = { confirmed_cause: "Confirmed cause", plausible_explanation: "Plausible explanation (fits but unsupported)", interacting_factors: "Interacting factors" };
+const CAUSE_NAME = { confirmed_cause: "Confirmed cause", plausible_explanation: "Plausible explanation (fits but unsupported)", interacting_factors: "Interacting factors",
+  reporting_rule: "How the paper reports its number", library_drift: "A library release changed the numbers", paper_era_code: "The paper-era code gives the numbers" };
 
 function splitSentences(p) {
   return p.split(/(?<=[.!?])\s+(?=[A-Z(["'])/).filter(Boolean);
@@ -205,17 +206,17 @@ function Card({ c }) {
     <article className={`card ${kind ? `cause-${kind}` : ""}`}>
       <header>
         <span className={`label ${LABEL_CLASS[label] || "muted"}`}>{label}</span>
-        <h4>{c.target.claim_id} · {c.target.metric}</h4>
+        <h3>{c.target.claim_id} <span className="muted">{c.target.metric}</span></h3>
         <span className="paperval">paper {c.target.paper_value}</span>
       </header>
-      {kind && <p className={`cause ${kind}`}><b>{CAUSE_NAME[kind]}.</b> {c.cause.text.replace(/^[^:]*: /, "")}</p>}
+      {kind && <p className={`cause ${kind}`}><b>{CAUSE_NAME[kind] || "Explanation"}.</b> {c.cause.text.replace(/^[^:]*: /, "").replace(/^./, (m) => m.toUpperCase())}</p>}
       {c.status === "reproduced" ? (
         <p>Reproduces: the naive gap {pct(c.gap_before)} is inside the noise band ±{(c.band * 100).toFixed(1)}%.</p>
       ) : c.status === "inconclusive" ? (
         <p>Inconclusive: the naive gap {pct(c.gap_before)} is inside the noise band ±{(c.band * 100).toFixed(1)}%,
           but the band is too wide to call it a reproduction or to test explanations.</p>
       ) : (
-        <p className="gap">gap <b>{pct(c.gap_before)}</b> → <b>{pct(c.gap_after)}</b> · noise ±{(c.band * 100).toFixed(1)}% · {c.hypotheses_tested} hypotheses tested</p>
+        <p className="gap">The gap went from <b>{pct(c.gap_before)}</b> to <b>{pct(c.gap_after)}</b>, against run-to-run noise of ±{(c.band * 100).toFixed(1)}%, with {c.hypotheses_tested} hypotheses tested.</p>
       )}
       <Q q="Which experiment changed it?"><Experiment x={c.experiment} effect={c.effect} /></Q>
       <Q q="What did the paper report?"><Paper p={c.paper_claim} /></Q>
@@ -273,13 +274,13 @@ export default function Report({ run }) {
   const r = run?.report;
   if (!r) return <p>Loading…</p>;
   return (
-    <section>
+    <section className="report">
       <div className="report-head">
-        <h2>Gap Report: {r.paper}</h2>
+        <h2>The full Gap Report</h2>
         <p className="small">
-          Artifact <code>{r.artifact}</code> · {r.runs} branch runs ({r.setup_runs} build/load setups) · generated {r.generated}
-          {" · "}<a href={api.reportMdUrl(run.id)}>Markdown</a> · <a href={api.runJsonUrl(run.id)}>JSON</a>
-          {r.missing_sentence_meta?.drafted > 0 && <>{" · "}<a href={api.issueDraftUrl(run.id)}>Issue draft (not posted)</a></>}
+          {r.runs} runs of <code>{r.artifact}</code> ({r.setup_runs} builds and loads), written {r.generated}.{" "}
+          Download it as <a href={api.reportMdUrl(run.id)}>Markdown</a> or <a href={api.runJsonUrl(run.id)}>JSON</a>.
+          {r.missing_sentence_meta?.drafted > 0 && <>{" "}<a href={api.issueDraftUrl(run.id)}>Read the drafted issue (not posted)</a>.</>}
         </p>
         {r.partial && <p className="warn">Partial report: the run or dollar budget ran out before every claim was verified.</p>}
         {r.setup_check && <p className={r.setup_check.reproducible === false ? "warn" : "small"}>Setup check: {r.setup_check.note}.</p>}

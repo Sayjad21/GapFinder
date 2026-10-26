@@ -1,0 +1,326 @@
+{
+  "paper": "G-Mixup (devset)",
+  "artifact": "gmixup",
+  "generated": "2026-10-26 14:52",
+  "partial": false,
+  "runs": 5,
+  "setup_runs": 0,
+  "cost": {
+    "sandbox_usd": 113.383949,
+    "sandbox_runs": 6,
+    "setup_runs": 0,
+    "tokens": {},
+    "total_usd": 113.383949,
+    "cap_usd": null
+  },
+  "naive": {
+    "gin_imdbb_gmixup_acc": 71.0,
+    "gin_imdbb_vanilla_acc": 74.0,
+    "gin_imdbm_gmixup_acc": 47.0,
+    "gin_imdbm_vanilla_acc": 46.0
+  },
+  "noise": {
+    "gin_imdbb_gmixup_acc": {
+      "metric": "gin_imdbb_gmixup_acc",
+      "n": 5,
+      "median": 71.0,
+      "band": 3.0,
+      "cv": 0.03472371310881051
+    },
+    "gin_imdbb_vanilla_acc": {
+      "metric": "gin_imdbb_vanilla_acc",
+      "n": 5,
+      "median": 74.0,
+      "band": 2.0,
+      "cv": 0.02611756064397931
+    },
+    "gin_imdbm_gmixup_acc": {
+      "metric": "gin_imdbm_gmixup_acc",
+      "n": 5,
+      "median": 47.0,
+      "band": 4.0,
+      "cv": 0.07305033809580401
+    },
+    "gin_imdbm_vanilla_acc": {
+      "metric": "gin_imdbm_vanilla_acc",
+      "n": 5,
+      "median": 46.0,
+      "band": 4.659999999999997,
+      "cv": 0.07827790401246557
+    }
+  },
+  "unmapped_assumptions": [
+    "ge",
+    "lam_range",
+    "dataset",
+    "model",
+    "gmixup",
+    "seed",
+    "weight_decay",
+    "resolution",
+    "device"
+  ],
+  "renamed_assumptions": {},
+  "spec_only_knobs": [
+    "lam_lo",
+    "lam_hi"
+  ],
+  "corrected_defaults": [],
+  "unverified_defaults": [],
+  "trace": {
+    "processes": 4,
+    "steps": 124,
+    "roles": {
+      "batch_size": {
+        "knob": "batch_size",
+        "role": "size",
+        "sink": "batch.batch_size (DataLoader)",
+        "site": "src/gmixup.py:260",
+        "value": "128"
+      },
+      "num_hidden": {
+        "knob": "num_hidden",
+        "role": "size",
+        "sink": "width.out_features (Linear)",
+        "site": "src/models.py:41",
+        "value": "64"
+      },
+      "lr": {
+        "knob": "lr",
+        "role": "rate",
+        "sink": "optimizer.lr (Adam)",
+        "site": "src/gmixup.py:271",
+        "value": "0.01"
+      },
+      "epoch": {
+        "knob": "epoch",
+        "role": "count",
+        "sink": "range() bound",
+        "site": "src/gmixup.py:275",
+        "value": "800"
+      },
+      "aug_num": {
+        "knob": "aug_num",
+        "role": "count",
+        "sink": "range() bound",
+        "site": "src/utils.py:212",
+        "value": "10"
+      }
+    },
+    "ambiguous": [],
+    "leads": [
+      {
+        "file": "src/gmixup.py",
+        "line": 271,
+        "name": "weight_decay",
+        "literal": "0.0005",
+        "sink": "optimizer.weight_decay (Adam)",
+        "knob": "@ast:src/gmixup.py:271:weight_decay"
+      },
+      {
+        "file": "src/gmixup.py",
+        "line": 272,
+        "name": "step_size",
+        "literal": "100",
+        "sink": "scheduler.step_size (StepLR)",
+        "knob": "@ast:src/gmixup.py:272:step_size"
+      },
+      {
+        "file": "src/gmixup.py",
+        "line": 272,
+        "name": "gamma",
+        "literal": "0.5",
+        "sink": "scheduler.gamma (StepLR)",
+        "knob": "@ast:src/gmixup.py:272:gamma"
+      }
+    ],
+    "runtime_values": {
+      "epoch": "800",
+      "batch_size": "128",
+      "lr": "0.01",
+      "num_hidden": "64",
+      "lam_lo": "0.005",
+      "lam_hi": "0.01",
+      "aug_ratio": "0.15",
+      "aug_num": "10"
+    },
+    "executed_lines": 399
+  },
+  "untestable": [],
+  "closest_overall": [
+    {
+      "changes": {},
+      "runs": 5,
+      "gaps": {
+        "C34": -0.013066444259104778,
+        "C29": 0.034241788958770135,
+        "C34_imdbm": -0.06856916369401508,
+        "C29_imdbm": -0.057956174482899823
+      },
+      "mean_abs_gap": 0.04345839284869746
+    }
+  ],
+  "audit": {
+    "held_out": [
+      {
+        "claim": "C29",
+        "metric": "gin_imdbb_vanilla_acc",
+        "paper": 71.55,
+        "measured": 74.0,
+        "gap": 0.034241788958770135,
+        "band": 0.027952480782669462,
+        "tuned_separately": false
+      }
+    ],
+    "comparisons": [],
+    "leakage": [],
+    "stated_untestable": [
+      {
+        "setting": "ge",
+        "paper_value": "LG",
+        "quote": "we use LG as g in experiments",
+        "ref": "p.4"
+      },
+      {
+        "setting": "lam_range",
+        "paper_value": "0.5",
+        "quote": "= 0.5 \u21e4WG + 0.5 \u21e4WH",
+        "ref": "p.3"
+      }
+    ],
+    "paper_comparisons": [],
+    "protocol_tests": []
+  },
+  "triaged_failures": [],
+  "setup_check": null,
+  "effect_threshold": 1.0,
+  "provenance": {
+    "gapfinder": {
+      "commit": "74c9414da0388b40a5f1bbeaaf040a4ed05a6bdb",
+      "dirty": true
+    },
+    "models": {
+      "ultra": "nvidia/Nemotron-3-Ultra-550b-a55b",
+      "super": "nvidia/nemotron-3-super-120b-a12b",
+      "nano": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+      "omni": "nvidia/Nemotron-3-Nano-Omni"
+    },
+    "prompt_sha256": {
+      "CLAIM_PROMPT": "79757ce60aaaf5377dde8465230665347bfca143f0f05b752c9efa3b5bde5e34",
+      "FILTER_PROMPT": "439a83d5b510aa71fcfc50c1fdf62816af0a26cce0a8403ac89618d16cabbe32",
+      "ASSUMPTION_PROMPT": "c3eb66989927b367ea581a7b15e2a10cce28685eb22df703c39223b64c3dacea",
+      "TRIAGE_PROMPT": "26293319ecd0ace0815fb8293cf05b4cbb11142f0c2e3e05e580faa74e1e9d5e",
+      "MISSING_SENTENCE_PROMPT": "b935383290f13c0a18521b2e0db1b556e66f5e5e61de1318671d8ad09dcb72e0"
+    },
+    "harness_spec_sha256": "e699f18e6228206940b5235239180f3554b8af3bf2937ee6b0605a2abf6a4bb7",
+    "cost": {
+      "nemotron_billed_usd": 0.0012,
+      "sandbox_reported_usd": 113.383949,
+      "total_usd": 113.385148,
+      "scope": "this search; ledger extraction is included only if it shared the search's router"
+    }
+  },
+  "claims": [
+    {
+      "status": "reproduced",
+      "gap_before": -0.013066444259104778,
+      "band": 0.04170141784820684,
+      "changes": {},
+      "gap_after": null,
+      "held_out": {},
+      "counterfactual": {},
+      "screen": [],
+      "hypotheses_tested": 0,
+      "replay": [],
+      "notes": [
+        "naive run is within the noise band of the paper's value"
+      ],
+      "value_sets": {},
+      "value_intervals": {},
+      "identifiable": null,
+      "pre_proposer": null,
+      "diagnosis": null,
+      "closes": false,
+      "equivalent": [],
+      "relations": {},
+      "differential": null,
+      "reporting": null,
+      "library": null,
+      "discrimination": null,
+      "target": {
+        "claim_id": "C34",
+        "metric": "gin_imdbb_gmixup_acc",
+        "paper_value": 71.94,
+        "held_out": false,
+        "tuned_separately": false,
+        "figure": "Table 2",
+        "relation": null,
+        "quote": null,
+        "at": null
+      },
+      "attribution": null,
+      "plausibility": {},
+      "paper_claim": {
+        "quote": "w/ G-Mixup 71.94\u00b13.00 50.46\u00b11.49 92.90\u00b10.87 55.49\u00b10.53 50.50\u00b10.41",
+        "page": 7,
+        "figure": "Table 2",
+        "unit": "percentage",
+        "headline": false,
+        "metric": "gin_imdbb_gmixup_acc",
+        "paper_value": 71.94,
+        "recorded": true
+      },
+      "measured": {
+        "metric": "gin_imdbb_gmixup_acc",
+        "median": 71.0,
+        "repeats": [
+          72.0,
+          67.5,
+          72.5,
+          71.0,
+          67.5
+        ],
+        "n": 5,
+        "min": 67.5,
+        "max": 72.5,
+        "band": 3.0,
+        "cv": 0.03472371310881051,
+        "gap": -0.013066444259104778,
+        "band_rel": 0.04170141784820684,
+        "status": "reproduced",
+        "setup_check": null
+      },
+      "experiment": {
+        "found": false,
+        "note": "none was needed: the naive run is inside the noise band of the paper's value"
+      },
+      "belief": {
+        "checks": [],
+        "note": "nothing to verify: no explanation was proposed"
+      },
+      "unknown": {
+        "untestable": [],
+        "unmapped": [
+          "ge",
+          "lam_range",
+          "dataset",
+          "model",
+          "gmixup",
+          "seed",
+          "weight_decay",
+          "resolution",
+          "device"
+        ],
+        "setup": null,
+        "leads": [],
+        "alternatives": []
+      },
+      "cause": {
+        "kind": null,
+        "text": null,
+        "confirmed": null
+      },
+      "effect": null
+    }
+  ]
+}

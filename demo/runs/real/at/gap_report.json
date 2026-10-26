@@ -1,0 +1,371 @@
+{
+  "paper": "Anomaly Transformer (devbatch-2)",
+  "artifact": "at",
+  "generated": "2026-10-26 01:24",
+  "partial": false,
+  "runs": 8,
+  "setup_runs": 0,
+  "cost": {
+    "sandbox_usd": 415.9819,
+    "sandbox_runs": 9,
+    "setup_runs": 0,
+    "tokens": {},
+    "total_usd": 415.9819,
+    "cap_usd": null
+  },
+  "naive": {
+    "smd_f1": 91.69,
+    "smd_precision": 89.33,
+    "smd_recall": 94.17
+  },
+  "noise": {
+    "smd_f1": {
+      "metric": "smd_f1",
+      "n": 5,
+      "median": 91.69,
+      "band": 2.3600000000000136,
+      "cv": 0.013200659187010164
+    },
+    "smd_precision": {
+      "metric": "smd_precision",
+      "n": 5,
+      "median": 89.33,
+      "band": 0.8933,
+      "cv": 0.004706362765349917
+    },
+    "smd_recall": {
+      "metric": "smd_recall",
+      "n": 5,
+      "median": 94.17,
+      "band": 3.5999999999999943,
+      "cv": 0.022845861982298876
+    }
+  },
+  "unmapped_assumptions": [
+    "cudnn.benchmark",
+    "random_seed",
+    "adjustment_strategy",
+    "validation_set_for_threshold",
+    "loss weight lambda",
+    "lambda_hyperparameter",
+    "--dataset",
+    "model_architecture_dmodel_h",
+    "--data_path",
+    "gpu_hardware",
+    "threshold selection method (\u03b4 vs r)",
+    "pytorch_version",
+    "prior distribution",
+    "early_stopping_criterion",
+    "adam_optimizer_betas_eps_weight_decay",
+    "multi-layer vs single-layer",
+    "data_loading_shuffling",
+    "CUDA_VISIBLE_DEVICES",
+    "sliding_window_stride",
+    "--pretrained_model",
+    "--input_c",
+    "--model_save_path",
+    "--mode",
+    "validation split / anomaly score threshold \u03b4",
+    "anomaly ratio r for threshold selection",
+    "eval_batch_size",
+    "dtype_precision",
+    "random seed / initialization",
+    "PyTorch version / CUDA version",
+    "minimax optimization (enabled/disabled)",
+    "--output_c",
+    "--anormly_ratio_default"
+  ],
+  "renamed_assumptions": {},
+  "spec_only_knobs": [],
+  "corrected_defaults": [],
+  "unverified_defaults": [],
+  "trace": null,
+  "untestable": [],
+  "closest_overall": [
+    {
+      "changes": {},
+      "runs": 5,
+      "gaps": {
+        "C_smd_f1": -0.006931658182605877,
+        "C_smd_precision": -0.0007829977628636172,
+        "C_smd_recall": -0.013410162388685186
+      },
+      "mean_abs_gap": 0.007041606111384893
+    },
+    {
+      "changes": {
+        "@ast:solver.py:341:@if": "False"
+      },
+      "runs": 3,
+      "gaps": {
+        "C_smd_f1": -0.9744395104516409,
+        "C_smd_precision": -0.8814317673378077,
+        "C_smd_recall": -0.9860660031430069
+      },
+      "mean_abs_gap": 0.9473124269774852
+    }
+  ],
+  "audit": {
+    "held_out": [],
+    "comparisons": [],
+    "leakage": [],
+    "stated_untestable": [
+      {
+        "setting": "adjustment_strategy",
+        "paper_value": "Xu et al. (2018) adjustment: if a time point in a successive abnormal segment is detected, all anomalies in this segment are viewed as correctly detected",
+        "quote": "We adopt the widely-used adjustment strategy (Xu et al., 2018; Su et al., 2019; Shen et al., 2020): if a time point in a certain successive abnormal segment is detected, all anomalies in this abnormal segment are viewed to be correctly detected.",
+        "ref": "p.6"
+      },
+      {
+        "setting": "validation_set_for_threshold",
+        "paper_value": "threshold \u03b4 is determined to make r proportion data of the validation dataset labeled as anomalies",
+        "quote": "The threshold \u03b4 is determined to make r proportion data of the validation dataset labeled as anomalies.",
+        "ref": "p.6"
+      },
+      {
+        "setting": "lambda_hyperparameter",
+        "paper_value": "3",
+        "quote": "The hyperparameter \u03bb (Equation 4) is set as 3 for all datasets to trade-off two parts of the loss function.",
+        "ref": "p.6"
+      },
+      {
+        "setting": "model_architecture_dmodel_h",
+        "paper_value": "dmodel=512, h=8, layers=3",
+        "quote": "Anomaly Transformer contains 3 layers. We set the channel number of hidden states dmodel as 512 and the number of heads h as 8.",
+        "ref": "p.6"
+      },
+      {
+        "setting": "gpu_hardware",
+        "paper_value": "NVIDIA TITAN RTX 24GB GPU",
+        "quote": "All the experiments are implemented in Pytorch (Paszke et al., 2019) with a single NVIDIA TITAN RTX 24GB GPU.",
+        "ref": "p.6"
+      },
+      {
+        "setting": "threshold selection method (\u03b4 vs r)",
+        "paper_value": "Choose by r (0.1% SWaT, 0.5% SMD, 1% others)",
+        "quote": "Table 11: Model performance. Choose by \u03b4 means that we fix \u03b4 as 0.1 for the SMD, MSL and SWaT datasets, 0.01 for the SMAP and PSM datasets. Choose by r means that we select r as 0.1% for SWaT, 0.5% for SMD and 1% for the other datasets.",
+        "ref": "p.19"
+      }
+    ],
+    "paper_comparisons": [],
+    "protocol_tests": [
+      {
+        "failed": 0,
+        "failure": "",
+        "family": "label_in_prediction",
+        "file": "solver.py",
+        "line": 341,
+        "code": "if gt[i] == 1 and pred[i] == 1 and not anomaly_state:",
+        "detail": "`pred` is changed under a test on the ground truth (gt): the score then uses the labels (e.g. point adjustment)",
+        "knob": "@ast:solver.py:341:@if",
+        "value": "False",
+        "runs": 3,
+        "claims": [
+          {
+            "claim": "C_smd_f1",
+            "metric": "smd_f1",
+            "paper": 92.33,
+            "naive": 91.69,
+            "without": 2.36,
+            "ci": [
+              -90.12866666666666,
+              -88.21266666666666
+            ],
+            "held_out": false,
+            "depends": true
+          },
+          {
+            "claim": "C_smd_precision",
+            "metric": "smd_precision",
+            "paper": 89.4,
+            "naive": 89.33,
+            "without": 10.6,
+            "ci": [
+              -79.08866666666667,
+              -78.308
+            ],
+            "held_out": true,
+            "depends": true
+          },
+          {
+            "claim": "C_smd_recall",
+            "metric": "smd_recall",
+            "paper": 95.45,
+            "naive": 94.17,
+            "without": 1.33,
+            "ci": [
+              -94.36533333333333,
+              -90.926
+            ],
+            "held_out": true,
+            "depends": true
+          }
+        ]
+      }
+    ]
+  },
+  "triaged_failures": [],
+  "setup_check": null,
+  "effect_threshold": 1.0,
+  "provenance": {
+    "gapfinder": {
+      "commit": "deea98f13b20d8fc0dab22dbabfc6925648c1a6d",
+      "dirty": true
+    },
+    "models": {
+      "ultra": "nvidia/Nemotron-3-Ultra-550b-a55b",
+      "super": "nvidia/nemotron-3-super-120b-a12b",
+      "nano": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+      "omni": "nvidia/Nemotron-3-Nano-Omni"
+    },
+    "prompt_sha256": {
+      "CLAIM_PROMPT": "79757ce60aaaf5377dde8465230665347bfca143f0f05b752c9efa3b5bde5e34",
+      "FILTER_PROMPT": "439a83d5b510aa71fcfc50c1fdf62816af0a26cce0a8403ac89618d16cabbe32",
+      "ASSUMPTION_PROMPT": "c3eb66989927b367ea581a7b15e2a10cce28685eb22df703c39223b64c3dacea",
+      "TRIAGE_PROMPT": "26293319ecd0ace0815fb8293cf05b4cbb11142f0c2e3e05e580faa74e1e9d5e",
+      "MISSING_SENTENCE_PROMPT": "b935383290f13c0a18521b2e0db1b556e66f5e5e61de1318671d8ad09dcb72e0"
+    },
+    "harness_spec_sha256": "f8256b2fc021d10bc532dcdc16df7518e9a190a22b1d1a37e43dc1f2bf2b2dd3",
+    "cost": {
+      "nemotron_billed_usd": 0.003802,
+      "sandbox_reported_usd": 415.9819,
+      "total_usd": 415.985701,
+      "scope": "this search; ledger extraction is included only if it shared the search's router"
+    }
+  },
+  "claims": [
+    {
+      "status": "reproduced",
+      "gap_before": -0.006931658182605877,
+      "band": 0.025560489548359294,
+      "changes": {},
+      "gap_after": null,
+      "held_out": {},
+      "counterfactual": {},
+      "screen": [],
+      "hypotheses_tested": 0,
+      "replay": [],
+      "notes": [
+        "naive run is within the noise band of the paper's value"
+      ],
+      "value_sets": {},
+      "value_intervals": {},
+      "identifiable": null,
+      "pre_proposer": null,
+      "diagnosis": null,
+      "closes": false,
+      "equivalent": [],
+      "relations": {},
+      "differential": null,
+      "reporting": null,
+      "library": null,
+      "discrimination": null,
+      "target": {
+        "claim_id": "C_smd_f1",
+        "metric": "smd_f1",
+        "paper_value": 92.33,
+        "held_out": false,
+        "tuned_separately": false,
+        "figure": "Table 1",
+        "relation": null,
+        "quote": null,
+        "at": null
+      },
+      "attribution": null,
+      "plausibility": {},
+      "paper_claim": {
+        "quote": null,
+        "page": null,
+        "figure": "Table 1",
+        "unit": null,
+        "headline": null,
+        "metric": "smd_f1",
+        "paper_value": 92.33,
+        "recorded": false
+      },
+      "measured": {
+        "metric": "smd_f1",
+        "median": 91.69,
+        "repeats": [
+          90.42,
+          90.2,
+          91.69,
+          92.87,
+          92.54
+        ],
+        "n": 5,
+        "min": 90.2,
+        "max": 92.87,
+        "band": 2.3600000000000136,
+        "cv": 0.013200659187010164,
+        "gap": -0.006931658182605877,
+        "band_rel": 0.025560489548359294,
+        "status": "reproduced",
+        "setup_check": null
+      },
+      "experiment": {
+        "found": false,
+        "note": "none was needed: the naive run is inside the noise band of the paper's value"
+      },
+      "belief": {
+        "checks": [],
+        "note": "nothing to verify: no explanation was proposed"
+      },
+      "unknown": {
+        "untestable": [],
+        "unmapped": [
+          "cudnn.benchmark",
+          "random_seed",
+          "adjustment_strategy",
+          "validation_set_for_threshold",
+          "loss weight lambda",
+          "lambda_hyperparameter",
+          "--dataset",
+          "model_architecture_dmodel_h",
+          "--data_path",
+          "gpu_hardware",
+          "threshold selection method (\u03b4 vs r)",
+          "pytorch_version",
+          "prior distribution",
+          "early_stopping_criterion",
+          "adam_optimizer_betas_eps_weight_decay",
+          "multi-layer vs single-layer",
+          "data_loading_shuffling",
+          "CUDA_VISIBLE_DEVICES",
+          "sliding_window_stride",
+          "--pretrained_model",
+          "--input_c",
+          "--model_save_path",
+          "--mode",
+          "validation split / anomaly score threshold \u03b4",
+          "anomaly ratio r for threshold selection",
+          "eval_batch_size",
+          "dtype_precision",
+          "random seed / initialization",
+          "PyTorch version / CUDA version",
+          "minimax optimization (enabled/disabled)",
+          "--output_c",
+          "--anormly_ratio_default"
+        ],
+        "setup": null,
+        "leads": [],
+        "alternatives": [
+          {
+            "changes": {
+              "@ast:solver.py:341:@if": "False"
+            },
+            "runs": 3,
+            "gap": -0.9744395104516409,
+            "mean_abs_gap": 0.9473124269774852
+          }
+        ]
+      },
+      "cause": {
+        "kind": null,
+        "text": null,
+        "confirmed": null
+      },
+      "effect": null
+    }
+  ]
+}

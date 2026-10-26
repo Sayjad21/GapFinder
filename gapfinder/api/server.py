@@ -81,11 +81,14 @@ def health() -> dict:
 
 
 @app.get("/api/runs")
-def list_runs() -> list[dict]:
+def list_runs(group: str | None = None) -> list[dict]:
+    """Every recorded run; `group` (real, planted, gapbench: set in meta.json by scripts/build_showcase.py) filters."""
     out = []
     for run_id, d in discover().items():
-        rep = _json(d / "gap_report.json") or {}
         meta = _json(d / "meta.json") or {}
+        if group is not None and meta.get("group") != group:
+            continue
+        rep = _json(d / "gap_report.json") or {}
         out.append({
             "id": run_id,
             "title": meta.get("title") or rep.get("paper") or run_id,
@@ -97,8 +100,20 @@ def list_runs() -> list[dict]:
             "labels": {c["target"]["claim_id"]: (c["attribution"] or {}).get("confidence_label", "Reproduced")
                        for c in rep.get("claims", [])},
             "featured": meta.get("featured", False),
+            "group": meta.get("group"),
+            "version": meta.get("version"),
+            "note": meta.get("note"),
         })
     return sorted(out, key=lambda r: (not r["featured"], r["kind"] != "demo", r["id"]))
+
+
+@app.get("/api/showcase")
+def showcase() -> dict:
+    """The showcase manifest: each group's cases with their known and found causes, and every round's totals."""
+    path = run_roots()[0] / "showcase.json"
+    if not path.exists():
+        raise HTTPException(404, "no showcase manifest (python scripts/build_showcase.py writes it)")
+    return _json(path)
 
 
 @app.get("/api/runs/{run_id}")

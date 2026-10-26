@@ -82,8 +82,9 @@ function Split({ name, data }) {
             <tr key={arm} className={arm === "gapfinder" ? "us" : ""}>
               <td>{ARM_NAMES[arm] || arm}</td><td>{s.tasks}</td>
               <td><b>{s.solved_median_run}</b> / {s.tasks}</td><td>{s.solved_best_run} / {s.tasks}</td>
-              <td>{(s.false_attribution_rate * 100).toFixed(0)}%</td>
-              <td>${s.median_cost_usd.toFixed(3)}</td><td>{Math.round(s.median_wall_s)} s</td>
+              <td>{s.false_attribution_rate == null ? "n/a" : `${(s.false_attribution_rate * 100).toFixed(0)}%`}</td>
+              <td>{s.median_cost_usd == null ? "n/a" : `$${s.median_cost_usd.toFixed(3)}`}</td>
+              <td>{s.median_wall_s == null ? "n/a" : `${Math.round(s.median_wall_s)} s`}</td>
             </tr>
           ))}
         </tbody>
@@ -104,9 +105,9 @@ function Split({ name, data }) {
             <tbody>
               {arms.filter(([, s]) => s.rates).map(([arm, s]) => (
                 <tr key={arm} className={arm === "gapfinder" ? "us" : ""}>
-                  <td>{ARM_NAMES[arm] || arm}</td><td>{pct(s.rates.correct)}</td>
-                  <td>{pct(s.rates.confidently_wrong)}</td><td>{pct(s.rates.correct_abstention)}</td>
-                  <td>{pct(s.rates.missed)}</td><td>{stable(s)}</td>
+                  <td>{ARM_NAMES[arm] || arm}</td><td>{pct(s.rates?.correct)}</td>
+                  <td>{pct(s.rates?.confidently_wrong)}</td><td>{pct(s.rates?.correct_abstention)}</td>
+                  <td>{pct(s.rates?.missed)}</td><td>{stable(s)}</td>
                 </tr>
               ))}
             </tbody>

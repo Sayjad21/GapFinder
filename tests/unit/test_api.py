@@ -31,6 +31,19 @@ def test_runs_listing_and_detail(client):
     assert client.get("/api/runs/nope").status_code == 404
 
 
+def test_runs_filter_by_group_and_showcase_manifest(client, tmp_path):
+    assert client.get("/api/showcase").status_code == 404
+    run = tmp_path / "demo" / "real" / "toy-beta"
+    run.mkdir(parents=True)
+    (run / "events.jsonl").write_text(json.dumps({"seq": 1, "t": 1.0, "type": "noise_band"}))
+    (run / "gap_report.json").write_text(json.dumps({"paper": "beta", "claims": []}))
+    (run / "meta.json").write_text(json.dumps({"title": "Beta", "group": "real", "version": "c5"}))
+    (tmp_path / "demo" / "showcase.json").write_text(json.dumps({"real": [{"id": "real~toy-beta"}]}))
+    runs = client.get("/api/runs?group=real").json()
+    assert [r["id"] for r in runs] == ["real~toy-beta"] and runs[0]["version"] == "c5"
+    assert client.get("/api/showcase").json()["real"][0]["id"] == "real~toy-beta"
+
+
 def test_replay_streams_all_events_and_compresses_idle(client):
     import time
 

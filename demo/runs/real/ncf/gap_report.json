@@ -1,0 +1,446 @@
+{
+  "paper": "NCF (devbatch-2)",
+  "artifact": "ncf",
+  "generated": "2026-10-26 03:07",
+  "partial": false,
+  "runs": 14,
+  "setup_runs": 0,
+  "cost": {
+    "sandbox_usd": 255.942945,
+    "sandbox_runs": 15,
+    "setup_runs": 0,
+    "tokens": {},
+    "total_usd": 255.942945,
+    "cap_usd": null
+  },
+  "naive": {
+    "neumf_hr": 0.6833,
+    "neumf_ndcg": 0.4111,
+    "mlp_hr": 0.6738,
+    "mlp_ndcg": 0.3979,
+    "gmf_hr": 0.6379,
+    "gmf_ndcg": 0.3687
+  },
+  "noise": {
+    "neumf_hr": {
+      "metric": "neumf_hr",
+      "n": 5,
+      "median": 0.6833,
+      "band": 0.0068330000000000005,
+      "cv": 0.0060338137280980505
+    },
+    "neumf_ndcg": {
+      "metric": "neumf_ndcg",
+      "n": 5,
+      "median": 0.4111,
+      "band": 0.004111,
+      "cv": 0.008351658088725782
+    },
+    "mlp_hr": {
+      "metric": "mlp_hr",
+      "n": 5,
+      "median": 0.6738,
+      "band": 0.006738,
+      "cv": 0.003209289351750332
+    },
+    "mlp_ndcg": {
+      "metric": "mlp_ndcg",
+      "n": 5,
+      "median": 0.3979,
+      "band": 0.003979,
+      "cv": 0.006309953865244797
+    },
+    "gmf_hr": {
+      "metric": "gmf_hr",
+      "n": 5,
+      "median": 0.6379,
+      "band": 0.006379,
+      "cv": 0.003303018743899076
+    },
+    "gmf_ndcg": {
+      "metric": "gmf_ndcg",
+      "n": 5,
+      "median": 0.3687,
+      "band": 0.003687,
+      "cv": 0.004190956348573661
+    }
+  },
+  "unmapped_assumptions": [
+    "dataset",
+    "topK",
+    "evaluation_threads",
+    "negative_sampling_strategy",
+    "shuffle",
+    "num_layers_mlp"
+  ],
+  "renamed_assumptions": {},
+  "spec_only_knobs": [],
+  "corrected_defaults": [],
+  "unverified_defaults": [],
+  "trace": null,
+  "untestable": [],
+  "closest_overall": [
+    {
+      "changes": {},
+      "runs": 5,
+      "gaps": {
+        "C_neumf_hr": -0.006831395348837103,
+        "C_neumf_ndcg": 0.0026829268292684035,
+        "C_mlp_hr": 0.004172876304023716,
+        "C_mlp_ndcg": -0.0027568922305765547,
+        "C_gmf_hr": -0.006386292834890954,
+        "C_gmf_ndcg": -0.006199460916441964
+      },
+      "mean_abs_gap": 0.004838307410673116
+    }
+  ],
+  "audit": {
+    "held_out": [],
+    "comparisons": [],
+    "leakage": [],
+    "stated_untestable": [
+      {
+        "setting": "dataset",
+        "paper_value": "MovieLens, Pinterest",
+        "quote": "Extensive experiments on two real-world datasets show significant improvements of our proposed NCF framework over the state-of-the-art methods.",
+        "ref": "p.1"
+      },
+      {
+        "setting": "negative_sampling_strategy",
+        "paper_value": "uniform (paper: 'we uniformly sample them from unobserved interactions')",
+        "quote": "For the negative instances Y-, we uniformly sample them from unobserved interactions in each iteration and control the sampling ratio w.r.t. the number of observed interactions.",
+        "ref": "p.4"
+      }
+    ],
+    "paper_comparisons": [],
+    "protocol_tests": [
+      {
+        "failed": 0,
+        "failure": "",
+        "family": "selection_in_code",
+        "file": "GMF.py",
+        "line": 164,
+        "code": "if hr > best_hr:",
+        "detail": "the code selects best_hr, best_ndcg, best_iter by comparing hr > best_hr over epoch in xrange(epochs): it scores on TEST data (leakage)",
+        "knob": "@ast:GMF.py:164:@if",
+        "value": "True",
+        "runs": 3,
+        "claims": [
+          {
+            "claim": "C_neumf_hr",
+            "metric": "neumf_hr",
+            "paper": 0.688,
+            "naive": 0.6833,
+            "without": 0.6839,
+            "ci": [
+              -0.006633333333333158,
+              0.0014666666666665051
+            ],
+            "held_out": false,
+            "depends": false
+          },
+          {
+            "claim": "C_neumf_ndcg",
+            "metric": "neumf_ndcg",
+            "paper": 0.41,
+            "naive": 0.4111,
+            "without": 0.4086,
+            "ci": [
+              -0.004100000000000048,
+              0.0015200000000000213
+            ],
+            "held_out": true,
+            "depends": false
+          },
+          {
+            "claim": "C_mlp_hr",
+            "metric": "mlp_hr",
+            "paper": 0.671,
+            "naive": 0.6738,
+            "without": 0.6712,
+            "ci": [
+              -0.007460000000000022,
+              0.001060000000000172
+            ],
+            "held_out": true,
+            "depends": false
+          },
+          {
+            "claim": "C_mlp_ndcg",
+            "metric": "mlp_ndcg",
+            "paper": 0.399,
+            "naive": 0.3979,
+            "without": 0.3937,
+            "ci": [
+              -0.009653333333333347,
+              0.0009000000000000119
+            ],
+            "held_out": true,
+            "depends": false
+          }
+        ]
+      },
+      {
+        "failed": 0,
+        "failure": "",
+        "family": "selection_in_code",
+        "file": "MLP.py",
+        "line": 171,
+        "code": "if hr > best_hr:",
+        "detail": "the code selects best_hr, best_ndcg, best_iter by comparing hr > best_hr over epoch in xrange(epochs): it scores on TEST data (leakage)",
+        "knob": "@ast:MLP.py:171:@if",
+        "value": "True",
+        "runs": 3,
+        "claims": [
+          {
+            "claim": "C_neumf_hr",
+            "metric": "neumf_hr",
+            "paper": 0.688,
+            "naive": 0.6833,
+            "without": 0.6856,
+            "ci": [
+              -0.00552000000000008,
+              0.0033999999999999586
+            ],
+            "held_out": false,
+            "depends": false
+          },
+          {
+            "claim": "C_neumf_ndcg",
+            "metric": "neumf_ndcg",
+            "paper": 0.41,
+            "naive": 0.4111,
+            "without": 0.4073,
+            "ci": [
+              -0.007359999999999978,
+              0.004306666666666736
+            ],
+            "held_out": true,
+            "depends": false
+          },
+          {
+            "claim": "C_gmf_hr",
+            "metric": "gmf_hr",
+            "paper": 0.642,
+            "naive": 0.6379,
+            "without": 0.6369,
+            "ci": [
+              -0.00318666666666656,
+              0.00019333333333326763
+            ],
+            "held_out": true,
+            "depends": false
+          },
+          {
+            "claim": "C_gmf_ndcg",
+            "metric": "gmf_ndcg",
+            "paper": 0.371,
+            "naive": 0.3687,
+            "without": 0.368,
+            "ci": [
+              -0.0020466666666666966,
+              0.0011999999999999789
+            ],
+            "held_out": true,
+            "depends": false
+          }
+        ]
+      },
+      {
+        "failed": 0,
+        "failure": "",
+        "family": "selection_in_code",
+        "file": "NeuMF.py",
+        "line": 227,
+        "code": "if hr > best_hr:",
+        "detail": "the code selects best_hr, best_ndcg, best_iter by comparing hr > best_hr over epoch in xrange(num_epochs): it scores on TEST data (leakage)",
+        "knob": "@ast:NeuMF.py:227:@if",
+        "value": "True",
+        "runs": 3,
+        "claims": [
+          {
+            "claim": "C_mlp_hr",
+            "metric": "mlp_hr",
+            "paper": 0.671,
+            "naive": 0.6738,
+            "without": 0.668,
+            "ci": [
+              -0.008186666666666675,
+              -0.0031733333333334723
+            ],
+            "held_out": true,
+            "depends": true
+          },
+          {
+            "claim": "C_mlp_ndcg",
+            "metric": "mlp_ndcg",
+            "paper": 0.399,
+            "naive": 0.3979,
+            "without": 0.3938,
+            "ci": [
+              -0.005759999999999987,
+              -0.0011200000000000099
+            ],
+            "held_out": true,
+            "depends": true
+          },
+          {
+            "claim": "C_gmf_hr",
+            "metric": "gmf_hr",
+            "paper": 0.642,
+            "naive": 0.6379,
+            "without": 0.6387499999999999,
+            "ci": [
+              -0.0012700000000001044,
+              0.0020000000000000018
+            ],
+            "held_out": true,
+            "depends": false
+          },
+          {
+            "claim": "C_gmf_ndcg",
+            "metric": "gmf_ndcg",
+            "paper": 0.371,
+            "naive": 0.3687,
+            "without": 0.36765000000000003,
+            "ci": [
+              -0.0028000000000000247,
+              0.0013400000000000079
+            ],
+            "held_out": true,
+            "depends": false
+          }
+        ]
+      }
+    ]
+  },
+  "triaged_failures": [],
+  "setup_check": null,
+  "effect_threshold": 1.0,
+  "provenance": {
+    "gapfinder": {
+      "commit": "deea98f13b20d8fc0dab22dbabfc6925648c1a6d",
+      "dirty": true
+    },
+    "models": {
+      "ultra": "nvidia/Nemotron-3-Ultra-550b-a55b",
+      "super": "nvidia/nemotron-3-super-120b-a12b",
+      "nano": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+      "omni": "nvidia/Nemotron-3-Nano-Omni"
+    },
+    "prompt_sha256": {
+      "CLAIM_PROMPT": "79757ce60aaaf5377dde8465230665347bfca143f0f05b752c9efa3b5bde5e34",
+      "FILTER_PROMPT": "439a83d5b510aa71fcfc50c1fdf62816af0a26cce0a8403ac89618d16cabbe32",
+      "ASSUMPTION_PROMPT": "c3eb66989927b367ea581a7b15e2a10cce28685eb22df703c39223b64c3dacea",
+      "TRIAGE_PROMPT": "26293319ecd0ace0815fb8293cf05b4cbb11142f0c2e3e05e580faa74e1e9d5e",
+      "MISSING_SENTENCE_PROMPT": "b935383290f13c0a18521b2e0db1b556e66f5e5e61de1318671d8ad09dcb72e0"
+    },
+    "harness_spec_sha256": "a4007f85978475f8782a4b8cf8b12566cd6f8424fd22d365997e74dbaee0b904",
+    "cost": {
+      "nemotron_billed_usd": 0.000905,
+      "sandbox_reported_usd": 255.942945,
+      "total_usd": 255.94385,
+      "scope": "this search; ledger extraction is included only if it shared the search's router"
+    }
+  },
+  "claims": [
+    {
+      "status": "reproduced",
+      "gap_before": -0.006831395348837103,
+      "band": 0.00993168604651163,
+      "changes": {},
+      "gap_after": null,
+      "held_out": {},
+      "counterfactual": {},
+      "screen": [],
+      "hypotheses_tested": 0,
+      "replay": [],
+      "notes": [
+        "naive run is within the noise band of the paper's value"
+      ],
+      "value_sets": {},
+      "value_intervals": {},
+      "identifiable": null,
+      "pre_proposer": null,
+      "diagnosis": null,
+      "closes": false,
+      "equivalent": [],
+      "relations": {},
+      "differential": null,
+      "reporting": null,
+      "library": null,
+      "discrimination": null,
+      "target": {
+        "claim_id": "C_neumf_hr",
+        "metric": "neumf_hr",
+        "paper_value": 0.688,
+        "held_out": false,
+        "tuned_separately": false,
+        "figure": "Table 2 (MovieLens, factors 8, without pre-training)",
+        "relation": null,
+        "quote": null,
+        "at": null
+      },
+      "attribution": null,
+      "plausibility": {},
+      "paper_claim": {
+        "quote": null,
+        "page": null,
+        "figure": "Table 2 (MovieLens, factors 8, without pre-training)",
+        "unit": null,
+        "headline": null,
+        "metric": "neumf_hr",
+        "paper_value": 0.688,
+        "recorded": false
+      },
+      "measured": {
+        "metric": "neumf_hr",
+        "median": 0.6833,
+        "repeats": [
+          0.6887,
+          0.681,
+          0.6833,
+          0.6828,
+          0.6906
+        ],
+        "n": 5,
+        "min": 0.681,
+        "max": 0.6906,
+        "band": 0.0068330000000000005,
+        "cv": 0.0060338137280980505,
+        "gap": -0.006831395348837103,
+        "band_rel": 0.00993168604651163,
+        "status": "reproduced",
+        "setup_check": null
+      },
+      "experiment": {
+        "found": false,
+        "note": "none was needed: the naive run is inside the noise band of the paper's value"
+      },
+      "belief": {
+        "checks": [],
+        "note": "nothing to verify: no explanation was proposed"
+      },
+      "unknown": {
+        "untestable": [],
+        "unmapped": [
+          "dataset",
+          "topK",
+          "evaluation_threads",
+          "negative_sampling_strategy",
+          "shuffle",
+          "num_layers_mlp"
+        ],
+        "setup": null,
+        "leads": [],
+        "alternatives": []
+      },
+      "cause": {
+        "kind": null,
+        "text": null,
+        "confirmed": null
+      },
+      "effect": null
+    }
+  ]
+}
