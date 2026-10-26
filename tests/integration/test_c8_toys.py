@@ -3,7 +3,8 @@
 (I) A configuration that fails with no sign of the environment at fault is not run again: the same values crash
 again, and each retry is a run the search doesn't have (PatchTST: 27 of 100 runs).
 (J) A literal written `30.` or `.5` gets patch values (the ladder didn't parse it, so a lead had none).
-(L) A literal difference the contrast names without the paper's number gets it from one short second call."""
+(L) A literal difference the contrast names without the paper's number gets it from one short second call.
+(M, a hold for the value interval's runs, was withdrawn: on the dev suite it cost the search the runs that break ties.)"""
 
 import textwrap
 
@@ -81,16 +82,3 @@ async def test_l_a_missing_paper_value_is_asked_for():
     diffs = await contrast(FakeRouter(), "The test sets contain 10% of links.", [], [])
     assert calls == ["Differences", "PaperValues"] and diffs[0].paper_value == "10"
 
-
-async def test_m_the_value_interval_keeps_its_runs_until_it_runs(tmp_path):
-    # (M) the stages before a claim's value interval leave its runs: a measurement that would take them is refused
-    import pytest
-    from gapfinder.search.engine import RunBudgetExceeded
-
-    s = _search(tmp_path)
-    s.cfg.max_runs = 10
-    s._interval_reserve = 2 * s.cfg.interval_steps  # as explain() sets it
-    await s.measure({"heads": "8"}, 4, "confirm")
-    with pytest.raises(RunBudgetExceeded):
-        await s.measure({"heads": "16"}, 1, "confirm")  # 4 used, 6 held: nothing left for other stages
-    assert len(await s.measure({"heads": "16"}, 1, "interval heads=16")) == 1  # the interval may use them

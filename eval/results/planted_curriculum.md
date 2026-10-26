@@ -298,6 +298,37 @@ or more.
 
 Otherwise c5 stays.
 
+## c8, withdrawn after the dev suite; c9 without its M
+
+c8 (`planted-c8`, 1b6bf29) is c7 plus I, J, L, M and K, all found on c7's real-paper reruns:
+- **I:** no retry of a configuration that failed with no sign of the environment at fault.
+- **J:** patch values for literals written `30.` or `.5`.
+- **L:** a second call for a contrast difference named without the paper's number.
+- **M:** a hold for the value interval's runs.
+- **K:** the audit ranks code that ran.
+
+**The dev suite failed it.** Pooled over two replicates (bases 13000 and 13100), c8 found the cause in 92 of 138
+runs, against c7's 100 (12000, 12100) and c5's 99. Against c7, 1 task was better and 6 worse. There were no
+confident mistakes, and all 114 abstentions were correct. 92 is more than five below c5's 99, the bar set above for
+c7, and c8 is not adopted.
+
+**An ablation on the eight tasks that moved** (3 runs each, one replicate per arm; the tasks were picked because
+c8 did worse on them, so all arms regress toward their mean):
+
+| Arm | Correct of 24 |
+|---|---|
+| c7 | 16 and 19 (its two replicates) |
+| c8 | 10 and 16 |
+| c8 without M | 19 |
+| c8 without I | 14 |
+
+The loss sits with M. Holding six runs for the value interval through the whole search took the confirmation runs
+that break ties between values (`max_steps` 1000 or 400 for the true 500). M is withdrawn.
+
+**c9 is c8 without M**, plus the report fix for scale answers: a scale answer now carries its own reversal and
+evidence rows, not the replaced settings answer's. It is judged on the dev suite (two replicates) and then on a
+fresh planted batch.
+
 ## Infrastructure notes
 
 - The machine lost DNS for minutes at a time. Task making waits for the network and doesn't count draws lost to
