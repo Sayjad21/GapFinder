@@ -2,6 +2,7 @@
 helps only after epoch 14 of 20. Screened with a time cut at a quarter of the run, the decoys are behind the as-run
 curve and dropped; the late cause is level with it there, is run in full, and is found. Screening takes less time."""
 
+import statistics
 import textwrap
 
 from gapfinder.sandbox.backend import LocalBackend
@@ -62,4 +63,8 @@ async def test_late_effects_survive_and_early_losers_are_cut(tmp_path):
     assert len(dropped) >= 3 and all(k in ("lr", "wd") for k, _ in dropped), dropped  # decoys only, never the late cause
     cut = s.mf_runs
     full = [b for runs in s._runs.values() for b in runs if (b.note or "").startswith("screen ")]
-    assert cut and all(b.resources.elapsed_s < 0.6 * max(x.resources.elapsed_s for x in full) for b in cut)
+    # the cut runs stopped early: fewer epochs than any full run, and faster in the median. A wall-clock ratio per run
+    # (each cut under 0.6 of the slowest full run) held on a desktop and failed on a CI runner, whose fixed cost per
+    # run is a larger share of a 2 s cut
+    assert cut and max(len(s._series(b, "acc")) for b in cut) < min(len(s._series(x, "acc")) for x in full)
+    assert statistics.median(b.resources.elapsed_s for b in cut) < statistics.median(x.resources.elapsed_s for x in full)
