@@ -18,11 +18,19 @@ nothing and needs no internet. At the end it prints a Gap Report and saves it to
 .venv/bin/uvicorn gapfinder.api.server:app --port 8000      # then open http://localhost:8000
 ```
 
-The web page has three tabs:
-- **Replay:** watch a recorded investigation happen, at 1×, 4× or 16× speed. You see the tree of saved
-  experiments growing, and bars showing how close each result is to the paper.
-- **Gap Report:** the final verdicts, one card per result.
-- **Scoreboard:** GapFinder against a general coding agent on the test tasks.
+The site has five parts (design notes in `web/DESIGN.md`):
+- **Home:** a live "gap gauge" on four solved cases. It is a measuring rule showing the paper's number, the
+  code's number as released, and the code's number after GapFinder's change, with the gap highlighted between
+  them. Below it is the record of all 16 real papers, version by version, misses included.
+- **Cases:** one row per real paper: the documented cause, what GapFinder found, and its verdict on each version.
+  Each case page shows the gauge, the versions, a replay of the investigation (press play) and the full Gap Report.
+- **Synthetic:** the planted-gap and GapBench cases it solved, filterable by kind.
+- **Evidence:** every measurement, with what it can and can't show: the sealed blind papers, the planted rates per
+  version, the dev suite, and the comparison with a general coding agent.
+- **How it works:** the pipeline, step by step, and what it can't do yet.
+
+The data comes from `python scripts/build_showcase.py`, which writes `demo/runs/showcase.json`. For the static
+site, run `python scripts/export_static.py web/public/data --showcase`.
 
 The public version is at <https://sayjad21.github.io/GapFinder/>. It replays recorded runs; nothing is
 spent.
