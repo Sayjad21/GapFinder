@@ -10,12 +10,22 @@ early screen must not lose it."""
 
 import textwrap
 
+import pytest
+
 from gapfinder.sandbox.backend import LocalBackend
 from gapfinder.sandbox.events import EventLog
 from gapfinder.sandbox.runner import Orchestrator
 from gapfinder.sandbox.spec import HarnessSpec
 from gapfinder.search.engine import GapSearch, SearchConfig, Target
 from gapfinder.search.hypotheses import assumptions_from_spec
+
+
+@pytest.fixture(autouse=True)
+def _no_scale_hold(monkeypatch):
+    """These toys measure how the settings and code rounds split the budget. Their claims sweep a knob, so since c7
+    the scale probe's hold (plan H4; c5 counted it in the wrong list, so always 0) keeps runs that, unused, reach the
+    code rounds in both arms. It is held at 0 here, so each comparison stays the feature's own."""
+    monkeypatch.setattr(GapSearch, "_scale_hold", lambda self: 0)
 
 KNOBS = {f"w{i}": "1.0" for i in range(12)} | {"n": "30"}
 CONFIG = "TEMPERATURE = 0.5\n"

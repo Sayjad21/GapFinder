@@ -2,8 +2,8 @@
 
 A new instance of a code defect outside every mutation operator: a helper aggregates with max where the paper used
 the mean, on two metrics. Nothing the search tries fits; the proposer's first edit writes a reported number into
-the code and is refused, its second is run and fits every claim, so it is the answer as a code lead. Since plan
-I2 it also runs after an unsupported setting fit; it doesn't run when nothing is off."""
+the code and is refused, its second is run and fits every claim, so it is the answer as a code lead. When a
+setting explains the claims the proposer isn't called."""
 
 import textwrap
 
@@ -82,20 +82,11 @@ async def test_an_edit_outside_the_operators_is_proposed_run_and_kept(tmp_path):
     assert any("writes a reported number" in m for m in refused), refused
 
 
-async def test_an_unsupported_setting_fit_still_calls_it(tmp_path):
-    """Plan I2: a setting that fits every claim without support (lr=0.02 shifts both claims by 0.05) is no reason to
-    skip the proposer (G6 skipped it here); a proposer that has nothing leaves the answer as it was."""
+async def test_not_called_when_a_setting_explains(tmp_path):
+    # the paper's numbers are the code's at lr=0.02 (both shift by 0.05): a setting fits every claim
     targets = [Target("C1", "score", 0.95), Target("C2", "recall", 0.65, held_out=True)]
     router = FakeRouter([])
     s = _search(tmp_path, targets, router)
     [r] = await s.run()
     assert r.changes == {"lr": "0.02"}, (r.changes, r.notes)
-    assert router.calls == 1 and r.pre_proposer is not None
-
-
-async def test_not_called_when_nothing_is_off(tmp_path):
-    targets = [Target("C1", "score", 0.9), Target("C2", "recall", 0.6, held_out=True)]  # the code's own numbers
-    router = FakeRouter([])
-    s = _search(tmp_path, targets, router)
-    [r] = await s.run()
-    assert r.status == "reproduced" and router.calls == 0 and r.pre_proposer is None
+    assert router.calls == 0 and r.pre_proposer is None

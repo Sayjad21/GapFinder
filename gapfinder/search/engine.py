@@ -117,11 +117,6 @@ class SearchConfig:
     # plan G6: one Super call proposes at most 3 code edits when the deterministic rounds end with no configuration
     # that fits every claim (gapfinder/search/proposer.py); off until a fresh batch measures it
     code_proposer: bool = False
-    # plan I1: the early code screen right after the settings screen whether or not a screened setting fits every
-    # claim. Off: where a setting fits every claim, a constant screened early can only join the tie (choosing it
-    # would be a tie-break), and its toy showed no difference; seed 6's "starved" constants were not leads, or not on
-    # the patch ladder (fixed by the split vocabulary in code_checks and _lead_secants)
-    early_code_always: bool = False
     # plan D5: mutation-based localisation, when no setting fits every claim or a scale relation needs its code site;
     # at most mutation_max mutants, in three stages (one run each; the best mutation_keep at every claim's condition;
     # the best two repeated), within mutation_budget_frac of the run budget
@@ -649,6 +644,8 @@ class GapSearch:
         self._runs: dict[frozenset, list[Branch]] = {}
         self.untestable: list[tuple[str, str]] = []  # (knob, value) above the spec's cost limit
         self._patch_reserve = 0  # runs held back for the patch round (set after the combine round)
+        self._scale_reserve = 0  # runs held back for the scale probe's verification until it runs (claims sweep a knob)
+        self._protocol_reserve = 0  # runs held back for the protocol tests, which run last (evaluation leads on live code)
         self._code_hold = 0  # runs kept out of the settings exploration for the code rounds (code_hold)
         self._early_screened: set[str] = set()  # claims whose code rounds' first tests already ran (plan F2)
         self._looks: dict[frozenset, int] = {}  # extra looks per configuration (adaptive repeats, plan F4)
@@ -674,6 +671,10 @@ class GapSearch:
             cap = self.cfg.max_runs
             if cap is not None and self._patch_reserve and not label.startswith("patch"):
                 cap -= self._patch_reserve  # the patch round's share
+            if cap is not None and self._scale_reserve and not label.startswith("scale"):
+                cap -= self._scale_reserve  # the scale probe's verification, which runs after history matching
+            if cap is not None and self._protocol_reserve and not label.startswith("protocol"):
+                cap -= self._protocol_reserve  # the protocol tests, which run after every claim's search
             if cap is not None and self.runs_used + need > cap:
                 raise RunBudgetExceeded(f"run budget of {self.cfg.max_runs} reached "
                                         f"(wanted {need} more run(s) of {dict(changes) or 'naive'} for {label!r})")
@@ -876,10 +877,12 @@ class GapSearch:
         if self.cfg.semantic_map or self.cfg.link_names:
             await self._map_names()
         await self.calibrate()
+        self._protocol_reserve = self._protocol_hold()
         results = []
         for t in self.targets:
             if not t.held_out:
                 results.append(await self.explain(t))
+        self._protocol_reserve = 0
         if self.cfg.protocol_tests:
             try:
                 await self._protocol_tests()
@@ -895,6 +898,22 @@ class GapSearch:
             self.audit_report = None
             self.orch.events.emit("note", msg=f"audit: skipped ({type(exc).__name__}: {str(exc)[:160]})")
         return results
+
+    def _stated_configs(self, t: Target) -> list[Changes]:
+        """The values the paper states for the target's own condition (a dataset named in its claim), applied together
+        as one configuration, like a block the repo declares: per-dataset settings work together, and each screened
+        alone on one run can look like nothing (GAT c5 rerun: PubMed's lr 0.01 and 8 output heads, the code running
+        Cora's, each within half a noise unit alone; never run together). Only when the paper's values for that
+        condition differ from the code's on two knobs or more."""
+        words = set(re.findall(r"[a-z][a-z0-9]+", f"{t.claim_id} {t.metric}".lower().replace("_", " ")))
+        block: Changes = {}
+        for k, a in self.assumptions.items():
+            if k not in self.spec.knobs or not str(a.status).startswith("stated"):
+                continue
+            v = _stated_for(a.paper_value, words)
+            if v is not None and not _same_value(v, str(self.spec.knobs[k].default)):
+                block[k] = v
+        return [block] if len(block) >= 2 else []
 
     def _alternative_configs(self, max_configs: int = 3) -> list[Changes]:
         """Settings the repo declares a second time with other values, as whole configurations: a flag block that
@@ -995,21 +1014,42 @@ class GapSearch:
                              + f", but {stated} leaves the gap at {g:+.1%} (beyond noise); {v} closes it: the stated "
                              "value is likely not the one behind the paper's numbers")
 
+    def _protocol_leads(self) -> list:
+        """The code leads a protocol test switches off: selection by the test score, label edits, evaluation switches;
+        imported modules, or an entry script the command runs; leads on code that ran first."""
+        root = self.spec.code_root()
+        if root is None:
+            return []
+        from gapfinder.ingest.code_checks import code_checks
+        from gapfinder.sandbox import ast_patch
+
+        return [x for x in code_checks(root, set(self.spec.knobs), limit=80, executed=self._executed())
+                if ((x.family in ("selection_in_code", "label_in_prediction") and x.name == "@if")
+                    or (x.family == "eval_switch" and x.name and x.value))
+                and (not ast_patch.entry_script(root / x.file) or ast_patch.direct_entry(self.spec.run.command, x.file))]
+
+    def _protocol_hold(self) -> int:
+        """Runs kept for the protocol tests, which run after every claim's search and got the leftovers (PatchTST c5
+        rerun: the budget was spent, and the test loader's drop_last never ran): their repeats for the first two leads
+        on code the dry run reached, at most a tenth of the budget. None without a trace (live code unknown)."""
+        if not self.cfg.protocol_tests or self.cfg.max_runs is None or not self._executed():
+            return 0
+        from gapfinder.ingest.code_checks import coverage
+
+        try:
+            live = [x for x in self._protocol_leads() if coverage(x, self._executed()) <= 1]
+        except Exception:  # noqa: BLE001 (a hold only)
+            return 0
+        n = min(2, len(live), self.cfg.protocol_tests_max)
+        return min(n * self.cfg.protocol_repeats, self.cfg.max_runs // 10)
+
     async def _protocol_tests(self) -> None:
         """Each code lead that selects by the test score or edits predictions with the labels, switched off and
         measured: every claim's naive value against its value without that logic, with a bootstrap interval."""
-        root = self.spec.code_root()
-        if root is None:
-            return
-        from gapfinder.ingest.code_checks import code_checks
         from gapfinder.sandbox import ast_patch
         from gapfinder.sandbox.spec import Knob
 
-        leads = [x for x in code_checks(root, set(self.spec.knobs), limit=80)
-                 if ((x.family in ("selection_in_code", "label_in_prediction") and x.name == "@if")
-                     or (x.family == "eval_switch" and x.name and x.value))
-                 and (not ast_patch.entry_script(root / x.file) or ast_patch.direct_entry(self.spec.run.command, x.file))]
-        leads = leads[: self.cfg.protocol_tests_max]
+        leads = self._protocol_leads()[: self.cfg.protocol_tests_max]
         for x in leads:
             k = ast_patch.knob_name(x.file, x.line, x.name)
             self.spec.knobs.setdefault(k, Knob(layer="environment", default="as written", env=True))
@@ -1251,14 +1291,7 @@ class GapSearch:
             return None
         hold = 2 * self.cfg.interval_steps if self.cfg.value_interval else 0
         return max(0, int(self.cfg.max_runs * (1 - self.cfg.escrow_frac)) - self.runs_used - self._code_hold - hold
-                   - self._scale_hold() - self._proposer_hold())
-
-    def _proposer_hold(self) -> int:
-        """Plan I2: runs kept out of screening and combining for the code proposer's edits (at most 3, each with
-        its confirmation repeats); seed 6: the proposer stopped at the budget's end on RippleNet."""
-        if not (self.cfg.code_proposer and self.router is not None and self.targets):
-            return 0
-        return 3 * self.confirm_repeats(self.targets[0])
+                   - self._scale_hold() - self._protocol_reserve)
 
     def _scale_hold(self) -> int:
         """Plan H4: runs kept out of screening and combining for the scale probe's verification when the claims
@@ -1266,8 +1299,8 @@ class GapSearch:
         if not self.cfg.scale_probe:
             return 0
         by: dict[str, int] = {}
-        for p in self.targets:
-            if p.held_out and p.at and len(p.at) == 1:
+        for p in self.points:  # the claims at fixed values (they are not in self.targets: c5 counted none, held 0)
+            if p.at and len(p.at) == 1:
                 k = next(iter(p.at))
                 by[k] = by.get(k, 0) + 1
         return max(((n + 1) * self.cfg.scale_repeats for n in by.values() if n >= 2), default=0)
@@ -1315,6 +1348,10 @@ class GapSearch:
             except (RunBudgetExceeded, budget.BudgetExceeded, _LibraryBudget) as exc:
                 lib_out["notes"].append(f"library probe stopped early: {exc}")
             self._library_out[t.claim_id] = lib_out
+        # plan H4's hold, kept from every stage before the scale probe, not only screening and combining (GCN attack
+        # c5 rerun: verification's held-out runs, the history-matching points and discrimination spent it, and the
+        # probe ran with 1 run of 200 left)
+        self._scale_reserve = self._scale_hold() if self.cfg.history_matching else 0
         tried: set[frozenset] = set()
         try:
             await self._search(t, res, tried)
@@ -1343,6 +1380,7 @@ class GapSearch:
                 except (RunBudgetExceeded, budget.BudgetExceeded) as exc:
                     res.notes.append(f"discrimination stopped early: {exc}")
             self._history_match(t, res)
+            self._scale_reserve = 0
             if self._usable_points():
                 await self._scale_probe(t, res)
             if self.cfg.patch_knobs and self._wants_patch(res):
@@ -1552,6 +1590,10 @@ class GapSearch:
     def _usable_points(self) -> list[Target]:
         return [p for p in self.points if p.metric in self.bands and set(p.at or {}) <= set(self.spec.knobs)]
 
+    def _executed(self) -> dict[str, list[int]] | None:
+        """The dry run's executed lines per repo file (None without a trace): static leads on code that ran rank first."""
+        return self.trace_report.executed if getattr(self, "trace_report", None) is not None else None
+
     async def _measure_points(self, configs: list[Changes], label: str = "point") -> None:
         """Every usable fixed-value claim under each configuration (and the naive one), point_repeats runs each.
         Out of budget it measures what it can."""
@@ -1652,7 +1694,11 @@ class GapSearch:
             scored, unjudged = [], []
             for fam, c in fams:
                 g = (lambda v, c=c: v * c) if fam == "x" else (lambda v, c=c: v + c)
-                if not self._valid_scale(knob, [g(v) for v, _, _ in sweep]):
+                # a claim the factor leaves where it is (0 under any factor) is a value the knob already ran at and no
+                # evidence for the factor: it neither invalidates it nor counts toward the two claims it must move
+                # (GCN attack c5 rerun: the 0% budget claim ruled out every factor, x0.5 among them)
+                moved = [g(v) for v, _, _ in sweep if abs(g(v) - v) > 1e-12 * max(1.0, abs(v))]
+                if len(moved) < 2 or not self._valid_scale(knob, moved):
                     continue  # plan H1: a value the knob can't take can't be run (seed 5: 1/3 of 10, 20, 40 epochs)
                 preds = [self._interp(curve, g(v), log=logx) for v, _, _ in sweep]
                 if any(y is None for y in preds):
@@ -1793,7 +1839,7 @@ class GapSearch:
         try:  # lines a static check flagged (split fractions, evaluation switches, selection on test data)
             from gapfinder.ingest.code_checks import code_checks
 
-            for x in code_checks(root, set(self.spec.knobs), limit=80):
+            for x in code_checks(root, set(self.spec.knobs), limit=80, executed=self._executed()):
                 if x.family in ("split_fraction", "eval_switch", "selection_in_code", "label_in_prediction"):
                     hints.setdefault(x.file, set()).add(x.line)
         except Exception:  # noqa: BLE001 (a hint only)
@@ -1912,7 +1958,6 @@ class GapSearch:
         if not ran:
             res.notes.append(f"mutation round: none of {len(ms)} mutants ran")
             return
-        ran += await self._fraction_steps(t, ran)
         g0 = abs(self.gap(t, {}))
 
         def target_score(m):
@@ -2089,6 +2134,10 @@ class GapSearch:
         pins = info.get("pins") or {}
         K = env_year.KNOB
         if not pins or K not in self.spec.knobs:
+            if K in self.spec.knobs:  # a paper-year environment without the per-package pins (an older harness)
+                out["notes"].append("library probe skipped: the harness has a paper-year environment but no "
+                                    "per-package pins (spec.library), so no package can be tested alone; rebuild it "
+                                    "with the current harness builder")
             return
         start = self.runs_used
         choices = self.spec.knobs[K].choices
@@ -2449,15 +2498,26 @@ class GapSearch:
         if root is None:
             return
         from gapfinder.search.contrast import contrast, ground
+        from gapfinder.search.proposer import code_listing
 
+        executed = self._executed() or {}
+        leads = (res.diagnosis or {}).get("leads") or []
+        # the executed lines, the files the leads and the traced calls point at first (pygcn c5 rerun: the prompt saw
+        # the Adam call site only, never `model.parameters()` or the normalization the paper describes otherwise)
+        sites = [x.get("file") for x in leads] + [s["site"][0] for r in self.trace_records for s in r.get("sinks", [])
+                                                  if s.get("site")]
+        files = list(dict.fromkeys([f for f in sites if f in executed] + sorted(executed)))
+        out = (res.diagnosis or {}).get("kind", "").startswith("out_of_space")
         try:
-            diffs = await contrast(self.router, self.paper_text, self.trace_records, (res.diagnosis or {}).get("leads") or [])
+            diffs = await contrast(self.router, self.paper_text, self.trace_records, leads,
+                                   code=code_listing(root, executed, files, max_chars=12000) if executed else "",
+                                   out_of_space=out)
         except budget.BudgetExceeded:
             raise
         except Exception as exc:  # an aid: a failure leaves the patch round as it was
             self.orch.events.emit("note", msg=f"contrast: skipped ({type(exc).__name__}: {str(exc)[:160]})")
             return
-        patch, structural, rejected = ground(diffs, root, self.paper_text)
+        patch, structural, rejected = ground(diffs, root, self.paper_text, executed)
         res.diagnosis["contrast_leads"] = patch
         res.diagnosis["structural_leads"] = structural
         self.orch.events.emit("note", msg=f"contrast: {len(patch)} literal and {len(structural)} structural difference(s) "
@@ -2524,7 +2584,7 @@ class GapSearch:
                         continue
                     new.append(Hypothesis(knob, v, getattr(self.assumptions.get(knob), "id", None)))
             if self.cfg.max_runs is not None:
-                room = (self.cfg.max_runs - self.runs_used - self._patch_reserve - self._code_hold
+                room = (self.cfg.max_runs - self.runs_used - self._patch_reserve - self._code_hold - self._protocol_reserve
                         - int(self.cfg.escrow_frac * self.cfg.max_runs))
                 new = new[: max(0, room // max(1, self.cfg.screen_repeats))]
             if not new:
@@ -2554,7 +2614,7 @@ class GapSearch:
             alt.status = "partial"
             alt.notes.append(f"stopped early: {exc}")
             await self._label_partial(t, alt)
-        if _better(alt, res):
+        if self._prefer(t, alt, res):
             notes = alt.notes + [f"found after adding spec knobs no ledger assumption names ({', '.join(added)})"]
             res.__dict__.update(alt.__dict__)
             res.notes = notes
@@ -2614,14 +2674,14 @@ class GapSearch:
         # budget for want of a fitting setting (the combine round reuses these runs). Left to the combine round,
         # a block that fits every claim ran after the early code screen and the scheduler's hold had taken their
         # runs, and the budget ended before it was verified (a commented-out argparse block, lr and l2 together)
-        alts = self._alternative_configs() if self.cfg.class_scheduler or self.cfg.early_code_screen else []
+        alts = ((self._alternative_configs() + self._stated_configs(t))
+                if self.cfg.class_scheduler or self.cfg.early_code_screen else [])
         if alts:
             await _all(*(self.measure(c, self.cfg.screen_repeats, "screen (the repo's alternative settings)")
                          for c in alts))
         if self.cfg.class_scheduler:
             self._schedule_classes(t, [h.changes for h in hyps] + alts, thr)
-        if self.cfg.early_code_screen and (self.cfg.early_code_always or not any(
-                self._fits_all(t, c) for c in [h.changes for h in hyps] + alts)):
+        if self.cfg.early_code_screen and not any(self._fits_all(t, c) for c in [h.changes for h in hyps] + alts):
             await self._early_code_screen(t, res)
 
         # 2. confirm: survivors get repeats; effects that fade are pruned
@@ -2676,7 +2736,8 @@ class GapSearch:
         for h in sorted(best_value.values(), key=lambda h: (-prior[h.knob], h.knob))[: self.cfg.combine_prior_top]:
             if h not in top:
                 top.append(h)
-        combos: list[Changes] = [c for c in self._alternative_configs()]  # the repo's own alternatives, as wholes
+        # the repo's own alternatives and the paper's values for this condition, as wholes
+        combos: list[Changes] = [c for c in self._alternative_configs() + self._stated_configs(t)]
         conf_knobs = {}
         for h in sorted(confirmed, key=lambda h: -self.units(t, h.changes)):
             conf_knobs.setdefault(h.knob, h.value)
@@ -2783,7 +2844,7 @@ class GapSearch:
         best: ClaimResult | None = None
         for c in candidates[: self.cfg.verify_candidates]:
             trial = await self._verify(t, c, res)
-            if best is None or (_better(trial, best) and not self._tied_on_target(t, trial, best)):
+            if self._prefer(t, trial, best):
                 best = trial
             if _rank(best) == 0:
                 break
@@ -2830,6 +2891,18 @@ class GapSearch:
                 return closes(sub) or await self._not_worse_by_a_band(t, sub, full)
             changes = await minimal_set(changes, still_closes)
             await self.measure(changes, self.confirm_repeats(t), "confirm-minimal")
+            if changes != full and not closes(changes) and not await self._not_worse_by_a_band(t, changes, full):
+                # a cut taken on one run of the subset that its repeats undo: neither does the subset close the gap
+                # on them, nor is it within a band of the full set. Each cut is decided again on repeats, the
+                # standard the full set met (VGAE c5 rerun: test_percent alone +1.0% on its one run, -2.1% on
+                # three, after val_percent was dropped; the pair fits at -0.6%)
+                self.orch.events.emit("note", msg=f"{t.claim_id}: {changes} no longer closes the gap on its repeats; "
+                                                  f"the cuts from {full} are decided again on repeats")
+
+                async def still_closes_on_repeats(sub: Changes) -> bool:
+                    await self.measure(sub, self.confirm_repeats(t), "bisect (repeats)")
+                    return closes(sub) or await self._not_worse_by_a_band(t, sub, full)
+                changes = await minimal_set(full, still_closes_on_repeats)
         r.changes, r.gap_after = dict(changes), self.gap(t, changes)
 
         # The no-verification ablation skips 5a-5c and accepts whatever closes the gap.
@@ -2839,6 +2912,12 @@ class GapSearch:
             if without:
                 await self.measure(without, 1, "counterfactual")
             g_without = self.gap(t, without)
+            if g_without is None or r.gap_after is None:
+                # a configuration with no successful run can't show the gap coming back: unchecked, so not passed
+                # (MC Dropout c5 rerun: a crash here, three times, once the reverted configuration's runs failed)
+                r.counterfactual[knob] = {"gap_without": g_without, "ok": False, "checked": False}
+                r.notes.append(f"counterfactual for {knob} not checked: {without or changes} has no successful run")
+                continue
             r.counterfactual[knob] = {"gap_without": g_without, "ok": gap_returns(r.gap_after, g_without, band)}
         # a knob whose removal doesn't bring the gap back by more than the noise band is a passenger (the
         # counterfactual's own criterion): once repeats confirm it, verify the configuration without it
@@ -3031,7 +3110,7 @@ class GapSearch:
         from gapfinder.sandbox import ast_patch
 
         try:
-            leads = [x for x in code_checks(root, set(self.spec.knobs)) if x.family == "unexposed_setting" and x.value
+            leads = [x for x in code_checks(root, set(self.spec.knobs), executed=self._executed()) if x.family == "unexposed_setting" and x.value
                      and (not ast_patch.entry_script(root / x.file)
                           or ast_patch.direct_entry(self.spec.run.command, x.file))]
         except Exception:  # noqa: BLE001 (no leads read: nothing held for them)
@@ -3072,7 +3151,7 @@ class GapSearch:
         d = diagnose(runs, claims, t.claim_id, paper_n=self.cfg.hm_paper_n, disc=self.cfg.hm_disc, **extra)
         if not d.kind.startswith("out_of_space"):
             return
-        leads = [x for x in code_checks(root, set(self.spec.knobs)) if x.family == "unexposed_setting" and x.value
+        leads = [x for x in code_checks(root, set(self.spec.knobs), executed=self._executed()) if x.family == "unexposed_setting" and x.value
                  and (not ast_patch.entry_script(root / x.file) or ast_patch.direct_entry(self.spec.run.command, x.file))]
         if leads:
             self._patch_reserve = int(self.cfg.max_runs * self.cfg.patch_budget_frac)
@@ -3194,7 +3273,7 @@ class GapSearch:
         try:
             from gapfinder.ingest.code_checks import code_checks
 
-            leads = any(x.family == "unexposed_setting" for x in code_checks(self.spec.code_root(), set(self.spec.knobs)))
+            leads = any(x.family == "unexposed_setting" for x in code_checks(self.spec.code_root(), set(self.spec.knobs), executed=self._executed()))
         except Exception:  # noqa: BLE001
             leads = False
         import types
@@ -3322,7 +3401,7 @@ class GapSearch:
         if self.cfg.patch_knobs and not contrast_ahead and (d.kind.startswith("out_of_space")
                                                             or d.kind in ("in_space", "reproduced")):
             try:
-                static = [x.to_dict() for x in code_checks(root, set(self.spec.knobs))]
+                static = [x.to_dict() for x in code_checks(root, set(self.spec.knobs), executed=self._executed())]
             except Exception:  # noqa: BLE001 (no leads read)
                 static = []
             # the paper's values first, as in the patch round: the deterministic matcher and operation swaps (no model
@@ -3337,9 +3416,8 @@ class GapSearch:
                       (self._lead_values(x) for x in self._patch_leads(static, grounded))]
             configs = [g[i] for i in range(max((len(g) for g in groups), default=0)) for g in groups if i < len(g)]
             configs = configs[: int((self.cfg.max_runs or 10 ** 6) * self.cfg.patch_budget_frac)]
-            await _all(*(self.measure(c, 1, "patch screen (early)") for c in configs))
-            configs += await self._lead_secants(t, configs, "patch screen (early, secant)")
             n_lead = len(configs)
+            await _all(*(self.measure(c, 1, "patch screen (early)") for c in configs))
         rel = [r for r in self.scale_relations if r.get("verified")]
         if self.cfg.mutations and (rel or d.kind.startswith("out_of_space") or label in (
                 ConfidenceLabel.unexplained.value, ConfidenceLabel.conflicts_held_out.value)):
@@ -3398,7 +3476,6 @@ class GapSearch:
         self.orch.events.emit("note", msg=f"{t.claim_id}: patch round: {len(leads)} code lead(s), {len(configs)} "
                                           f"configurations (base {base or 'naive'})")
         await _all(*(self.measure(c, 1, "patch screen") for c in configs))
-        configs += await self._lead_secants(t, configs, "patch screen (secant)")
 
         def rediagnose():
             runs, claims, extra = self._hm_inputs(t)
@@ -3441,67 +3518,6 @@ class GapSearch:
             f"{ast_patch.parse(k)[0]} line {ast_patch.parse(k)[1]}: {ast_patch.parse(k)[2]} = "
             f"{self.spec.knobs[k].default} -> {v}" for k, v in patches.items()))
 
-    async def _lead_secants(self, t: Target, configs: list[Changes], label: str) -> list[Changes]:
-        """Plan I1: a literal lead whose screened values bracket the paper's number gets the crossing too, one run,
-        as a setting does in the screen (secant_values: the crossing nearest the code's value). Only when none of the
-        screened configurations fits every claim, the settings secant's guard against manufactured fits (seed 6:
-        `test_ratio` 0.2 -> 0.05 and `test_percent` 30 -> 7.5 lay between the patch ladder's values)."""
-        singles = [c for c in configs if len(c) == 1]
-        y0 = self.value({}, t.metric)
-        if y0 is None or not singles or any(self._fits_all(t, c) for c in configs):
-            return []
-        extra: list[Changes] = []
-        for k in dict.fromkeys(next(iter(c)) for c in singles):
-            kn = self.spec.knobs.get(k)
-            if kn is None:
-                continue
-            pts = [(kn.default, y0)] + [(c[k], self.value(c, t.metric)) for c in singles if k in c]
-            have = [v for v, _ in pts]
-            for v in secant_values(pts, t.paper_value, None, kn.default)[:1]:
-                if not any(_same_number(v, w) or v == w for w in have) and not self.measure_ok({k: v}):
-                    extra.append({k: v})
-        if self.cfg.max_runs is not None:
-            extra = extra[: max(0, self.cfg.max_runs - self.runs_used - self.confirm_repeats(t))]
-        if extra:
-            self.orch.events.emit("note", msg=f"{t.claim_id}: {label}: the paper's number is bracketed; screening "
-                                              + ", ".join(f"{next(iter(c))}={next(iter(c.values()))}" for c in extra))
-            await _all(*(self.measure(c, 1, label) for c in extra))
-        return extra
-
-    async def _fraction_steps(self, t: Target, ran: list) -> list:
-        """Plan I3: a training-data cut that moved the target toward the paper without reaching it gives the
-        fraction to try next: the secant through the naive run (all the data) and the cut on a log scale of the
-        fraction (learning curves are near linear in log n: a straight line in the fraction itself put 40% at 30%),
-        snapped to 0.05 in [0.2, 0.95], one run (seed 6: cuts to 40% and 60% lay between the operator's 1/2 and
-        3/4). The new mutant joins the round like the others."""
-        import dataclasses
-
-        from gapfinder.sandbox import ast_patch
-        from gapfinder.sandbox.spec import Knob
-
-        v0, out, seen = self.value({}, t.metric), [], set()
-        for m in ran:
-            frac = next((re.search(r"^(.*): the first (\d+)/(\d+)$", x) for x in m.tags if ": the first " in x), None)
-            v1 = self.value({m.name: "1"}, t.metric)
-            if frac is None or v0 is None or v1 is None or abs(v1 - v0) < 1e-12:
-                continue
-            f1 = int(frac.group(2)) / int(frac.group(3))
-            f = f1 ** ((t.paper_value - v0) / (v1 - v0))  # v(f) = v0 + (v1 - v0) log f / log f1
-            k = round(f * 20)
-            if not 4 <= k <= 19 or abs(k / 20 - f1) < 1e-9 or (m.file, m.line, k) in seen:
-                continue
-            seen.add((m.file, m.line, k))
-            expr = f"(lambda _v: _v[:max(1, len(_v) * {k} // 20)])({m.before})"
-            m2 = dataclasses.replace(m, op=ast_patch.set_op(expr), after=expr,
-                                     tags=[x for x in m.tags if ": the first " not in x]
-                                     + [f"{frac.group(1)}: the first {k}/20 (the secant from {frac.group(2)}/"
-                                        f"{frac.group(3)})"])
-            self.spec.knobs.setdefault(m2.name, Knob(layer="environment", default="0", env=True, choices=["0", "1"]))
-            await self.measure({m2.name: "1"}, 1, "mutation screen (fraction)")
-            if self.measure_ok({m2.name: "1"}):
-                out.append(m2)
-        return out
-
     async def _propose_code(self, t: Target, res: ClaimResult) -> None:
         """Plan G6 (code_proposer, gapfinder/search/proposer.py): when the deterministic rounds end with no
         configuration that fits every claim, one Super call reads the executed code and the claims' ratios and
@@ -3515,10 +3531,9 @@ class GapSearch:
         kind = (res.diagnosis or {}).get("kind", "")
         label = res.attribution.confidence_label if res.attribution else ConfidenceLabel.unexplained.value
         root = self.spec.code_root()
-        # plan I2: any answer short of a confident one (seed 6: 7 of 9 misses had a coincidental unsupported fit,
-        # which kept the proposer from running)
-        confident = (ConfidenceLabel.explained.value, ConfidenceLabel.inconsistency.value)
-        if self.router is None or root is None or (label in confident and not kind.startswith("out_of_space")):
+        if self.router is None or root is None or not (kind.startswith("out_of_space") or label in (
+                ConfidenceLabel.unexplained.value, ConfidenceLabel.inconclusive.value,
+                ConfidenceLabel.conflicts_held_out.value)):
             return
         res.pre_proposer = {"changes": dict(res.changes), "label": label}
         held = [h for h in self.targets if h.held_out and not h.tuned_separately and h.metric in self.bands]
@@ -3554,12 +3569,6 @@ class GapSearch:
             await self._measure_points([cfg], "code proposer point")
             h = diff.add(self._config_hypothesis(diff, cfg, 0.05, title=f"proposed edit {desc}"))
             moved = [cid for cid, v in h.per_claim.items() if v["I"] <= FIT_I and self._off_as_run(diff, cid)]
-            if h.max_I <= FIT_I and len(moved) >= 2 and res.changes and self._fits_all(t, res.changes):
-                # the answer (a setting that fits every claim) and the edit are both unsupported: a tie, not a swap
-                self._add_equivalent(t, res, cfg, "code proposer")
-                res.notes.append(f"code proposer: {desc} fits every claim as well as the answer; the claims can't tell "
-                                 "them apart")
-                return
             if h.max_I <= FIT_I and len(moved) >= 2:
                 res.changes, res.gap_after = cfg, self.gap(t, cfg)
                 res.closes = res.gap_after is not None and abs(res.gap_after) <= self.band_at(t, cfg)
@@ -3751,7 +3760,7 @@ class GapSearch:
         if (d.kind.startswith("out_of_space") or self._unsupported(res)) and root is not None:
             from gapfinder.ingest.code_checks import code_checks
 
-            leads = code_checks(root, set(self.spec.knobs))
+            leads = code_checks(root, set(self.spec.knobs), executed=self._executed())
             res.diagnosis["leads"] = [x.to_dict() for x in leads]
             if leads:
                 self.orch.events.emit("note", msg=f"{t.claim_id}: {len(leads)} static lead(s) outside the settings, "
@@ -3919,6 +3928,20 @@ class GapSearch:
             self.mf_dropped.extend(dropped)
         drop = {id(h) for h in dropped}
         return [h for h in hyps if id(h) not in drop]
+
+    def _prefer(self, t: Target, a: ClaimResult, b: ClaimResult | None) -> bool:
+        """a replaces b as the answer, on every path that picks one (the candidates, the fallback round, the runs
+        already made when the budget ran out): a better label rank; on the same rank a tie the target can't break
+        keeps b, which the candidate order put first, unless only a has evidence (equal fits, so the evidence-backed
+        value is the likelier one); otherwise the closer fit. The budget path broke ties on the closer mean alone
+        (RippleNet c5 rerun: lr=0.002 over the repo-declared lr=0.001, 0.693 +- 0.003 against 0.688 +- 0.010)."""
+        if b is None:
+            return True
+        if _rank(a) != _rank(b):
+            return _rank(a) < _rank(b)
+        if self._tied_on_target(t, a, b):
+            return _evidenced(a) and not _evidenced(b)
+        return _better(a, b)
 
     def _tied_on_target(self, t: Target, a: ClaimResult, b: ClaimResult) -> bool:
         """Plan D2.3 at verification: two verified answers with the same label whose target fits are equally likely
@@ -4255,7 +4278,7 @@ class GapSearch:
             if _rank(trial) >= _LABEL_RANK[ConfidenceLabel.unexplained.value]:
                 why = "; ".join(trial.notes) or "did not pass verification"
                 rejected.append(f"{c} (gap {self.gap(t, c):+.1%}) was verified from existing runs and rejected: {why}")
-            if best is None or _better(trial, best):
+            if self._prefer(t, trial, best):
                 best = trial
         if best is not None and _rank(best) < _LABEL_RANK[ConfidenceLabel.unexplained.value]:
             for f in ("attribution", "changes", "gap_after", "held_out", "counterfactual", "plausibility", "replay", "relations"):
@@ -4372,6 +4395,33 @@ def _rank(r: ClaimResult) -> int:
         # (test-v11-10: a worse-fitting pair with a passenger knob outranked the right single knob)
         return _LABEL_RANK[ConfidenceLabel.partially_explained.value]
     return _LABEL_RANK.get(label, _LABEL_RANK[ConfidenceLabel.unexplained.value])
+
+
+_GENERIC_WORDS = {"acc", "accuracy", "auc", "ap", "f1", "mse", "mae", "rmse", "loss", "score", "test", "val", "top1",
+                  "top5", "error", "rate"}
+
+
+def _stated_for(paper_value: str | None, words: set[str]) -> str | None:
+    """The value a ledger's paper value states for a condition named in `words`: "0.01 (Pubmed), 0.005 (Cora,
+    Citeseer)" with {"pubmed"} gives "0.01"; a plain "0.6" applies everywhere; None when no part names the condition
+    or the value is not a single token."""
+    s = str(paper_value or "").strip()
+    if not s or s.lower().startswith("unstated"):
+        return None
+    words = words - _GENERIC_WORDS
+    parts = re.findall(r"([^,()]+?)\s*\(([^)]*)\)", s)
+    if not parts:
+        return s if re.fullmatch(r"[\w.+-]+", s) else None
+    for v, cond in parts:
+        v = v.strip()
+        if set(re.findall(r"[a-z][a-z0-9]+", cond.lower())) & words and re.fullmatch(r"[\w.+-]+", v):
+            return v
+    return None
+
+
+def _evidenced(r: ClaimResult) -> bool:
+    """Every changed value has evidence (the paper, the repo's docs or code, the web), in direction at least."""
+    return bool(r.plausibility) and all(p.supported for p in r.plausibility.values())
 
 
 def _better(a: ClaimResult, b: ClaimResult) -> bool:

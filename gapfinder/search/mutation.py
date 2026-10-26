@@ -53,17 +53,6 @@ SPLIT_KW = re.compile(r"(?i)^(test|val|valid|validation|train|dev|holdout|eval)?
 COMMON_FRACS = (0.1, 0.2, 0.3, 0.5, 0.25, 0.15)
 FITTERS = re.compile(r"(?i)(scal|norm|pca|imput|vectoriz|encod|standard|minmax|robust|whiten|tfidf|discretiz|binar)")
 FIT_CALLS = {"fit", "fit_transform", "partial_fit"}
-# plan I5: structural switches of layer constructors (a bias, an affine transform, a residual connection), and
-# the ones on by default when the call leaves them out (DeepCrime's WRB/WAB, from a taxonomy of real faults)
-LAYER_CTORS = re.compile(r"^(Linear|Bilinear|LazyLinear|Conv[123]d|ConvTranspose[123]d|Conv|Dense|BatchNorm[123]d|"
-                         r"LayerNorm|GroupNorm|InstanceNorm[123]d|GCNConv|GraphConv|GraphConvolution|SAGEConv|GATConv|"
-                         r"GINConv|ChebConv|LSTM|GRU|RNN|MultiheadAttention)$")
-STRUCT_KW = ("bias", "use_bias", "affine", "elementwise_affine", "track_running_stats", "normalize", "residual",
-             "add_self_loops")
-STRUCT_ON = {"bias": re.compile(r"^(Linear|Bilinear|LazyLinear|Conv[123]d|ConvTranspose[123]d|GCNConv|GraphConv|"
-                                r"SAGEConv|GATConv|ChebConv|LSTM|GRU|RNN|MultiheadAttention)$"),
-             "use_bias": re.compile(r"^(Dense|Conv)$"), "affine": re.compile(r"^BatchNorm[123]d$"),
-             "elementwise_affine": re.compile(r"^LayerNorm$"), "track_running_stats": re.compile(r"^BatchNorm[123]d$")}
 # plan G5: names that hold the training examples' indices (a mask can't be sliced, so it is left out)
 TRAIN_IDS = re.compile(r"(?i)^(idx_?train|train_?(idx|index|indices|ids|nodes|edges|samples|rows))$")
 SUBSET_SHARES = ((1, 2), (3, 4))
@@ -356,29 +345,6 @@ def _threshold_ops(v) -> tuple[str, ...]:
     return ("mul2", "div2")
 
 
-def _structural_mutants(rel: str, tree: ast.Module, add, parents) -> None:
-    """Plan I5: each layer constructor's structural switch flipped: a boolean keyword the call passes, or one it
-    leaves at a default that is on (`nn.Linear(a, b)` -> `bias=False`; `nn.BatchNorm1d(n)` -> `affine=False`)."""
-    from gapfinder.sandbox.ast_patch import kwset_op
-
-    for n in ast.walk(tree):
-        if not isinstance(n, ast.Call):
-            continue
-        f = _call_name(n)
-        if not LAYER_CTORS.match(f or "") or (isinstance(n.func, ast.Attribute) and _unparse(n.func.value) == "self"):
-            continue  # self.linear(x) calls a layer built elsewhere
-        kws = {k.arg: k.value for k in n.keywords if k.arg}
-        for name in STRUCT_KW:
-            v = kws.get(name)
-            if isinstance(v, ast.Constant) and isinstance(v.value, bool):
-                new = "False" if v.value else "True"
-            elif v is None and name in STRUCT_ON and STRUCT_ON[name].match(f):
-                new = "False"
-            else:
-                continue
-            add(rel, n, "Call", kwset_op(name, new), 1, None, ["structural switch", f"{f}({name}={new})"], parents)
-
-
 def _data_mutants(rel: str, tree: ast.Module, add, parents, hints: set[int]) -> None:
     """The data-pipeline operators of plan D1.6 (see the module docstring)."""
     from gapfinder.sandbox.ast_patch import arg_op, kwset_op, set_op
@@ -575,7 +541,6 @@ def find_mutants(root: str | Path, knobs: list[str], executed: dict[str, list[in
                                 if id(t) in d2:
                                     _mutants_of(t, d + 1 + d2[id(t)], knob, frel, add, fparents, kset)
         _data_mutants(rel, tree, add, parents, set((hints or {}).get(rel, ())))
-        _structural_mutants(rel, tree, add, parents)
         # metric code, loop bounds, loader switches
         for name, stmts, node in _scopes(tree):
             metric = name != "<module>" and METRIC_FN.search(name)
@@ -647,8 +612,6 @@ def _klass(m: Mutant) -> str:
         return "relation"
     if "data pipeline" in m.tags:
         return "data"
-    if "structural switch" in m.tags:
-        return "structural"
     if "metric output" in m.tags or "metric code" in m.tags:
         return "metric"
     return "loop" if "loop bound" in m.tags else "flow"

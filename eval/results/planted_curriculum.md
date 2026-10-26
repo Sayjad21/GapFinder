@@ -240,6 +240,64 @@ and 0/1 (a crash).
 - **The planned power was not reached.** 5 tasks differed, so a sign test could not have shown significance,
   whichever way they went.
 
+## c7 against c5 on a fresh batch (seed 8): plan, written before the batch was made
+
+c7 (`planted-c7`) is c5 with two changes, found by re-running earlier real papers on c5 for the showcase
+(`demo/runs/real/`), where c5 did worse than earlier versions on VGAE and RippleNet:
+- **A.** The minimal-set step cut a knob on one run of the subset. When the subset's repeats then neither close the
+  gap nor stay within a band of the full set, each cut is decided again on repeats. On VGAE, the documented split
+  pair (test 10%, validation 5%) fits, but test_percent alone fit on its one run and failed on three.
+- **B.** One tie rule on every path that picks an answer. A tie the target can't break keeps the earlier
+  candidate, unless only the later one has evidence. Otherwise the closer fit wins. On RippleNet, the path taken when
+  the budget ran out picked lr=0.002 over the repo-declared lr=0.001 on the closer mean alone (0.693 +- 0.003 against
+  0.688 +- 0.010).
+
+Both rules predate c1. These real papers revealed them, so they are not evidence for c7.
+
+Before the batch was made, the owner asked for every earlier real paper to end with a good result. So c7 also
+carries the class-level fixes for the other failures found then (each diagnosed from its c5 run, each with a toy):
+- **C.** A counterfactual whose configuration has no successful run is marked unchecked. It used to crash the
+  search: MC Dropout, three times.
+- **D.** The scale probe ignores a claim that a factor leaves where it is (0 under any multiplier); that claim
+  had ruled out every factor. Also, the probe's held runs (plan H4) are kept from every stage before it. c5's
+  hold counted the claims in the wrong list and was always 0. (GCN attack: x0.5 never scored; the probe ran with 1
+  run of 200 left.)
+- **E.** Static code leads on code the dry run executed rank first, before the cut. Ties sorted by file path had
+  put a vendored copy (PatchTST) and detectors the run never used (BOND) in the slots.
+- **F.** Runs held for the protocol tests, which ran last and got none, when an evaluation switch sits on
+  executed code (PatchTST: the test loader's drop_last never ran).
+- **G.** The values the paper states for the target's own dataset are tested together as one block (GAT:
+  PubMed's lr and heads, each screened alone on one run).
+- **H.** The paper-to-code contrast sees the executed source lines and states a true premise. A structural
+  difference needs the paper's words verbatim and a line that ran. It is reported, never tested (pygcn: the
+  prompt saw no code).
+
+The harnesses of SDCN and BOND are rebuilt with the current builder, which records per-epoch values and
+per-package pins. Their old harnesses predate both.
+
+On the planted batch, A, B, D, E and F can act. G and H can't, because the tasks carry no paper; C fires only on
+a failed run.
+
+**The batch.** Seed 8, the size of seed 7: 4 tasks per case and level on the hand harnesses, 2 on the -h ones. It
+is searched by c5 as adopted and by c7, both with the proposer off, so the arms differ only by A and B. The dev
+suite is run twice on c7 (bases 12000 and 12100) against c5's 10000 and 10100.
+
+**Power, stated in advance.** A scan of 563 recorded searches found A's situation in 4 of them (under 1%). B changes an
+answer only when two candidates tie and the path taken when the budget runs out picks one, or when one tied
+candidate has evidence. Planted tasks carry no paper, so B's evidence part rarely applies. D, E and F act more
+often: on every -h case whose claims sweep a knob (D's hold), and on every task with an evaluation switch or code
+leads (E, F), so they also move runs away from the settings search. Expect a handful of tasks where the arms
+differ. That is too few for a sign test to reach significance unless they all go one way, and then only with 6
+or more.
+
+**Decision rule.** c7 is adopted if all four hold:
+1. no confidently wrong answer and no crash in the c7 arm;
+2. no more tasks worse than better;
+3. every task where the arms differ is traced to a note from A or B, or to the arms' different runs;
+4. the dev suite pooled over two replicates is within 5 of c5's 99.
+
+Otherwise c5 stays.
+
 ## Infrastructure notes
 
 - The machine lost DNS for minutes at a time. Task making waits for the network and doesn't count draws lost to

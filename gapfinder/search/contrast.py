@@ -29,11 +29,11 @@ from pydantic import BaseModel, Field
 
 CONTRAST_PROMPT = """You compare a paper with its released code as the code actually ran.
 
-No setting of the program makes all the paper's numbers match, so the difference is probably in the code:
-a hard-coded value, a step done differently, an evaluation detail. Find where the code, as traced below,
-differs from what the paper says it does.
+{premise} Find where the code, as traced below, differs from what the paper says it does: a hard-coded
+value, a step done differently (a normalization, which layers a regularizer covers, where dropout applies,
+how data is split), an evaluation detail.
 
-## What the paper says (training and evaluation details, hyperparameter tables)
+## What the paper says (method, training and evaluation details, hyperparameter tables)
 {paper}
 
 ## What the code did in one traced run
@@ -45,6 +45,9 @@ Values that reached known library calls, with the repo line that made the call:
 
 Loop bounds in the repo's code (file:line -> bound):
 {loops}
+
+The repo's source lines the run executed (file:line: source):
+{code}
 
 ## Hard-coded values a static scan flagged
 {leads}
@@ -75,19 +78,37 @@ class Differences(BaseModel):
     differences: list[Difference] = Field(default_factory=list)
 
 
-def _excerpt(paper_text: str, max_chars: int = 9000) -> str:
+# method details a re-implementation often does differently: a window around each mention goes into the excerpt
+# (pygcn c5 rerun: the excerpt had the setup section only, not the renormalization trick or which layer is regularized)
+_METHOD_WORDS = ("normaliz", "normalis", "renormaliz", "dropout", "regulariz", "regularis", "weight decay",
+                 "split", "preprocess", "initializ", "early stopping")
+
+
+def _clean(text: str) -> str:
+    """Ligatures and hyphenated words as a PDF extraction leaves them ("ﬁ", "set-up")."""
+    return (text.replace("ﬁ", "fi").replace("ﬂ", "fl").replace("ﬀ", "ff")
+            .replace("ﬃ", "ffi").replace("ﬄ", "ffl"))
+
+
+def _excerpt(paper_text: str, max_chars: int = 12000) -> str:
     from gapfinder.ledger.assumptions import hyperparameter_tables
 
+    paper_text = _clean(paper_text)
     low = paper_text.lower()
     parts = []
-    for key in ("implementation detail", "experimental setup", "training detail", "hyper-parameter",
-                "hyperparameter", "evaluation protocol", "experiment"):
+    for key in ("implementation detail", "experimental setup", "experimental set-up", "training detail",
+                "hyper-parameter", "hyperparameter", "evaluation protocol", "experiment"):
         i = low.find(key)
         if i >= 0:
             parts.append(paper_text[i: i + 2500])
-            if sum(map(len, parts)) > max_chars // 2:
+            if sum(map(len, parts)) > max_chars // 3:
                 break
     parts += hyperparameter_tables(paper_text)
+    for w in _METHOD_WORDS:
+        for m in list(re.finditer(re.escape(w), low))[:2]:
+            window = paper_text[max(0, m.start() - 300): m.start() + 300]
+            if not any(window[:120] in p for p in parts):
+                parts.append(window)
     return "\n\n".join(parts)[:max_chars] or paper_text[:max_chars]
 
 
@@ -107,10 +128,20 @@ def _summaries(records: list[dict], max_lines: int = 60) -> tuple[str, str, str]
     return "\n".join(uniq(config)) or "none", "\n".join(uniq(sinks)) or "none", "\n".join(uniq(loops)) or "none"
 
 
-async def contrast(router, paper_text: str, records: list[dict], leads: list[dict]) -> list[Difference]:
+PREMISE_OUT = ("No setting of the program makes all the paper's numbers match, so the difference is probably in the "
+               "code.")
+PREMISE_IN = ("A setting of the program may fit the paper's numbers, but the paper also describes how the method is "
+              "computed, and the released code may do some of it differently.")
+
+
+async def contrast(router, paper_text: str, records: list[dict], leads: list[dict], code: str = "",
+                   out_of_space: bool = True) -> list[Difference]:
+    """`code`: the executed source lines (`file:line: source`), so a structural difference can be named at its line
+    (before, the prompt saw only the call sites the trace recorded). `out_of_space`: the premise, true either way."""
     config, sinks, loops = _summaries(records)
     lead_text = "\n".join(f"{x.get('file')}:{x.get('line')}  {x.get('name')} = {x.get('value')}" for x in leads[:20]) or "none"
-    msg = CONTRAST_PROMPT.format(paper=_excerpt(paper_text), config=config, sinks=sinks, loops=loops, leads=lead_text)
+    msg = CONTRAST_PROMPT.format(premise=PREMISE_OUT if out_of_space else PREMISE_IN, paper=_excerpt(paper_text),
+                                 config=config, sinks=sinks, loops=loops, code=code or "none", leads=lead_text)
     out = await router.structured("super", [{"role": "user", "content": msg}], Differences)
     return out.differences[:5]
 
@@ -145,7 +176,8 @@ def _literal_on_line(path: Path, line: int, name: str | None) -> str | None:
     return None
 
 
-def ground(diffs: list[Difference], root: Path, paper_text: str | None = None) -> tuple[list[dict], list[dict], list[str]]:
+def ground(diffs: list[Difference], root: Path, paper_text: str | None = None,
+           executed: dict[str, list[int]] | None = None) -> tuple[list[dict], list[dict], list[str]]:
     """(patch leads, structural leads, rejections). A patch lead has the shape of a static lead plus the
     paper's value, and the paper's quote when it is verbatim in the paper and contains that number (then it
     is evidence for the value); anything that doesn't check out against the repo is rejected with a reason."""
@@ -180,5 +212,13 @@ def ground(diffs: list[Difference], root: Path, paper_text: str | None = None) -
             patch.append({**entry, "name": d.name, "value": lit, "paper_value": pv.group(0) if pv else None,
                           "quote": quote, "family": "unexposed_setting", "source": "contrast"})
         else:
-            structural.append(entry)
+            # a structural difference is reported, never tested: it needs the paper's words verbatim, and, with a
+            # trace, a line the run executed (the model sees the executed lines; a line that never ran isn't the cause)
+            if executed and d.line not in set(executed.get(d.file) or []):
+                rejected.append(f"{d.file}:{d.line}: structural, on a line the run never executed")
+                continue
+            if g is not None and not (d.quote and g.quote_in_paper(d.quote)):
+                rejected.append(f"{d.file}:{d.line}: structural, the paper's words are not quoted verbatim")
+                continue
+            structural.append({**entry, "quote": d.quote.strip() if d.quote else None})
     return patch, structural, rejected

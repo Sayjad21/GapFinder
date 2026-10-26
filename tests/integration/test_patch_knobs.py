@@ -99,7 +99,9 @@ async def test_a_paper_to_trace_difference_leads_the_patch_round(tmp_path):
                 Difference(file="model.py", line=2, paper_says="a length scale of 0.1", code_does="0.01",
                            kind="literal", name="lengthscale", paper_value="0.1"),
                 Difference(file="bench.py", line=1, paper_says="scores averaged over 5 seeds",
-                           code_does="one seed", kind="structural"),
+                           code_does="one seed", kind="structural", quote="average scores over 5 seeds"),
+                Difference(file="bench.py", line=1, paper_says="a learned temperature", code_does="fixed",
+                           kind="structural", quote="a learned temperature"),  # not in the paper: rejected
                 Difference(file="nope.py", line=3, paper_says="x", code_does="y", kind="structural")])
 
     paper = _paper(tmp_path)
@@ -114,8 +116,10 @@ async def test_a_paper_to_trace_difference_leads_the_patch_round(tmp_path):
     [r] = await s.run()
     knob = ast_patch.knob_name("model.py", 2, "lengthscale")
     assert calls and "length scale of 0.1" in calls[0] and "Values that reached known library calls" in calls[0]
+    assert "source lines the run executed" in calls[0] and "bench.py:" in calls[0]  # the code as it ran (c7)
     assert r.diagnosis["contrast_leads"][0]["file"] == "model.py" and r.diagnosis["contrast_leads"][0]["paper_value"] == "0.1"
-    assert [x["file"] for x in r.diagnosis["structural_leads"]] == ["bench.py"]  # nope.py was rejected
+    # nope.py (no such file) and the unquoted temperature were rejected
+    assert [x["paper_says"] for x in r.diagnosis["structural_leads"]] == ["scores averaged over 5 seeds"]
     first_patch = next(e["branch"]["knob_changes"] for e in orch.events.read()
                        if e["type"] == "branch_created" and knob in e["branch"]["knob_changes"])
     assert first_patch[knob] == "0.1"  # the paper's value is tried first

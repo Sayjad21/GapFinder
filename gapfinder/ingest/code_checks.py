@@ -29,10 +29,7 @@ _TRAIN = {"batch", "lr", "learning", "momentum", "decay", "l2", "lengthscale", "
           "epochs", "iter", "iters", "iterations", "steps", "warmup", "clip", "hidden", "units", "layers",
           "temperature", "eps", "epsilon", "beta1", "beta2", "gamma", "alpha", "lambda", "reg", "patience",
           "prior", "noise", "precision", "width", "depth"}
-_EVAL = {"samples", "mc", "passes", "draws", "topk", "beam", "threshold",
-         # a data split's size (plan I1: `test_ratio = 0.2`, `test_percent = 30.`, `eval_ratio`: a planted cause on
-         # three papers that was a lead only when the runtime trace caught the literal)
-         "ratio", "percent", "pct", "frac", "fraction", "split", "portion", "holdout"}
+_EVAL = {"samples", "mc", "passes", "draws", "topk", "beam", "threshold"}
 _EXACT = {"T": 1, "K": 1}  # single-letter names used for sample counts
 _EVAL_CALLS = {"predict", "evaluate", "eval", "test", "score", "sample"}
 # keyword switches that only say how to run, never what is computed (left out of the switch leads)
@@ -85,6 +82,7 @@ class Lead:
     weight: int = 1
     name: str = ""  # unexposed_setting: the variable or keyword, and its literal (a patch knob can set it)
     value: str = ""
+    use_line: int = 0  # the line whose execution shows the lead in use, when not `line` (a default: the body's first)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -275,7 +273,7 @@ def _default_leads(files: list[tuple[Path, str]]) -> list[Lead]:
     """A numeric parameter default that no call in the repo overrides is a constant in disguise
     (devset VGAE: `def mask_test_edges(adj, test_percent=30., val_percent=20.)`, always called as
     `mask_test_edges(adj)`; the paper held out 10% and 5%)."""
-    defs: list[tuple[str, int, str, str, str, int, str, float]] = []  # fn, line, rel, param, literal, position, code, value
+    defs: list[tuple] = []  # fn, line, rel, param, literal, position, code, value, the body's first statement line
     calls: dict[str, list[ast.Call]] = {}
     for path, rel in files:
         try:
@@ -291,15 +289,20 @@ def _default_leads(files: list[tuple[Path, str]]) -> list[Lead]:
                 start = len(a.args) - len(pos)
                 pairs = [(arg, d, start + i) for i, (arg, d) in enumerate(zip(pos, a.defaults))]
                 pairs += [(arg, d, None) for arg, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
+                # a def line runs at import whether or not the function is called: its body's first statement shows use
+                body = n.body[1:] if (len(n.body) > 1 and isinstance(n.body[0], ast.Expr)
+                                      and isinstance(getattr(n.body[0], "value", None), ast.Constant)) else n.body
+                first = body[0].lineno if body else n.lineno
                 for arg, d, idx in pairs:
                     v = _number(d)
                     if v is not None and v not in (0.0, 1.0, -1.0):
                         code = lines[n.lineno - 1].strip()[:160] if 0 < n.lineno <= len(lines) else ""
-                        defs.append((n.name, n.lineno, rel, arg.arg, ast.unparse(d), -1 if idx is None else idx, code, v))
+                        defs.append((n.name, n.lineno, rel, arg.arg, ast.unparse(d), -1 if idx is None else idx, code, v,
+                                     first))
             elif isinstance(n, ast.Call):
                 calls.setdefault(_call_name(n), []).append(n)
     out = []
-    for fn, line, rel, param, lit, idx, code, v in defs:
+    for fn, line, rel, param, lit, idx, code, v, first in defs:
         sites = calls.get(fn, [])
         if not sites:
             continue  # never called in the repo: not this program's constant
@@ -307,7 +310,7 @@ def _default_leads(files: list[tuple[Path, str]]) -> list[Lead]:
             continue  # some call sets it
         out.append(Lead("unexposed_setting", rel, line, code,
                         f"`{fn}(..., {param}={v:g})`: a default no call in the repo overrides ({len(sites)} call(s))",
-                        max(2, _weight(param)), name=param, value=lit))
+                        max(2, _weight(param)), name=param, value=lit, use_line=first))
     return out
 
 
@@ -397,8 +400,23 @@ def _leakage_leads(tree, rel: str, src) -> list[Lead]:
     return uniq
 
 
-def code_checks(root: str | Path, flags: set[str] | None = None, limit: int = 12) -> list[Lead]:
-    """Leads for causes outside the exposed settings, best first. `flags`: knob names the harness sets."""
+def coverage(lead: Lead, executed: dict[str, list[int]] | None) -> int:
+    """0: the dry run executed the lead's line (for a default, its function's body); 1: only its file; 2: not its file.
+    0 for every lead without a trace."""
+    if not executed:
+        return 0
+    lines = executed.get(lead.file)
+    if lines is None:
+        return 2
+    return 0 if (lead.use_line or lead.line) in set(lines) else 1
+
+
+def code_checks(root: str | Path, flags: set[str] | None = None, limit: int = 12,
+                executed: dict[str, list[int]] | None = None) -> list[Lead]:
+    """Leads for causes outside the exposed settings, best first. `flags`: knob names the harness sets. `executed`:
+    the dry run's lines per file; leads on code that ran come first, before the cut (PatchTST and BOND c5 reruns: ties
+    sorted by file path put a vendored copy and detectors the run never used in the slots, ahead of the line that
+    ran)."""
     root = Path(root)
     norm = {f.lstrip("-").replace("-", "_") for f in (flags or set())}
     out: list[Lead] = []
@@ -412,7 +430,8 @@ def code_checks(root: str | Path, flags: set[str] | None = None, limit: int = 12
     out += [x for x in _default_leads(files) if x.name not in norm]
     out = _outermost_label_edits(out, root)
     seen, uniq = set(), []
-    for lead in sorted(out, key=lambda x: (-x.weight, x.family != "selection_in_code", x.file, x.line)):
+    for lead in sorted(out, key=lambda x: (coverage(x, executed), -x.weight, x.family != "selection_in_code", x.file,
+                                           x.line)):
         key = (lead.file, lead.line, lead.family, lead.name)  # two defaults on one def line are two leads
         if key not in seen:
             seen.add(key)
