@@ -1820,6 +1820,17 @@ class GapSearch:
                                              "gap_after": (self.value(cfg, t.metric) - claim.paper_value)
                                              / abs(claim.paper_value), "ok": True, "at": {knob: cfg.get(knob, self.spec.knobs[knob].default)}}
                             for claim, cfg in configs[1:]}
+            # the answer's own checks, not the replaced answer's (GCN attack c7 rerun: the report kept dropout=0.3's
+            # reversal and evidence rows under the scale answer): reverting the factor is the code as run, and the
+            # evidence is the sweep the factor fits
+            res.counterfactual = {knob: {"gap_without": res.gap_before, "ok": True}} if v_target else {}
+            res.plausibility = {knob: Plausibility(True, f"one factor ({rel}) fits every one of the {len(sweep)} swept "
+                                                         "claims, on runs at g(v)", source="runs")} if v_target else {}
+            env = self.spec.render(self.spec.run, v_target)[1]
+            res.relations = {}
+            res.replay = [{"parent_checkpoint": b.parent_checkpoint, "result_checkpoint": b.result_checkpoint,
+                           "command": b.command, "env": {**env, "RUN_TAG": b.run_tag}, "run_tag": b.run_tag}
+                          for b in self.measure_ok(v_target)]
             res.notes.append(f"labelled {label_s.value}: one factor ({rel}) makes every one of the "
                              f"{len(sweep)} swept claims fit" + (f"; it replaces {old}" if old and old != res.changes
                                                                   else ""))

@@ -187,3 +187,16 @@ async def test_f_the_protocol_tests_keep_runs_when_the_run_reached_an_evaluation
     assert s._protocol_hold() == 0  # the loader never ran
     s.trace_report = SimpleNamespace(executed={"bench.py": [1], "loader.py": [1, 2, 4, 5, 6]}, leads=[])
     assert s._protocol_hold() == s.cfg.protocol_repeats  # one live lead
+
+
+async def test_d_the_scale_answer_carries_its_own_checks(tmp_path):
+    # the report's reversal and evidence rows describe the scale answer, not the settings answer it replaced
+    acc = lambda r: 0.82 - 1.4 * r  # noqa: E731
+    targets = [Target("C5", "acc", acc(0.025))] + [
+        Target(f"C{int(v * 100)}", "acc", acc(v / 2), held_out=True, at={"ratio": str(v)}) for v in (0.1, 0.15, 0.2, 0.0)]
+    s = _search(tmp_path, targets, bench=BENCH_D, knobs=(("ratio", "0.05"), ("dropout", "0.5")))
+    s.cfg.max_runs = 120
+    [r] = await s.run()
+    assert r.attribution.confidence_label == "Paper-artifact inconsistency", r.notes
+    assert set(r.counterfactual) == {"ratio"} and set(r.plausibility) == {"ratio"} and r.plausibility["ratio"].supported
+    assert r.replay and all(x.get("command") for x in r.replay)
