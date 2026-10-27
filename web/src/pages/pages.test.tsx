@@ -41,8 +41,8 @@ describe("every page renders and passes axe", () => {
     ["#/", /GapFinder finds out why/],
     ["#/cases", "Cases"],
     ["#/case/sdcn", "Structural Deep Clustering Network (SDCN)"],
-    ["#/synthetic", "Synthetic cases"],
-    ["#/synthetic?tab=gapbench", "Synthetic cases"],
+    ["#/synthetic", "Cases with known answers"],
+    ["#/synthetic?tab=gapbench", "Cases with known answers"],
     ["#/run/synthetic~planted~a", "FastGCN (on c7)"],
     ["#/evidence", "The evidence"],
     ["#/how", "How it works"],
@@ -63,11 +63,11 @@ describe("the home page", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "After GapFinder’s change" })[0]);
     expect(screen.getByText(/The gap shrinks from −2\.8% to/)).toBeTruthy();
   });
-  it("names versions as v5 and v7 with their standing", async () => {
+  it("draws the record as the Gap Field, one linked stroke per paper, on the current version", async () => {
     await open("#/", /GapFinder finds out why/);
-    const strips = screen.getAllByRole("list", { name: /one square per paper/ });
-    expect(strips.map((s) => s.getAttribute("aria-label"))).toEqual(["v5: one square per paper", "v7: one square per paper"]);
-    expect(within(strips[1]).getAllByRole("link")).toHaveLength(3);
+    expect(screen.getByRole("button", { name: "v7 (current)" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getAllByRole("link", { name: /as released/ }).map((a) => a.getAttribute("href"))).toEqual(
+      expect.arrayContaining(["#/case/fastgcn-v15", "#/case/gat", "#/case/sdcn"]));
   });
 });
 
@@ -79,7 +79,7 @@ describe("the replay", () => {
     expect(await screen.findByText(/Replayed: all 11 runs/)).toBeTruthy();
     expect(screen.getAllByText(/Explained, with evidence/).length).toBeGreaterThan(0);
     fireEvent.change(scrub, { target: { value: "0" } });
-    expect(await screen.findByText(/Press play, or drag the timeline/)).toBeTruthy();
+    expect(await screen.findByText(/Press play, or press on the chart/)).toBeTruthy();
   });
 });
 
@@ -90,7 +90,7 @@ describe("the report", () => {
     const q = screen.getByText("What did we measure?").closest("details") as HTMLDetailsElement;
     expect(q.open).toBe(false);
     expect(within(q).getByText(/0\.795 over 5 runs as released/)).toBeTruthy();
-    expect(screen.getByText("Settings the paper names that this harness can’t change")).toBeTruthy();
+    expect(screen.getByText(/Settings the paper names that this run couldn’t change/)).toBeTruthy();
     expect(screen.getByText("The code trains for 200 epochs; the paper says 50.")).toBeTruthy();
     expect(RUN.report?.claims[0].unknown?.unmapped).toHaveLength(2);
   });
@@ -107,9 +107,30 @@ describe("the evidence page", () => {
   });
 });
 
+const names = () => screen.getAllByRole("row").slice(1).map((r) => r.querySelector(".paper-cell a")?.textContent);
+
+describe("the cases page", () => {
+  it("sorts by a column and filters by what you type", async () => {
+    await open("#/cases", "Cases");
+    fireEvent.click(screen.getByRole("button", { name: "Paper" }));
+    expect(names()).toEqual(["FastGCN", "Graph Attention Networks (GAT)", "Structural Deep Clustering Network (SDCN)"]);
+    expect(screen.getByRole("columnheader", { name: /Paper/ }).getAttribute("aria-sort")).toBe("ascending");
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "pubmed" } });
+    expect(names()).toEqual(["Graph Attention Networks (GAT)"]);
+  });
+});
+
+describe("a case page", () => {
+  it("has a contents bar naming its sections", async () => {
+    await open("#/case/sdcn", "Structural Deep Clustering Network (SDCN)");
+    const nav = screen.getByRole("navigation", { name: "On this page" });
+    expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual(["The gap", "Across versions", "The investigation", "The report"]);
+  });
+});
+
 describe("the synthetic page", () => {
   it("groups planted cases by paper with their counts, and reads code edits in words", async () => {
-    await open("#/synthetic", "Synthetic cases");
+    await open("#/synthetic", "Cases with known answers");
     expect(screen.getByText(/4 solved across 3 papers/)).toBeTruthy();
     expect(screen.getByText("FastGCN").closest("summary")?.textContent).toMatch(/2 solved.*1 setting, 1 scale convention/);
     expect(screen.getByText("edit: reduce with sum instead (src/train.py:58)")).toBeTruthy();

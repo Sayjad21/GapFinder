@@ -28,7 +28,7 @@ export default function HeroInstrument({ cases, short }: { cases: RealCase[]; sh
     }, { threshold: 0.6 });
     io.observe(box.current);
     return () => { io.disconnect(); clearTimeout(timer); };
-  }, [pick, show, touched]);
+  }, [pick, show, touched]); // oxlint-disable-line react/exhaustive-effect-dependencies -- re-armed for each case
 
   if (!c || !cur || !g) return null;
   const d = digits([g.paper, g.code, g.after ?? g.code]);

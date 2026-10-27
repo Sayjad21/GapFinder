@@ -20,17 +20,17 @@ export function useShowcase(): { data: Showcase | null; error: Error | null } {
 export function primeShowcase(d: Showcase | null): void { manifest = d; pending = null; }
 
 // ------------------------------------------------------------------ one recorded run
+// kept with the id it was fetched for, so a new id reads as loading without resetting anything
 export function useRun(id: string | undefined): { run: Run | null; error: Error | null } {
-  const [run, setRun] = useState<Run | null>(null);
-  const [error, setError] = useState<Error | null>(null);
+  const [got, setGot] = useState<{ id: string; run?: Run; error?: Error } | null>(null);
   useEffect(() => {
     if (!id) return undefined;
     let dead = false;
-    setRun(null); setError(null);
-    api.run(id).then((r) => !dead && setRun(r)).catch((e: Error) => !dead && setError(e));
+    api.run(id).then((run) => !dead && setGot({ id, run })).catch((error: Error) => !dead && setGot({ id, error }));
     return () => { dead = true; };
   }, [id]);
-  return { run, error };
+  const mine = got && got.id === id ? got : null;
+  return { run: mine?.run ?? null, error: mine?.error ?? null };
 }
 
 // a run’s gauge, computed from its report when the manifest has none

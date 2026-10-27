@@ -114,12 +114,13 @@ function PerTask({ rows }: { rows: ScoreRow[] }) {
   );
 }
 
+const of = (x: number | null | undefined, tasks: number) => (x == null ? "n/a" : `${x} of ${tasks}`);
+
 function Split({ name, data }: { name: string; data: SplitT }) {
   const [all, setAll] = useState(false);
   const arms = Object.entries(data.summary || {});
   const matrices = arms.filter(([a, s]) => s.trust_matrix && (all || HEADLINE_ARMS.has(a)));
   const more = arms.filter(([a, s]) => s.trust_matrix && !HEADLINE_ARMS.has(a)).length;
-  const of = (x: number | null | undefined, tasks: number) => (x == null ? "n/a" : `${x} of ${tasks}`);
   return (
     <div className="panel">
       <p className="small">{name === "dev"

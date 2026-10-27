@@ -225,7 +225,7 @@ export type GfEvent = Base & (
   | { type: "branch_created" | "branch_started" | "branch_finished"; branch: Branch }
   | { type: "noise_band"; metric: string; median: number; band: number }
   | { type: "survivor" | "pruned"; knob: string; value: string; units: number }
-  | { type: "round"; name: string }
+  | { type: "round"; name: string; claim?: string; tested?: number; survivors?: number; confirmed?: number; tried?: number; kept?: number }
   | { type: "verified"; changes: Changes; label: string }
   | { type: "attribution"; claim: string; label?: string | null; status?: string; changes?: Changes; gap_before?: number; gap_after?: number }
   | { type: "cost"; setup_runs?: number }

@@ -19,6 +19,15 @@ measuring rule with two jaws, the code's reading and the paper's reading, and a 
 them. When GapFinder's answer is applied, the code's jaw moves to its new reading, and the highlighted span shrinks
 to what is left. That one element is the bold move. Everything around it stays quiet.
 
+The same highlighter carries the idea to the two larger views:
+- **The Gap Field** (home): every real paper's gap as one stroke on a shared rule, the paper's number at zero. Applying
+  a version's answers shrinks each stroke to what that version left, one after another; a miss keeps its stroke. The
+  rule is logarithmic away from ±1%, so a 1% gap and a 75% one both read. Every stroke links to its case.
+- **The Hunt** (every replay): each run a dot at the number it gave, in the order it started, the paper's number a line.
+  The highlighter fills what is left between the paper and the closest run so far, so the gap visibly closes as the
+  search goes, and the chart ends on GapFinder's answer. Pressing or dragging on it seeks; a narrator beside it tells
+  each stage in a sentence, and the raw event log is one click away.
+
 Typography encodes the two sides:
 - **The paper's voice is a serif.** Quotes, claims and the paper's numbers.
 - **The machine's voice is a sans.** Readings, labels and the interface.
@@ -112,9 +121,18 @@ replaced by the notebook sheet and highlighter, which come from what reviewers a
 
 ## Code
 
-TypeScript, strict, React 19 and Vite. `npm run check` type-checks and runs the tests; CI (`.github/workflows/web.yml`)
-also builds the static site with its data and runs Lighthouse on it, failing under 95 for accessibility or 90 for best
-practices.
+TypeScript, strict, React 19 and Vite. `npm run check` type-checks, lints and runs the tests; CI
+(`.github/workflows/web.yml`) also builds the static site with its data and runs Lighthouse on every page, failing
+under 95 for accessibility or 90 for best practices.
+
+Lint is oxlint (`.oxlintrc.json`): typescript-eslint needs TypeScript under 6.1, and this is TypeScript 7. Warnings fail
+the check. Three rules are off on purpose: `jsx-a11y/prefer-tag-over-role`, which flags `role="group"` on a toggle
+group and `role="img"` on an inline SVG, both correct ARIA; and `unicorn/no-array-sort` and `no-array-reverse`, since
+every sort here runs on a fresh copy. The search palette's listbox of options is the ARIA combobox pattern, marked in
+place.
+
+The web fonts load without blocking the first paint. Fallback faces sized to them (`styles.css`, measured in Chrome)
+keep the swap from moving the page, and text widths are in em, not ch, which would change with the face.
 
 ```
 src/types.ts        the JSON the site reads: manifest, run, report, events, scoreboard
@@ -124,7 +142,9 @@ src/nav.ts          hash routes: href, parseHash
 src/ui.tsx          formatting, verdict word and glyph, theme, tooltips
 src/words.tsx       the vocabulary: v-names and standing, plain labels, the glossary and <Term>
 src/replay.ts       the event fold, the stage timeline, the cached fold behind seeking
-src/components/     Gauge, Hero, Record (version strips, planted chart), Replay, Report, Scoreboard
+src/story.ts        the same events as the narrator's chapters and as the Hunt's runs
+src/components/     Gauge, Hero, GapField, Hunt, Record (version strips, planted chart), Replay, Report, Scoreboard,
+                    Search (/ or Ctrl+K), SectionNav (a long page's sticky contents)
 src/pages/          one file per page; every page but Home loads on first visit
 src/test/           fixtures and setup; *.test.ts(x) sit beside what they test
 ```

@@ -1,5 +1,5 @@
 // Folds the recorded event stream into what the replay screen draws, and lays it out as a timeline.
-import { useMemo, useRef } from "react";
+import { useMemo } from "react";
 import type { Branch, Changes, GfEvent } from "./types.ts";
 import { changesText } from "./ui.tsx";
 
@@ -52,13 +52,14 @@ export interface ReplayState {
   verdicts: Record<string, "survivor" | "pruned">;
   attributions: Record<string, Extract<GfEvent, { type: "attribution" }>>;
   cost: { setup_runs?: number } | null;
+  rounds: Extract<GfEvent, { type: "round" }>[];
   feed: FeedLine[];
   t0: number | null;
   t: number | null;
 }
 
 export function initialState(): ReplayState {
-  return { checkpoints: [], branches: {}, order: [], noise: {}, verdicts: {}, attributions: {}, cost: null, feed: [], t0: null, t: null };
+  return { checkpoints: [], branches: {}, order: [], noise: {}, verdicts: {}, attributions: {}, cost: null, rounds: [], feed: [], t0: null, t: null };
 }
 
 const knobText = (k: Changes | undefined) => changesText(k) || "the code as released";
@@ -95,7 +96,7 @@ export function reduce(s: ReplayState, ev: GfEvent): ReplayState {
       const b = ev.branch;
       if (b.id === undefined) break;
       const prev = s.branches[b.id];
-      next.branches = { ...s.branches, [b.id]: { ...(prev || {}), ...b, round: roundOf(b.note || prev?.note) } };
+      next.branches = { ...s.branches, [b.id]: { ...prev, ...b, round: roundOf(b.note || prev?.note) } };
       if (!prev) next.order = [...s.order, b.id];
       break;
     }
@@ -105,6 +106,9 @@ export function reduce(s: ReplayState, ev: GfEvent): ReplayState {
     case "survivor":
     case "pruned":
       next.verdicts = { ...s.verdicts, [`${ev.knob}=${ev.value}`]: ev.type };
+      break;
+    case "round":
+      next.rounds = [...s.rounds, ev];
       break;
     case "attribution":
       next.attributions = { ...s.attributions, [ev.claim]: ev };
@@ -129,29 +133,31 @@ export function foldTo(events: GfEvent[], pos: number): ReplayState {
 
 const SNAP = 64; // a folded state is kept every SNAP events, so dragging back never refolds more than SNAP
 
-interface FoldCache { events: GfEvent[]; snaps: Map<number, ReplayState>; pos: number; state: ReplayState }
+interface FoldCache { snaps: Map<number, ReplayState>; pos: number; state: ReplayState }
+// one cache per event stream, dropped with the stream; a cache only ever holds states foldTo would give
+const caches = new WeakMap<GfEvent[], FoldCache>();
 
-// The state after the first `pos` events: folded forward from where it was, or from the nearest kept state behind.
-// Equal to foldTo(events, pos), which the tests check.
+// The state after the first `pos` events: folded forward from where the last call left off, or from the nearest kept
+// state behind. Equal to foldTo(events, pos), which the tests check.
+export function foldCached(events: GfEvent[], pos: number): ReplayState {
+  let c = caches.get(events);
+  if (!c) caches.set(events, (c = { snaps: new Map([[0, initialState()]]), pos: 0, state: initialState() }));
+  let from = c.pos, s = c.state;
+  if (pos < from) {
+    from = Math.floor(pos / SNAP) * SNAP;
+    while (!c.snaps.has(from)) from -= SNAP;
+    s = c.snaps.get(from) as ReplayState;
+  }
+  for (let i = from; i < pos; i++) {
+    s = reduce(s, events[i]);
+    if ((i + 1) % SNAP === 0) c.snaps.set(i + 1, s);
+  }
+  c.pos = pos; c.state = s;
+  return s;
+}
+
 export function useFold(events: GfEvent[] | null, pos: number): ReplayState {
-  const cache = useRef<FoldCache | null>(null);
-  return useMemo(() => {
-    if (!events) return initialState();
-    let c = cache.current;
-    if (!c || c.events !== events) c = cache.current = { events, snaps: new Map([[0, initialState()]]), pos: 0, state: initialState() };
-    let from = c.pos, s = c.state;
-    if (pos < from) {
-      from = Math.floor(pos / SNAP) * SNAP;
-      while (!c.snaps.has(from)) from -= SNAP;
-      s = c.snaps.get(from) as ReplayState;
-    }
-    for (let i = from; i < pos; i++) {
-      s = reduce(s, events[i]);
-      if ((i + 1) % SNAP === 0) c.snaps.set(i + 1, s);
-    }
-    c.pos = pos; c.state = s;
-    return s;
-  }, [events, pos]);
+  return useMemo(() => (events ? foldCached(events, pos) : initialState()), [events, pos]);
 }
 
 // Status colour for a branch chip, using screen verdicts for single-knob branches.

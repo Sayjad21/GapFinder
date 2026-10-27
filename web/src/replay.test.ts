@@ -29,7 +29,7 @@ describe("folding the events", () => {
   });
   it("gives the same state seeking back and forth as folding from the start", () => {
     const { result, rerender } = renderHook(({ pos }) => useFold(EVENTS, pos), { initialProps: { pos: 0 } });
-    for (const pos of [20, 5, 27, 1, 13, 13, 0, 26]) {
+    for (const pos of [20, 5, 28, 1, 13, 13, 0, 26]) {
       rerender({ pos });
       expect(result.current).toEqual(foldTo(EVENTS, pos));
     }

@@ -58,13 +58,14 @@ function PlantedGroups({ rows }: { rows: PlantedCase[] }) {
   ))}</>;
 }
 
+const benchDetail = (ps: GapBenchCase[]) => {
+  const found = ps.filter((p) => p.outcome === "correct").length;
+  return [found && `${found} found the cause`, ps.length - found && `${ps.length - found} correctly abstained`].filter(Boolean).join(", ");
+};
+
 function GapBenchGroups({ rows }: { rows: GapBenchCase[] }) {
-  const detail = (ps: GapBenchCase[]) => {
-    const found = ps.filter((p) => p.outcome === "correct").length;
-    return [found && `${found} found the cause`, ps.length - found && `${ps.length - found} correctly abstained`].filter(Boolean).join(", ");
-  };
   return <>{groupBy(rows, (p) => p.category).map(([cat, ps], i) => (
-    <Group key={cat} title={GAPBENCH_WORDS[cat] || cat} count={`${ps.length} solved`} open={i === 0} detail={detail(ps)}>
+    <Group key={cat} title={GAPBENCH_WORDS[cat] || cat} count={`${ps.length} solved`} open={i === 0} detail={benchDetail(ps)}>
       <table>
         <thead><tr><th scope="col">Task</th><th scope="col">Outcome</th><th scope="col">What GapFinder found</th></tr></thead>
         <tbody>
@@ -89,7 +90,7 @@ export default function Synthetic({ query, navigate }: { query: URLSearchParams;
   const planted = useMemo(() => (data?.planted || []).filter((p) => !fam || p.family === fam), [data, fam]);
   const head = (
     <section className="hero page-head">
-      <h1>Synthetic cases</h1>
+      <h1>Cases with known answers</h1>
       <p className="lede">Gaps with known answers: changes <Term k="planted">planted</Term> into papers whose code reproduces, and
         the <Term k="gapbench">GapBench</Term> tasks. These are the ones it got right; the evidence page has the full rates, misses included.</p>
     </section>

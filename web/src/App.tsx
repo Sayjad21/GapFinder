@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
+import Search from "./components/Search.tsx";
 import { href, parseHash } from "./nav.ts";
 import { Loading, ThemeToggle } from "./ui.tsx";
 import Home from "./pages/Home.tsx";
@@ -11,7 +12,7 @@ const RunPage = lazy(() => import("./pages/RunPage.tsx"));
 const How = lazy(() => import("./pages/How.tsx"));
 const Evidence = lazy(() => import("./pages/Evidence.tsx"));
 
-const NAV: [string, string][] = [["/cases", "Cases"], ["/synthetic", "Synthetic"], ["/evidence", "Evidence"], ["/how", "How it works"]];
+const NAV: [string, string][] = [["/cases", "Cases"], ["/synthetic", "Known answers"], ["/evidence", "Evidence"], ["/how", "How it works"]];
 
 function Wordmark() {
   return (
@@ -25,6 +26,8 @@ function Wordmark() {
     </a>
   );
 }
+
+const navigate = (path: string, q: Record<string, string>) => { window.location.hash = href(path, q).slice(1); };
 
 function NotFound() {
   return <div className="shell"><h1 className="not-found">Nothing here</h1><p>That page doesn’t exist. <a href="#/">Go to the start</a>.</p></div>;
@@ -46,8 +49,7 @@ export default function App() {
     // move focus to the new page’s heading, so a screen reader announces it
     const h = mainRef.current?.querySelector("h1");
     if (h) { h.setAttribute("tabindex", "-1"); h.focus({ preventScroll: true }); }
-  }, [key]);
-  const navigate = (path: string, q: Record<string, string>) => { window.location.hash = href(path, q).slice(1); };
+  }, [key]); // oxlint-disable-line react/exhaustive-effect-dependencies -- once per route change
   const [top, a, b] = route.parts;
   const section = `/${top || ""}`;
 
@@ -71,6 +73,7 @@ export default function App() {
           <nav className="mainnav" aria-label="Main">
             {NAV.map(([p, t]) => <a key={p} href={`#${p}`} aria-current={current(p) ? "page" : undefined}>{t}</a>)}
           </nav>
+          <Search />
           <ThemeToggle />
         </div>
       </header>

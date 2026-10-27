@@ -78,7 +78,7 @@ export const RUN: Run = {
   },
 };
 
-// noise (5 runs), a screen of 4 settings, two confirming repeats, the verdict: 27 events, two seconds apart
+// noise (5 runs), a screen of 4 settings with its summary, two confirming repeats, the verdict: 28 events, two seconds apart
 export const EVENTS: GfEvent[] = (() => {
   const out: GfEvent[] = [];
   let seq = 0, t = 1793015271;
@@ -94,6 +94,7 @@ export const EVENTS: GfEvent[] = (() => {
     .forEach(([k, v, acc], i) => run(`B000${6 + i}`, "screen", { [k as string]: v as string }, acc as number));
   push({ type: "survivor", knob: "learning_rate", value: "0.001", units: 3.1 });
   push({ type: "pruned", knob: "learning_rate", value: "0.1", units: -0.4 });
+  push({ type: "round", name: "screen", claim: "C_cora", tested: 4, survivors: 1 });
   run("B0010", "confirm", { learning_rate: "0.001" }, 0.818);
   run("B0011", "confirm", { learning_rate: "0.001" }, 0.817);
   push({ type: "attribution", claim: "C_cora", status: "searched", label: "Explained", changes: { learning_rate: "0.001" }, gap_before: -0.028, gap_after: -0.0006 });

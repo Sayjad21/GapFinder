@@ -1,5 +1,6 @@
 import { useState } from "react";
 import Gauge from "../components/Gauge.tsx";
+import SectionNav from "../components/SectionNav.tsx";
 import Replay from "../components/Replay.tsx";
 import Report from "../components/Report.tsx";
 import { useRun, useShowcase } from "../data.ts";
@@ -20,6 +21,9 @@ function Answer({ v, g }: { v: string; g: GaugeData | null }) {
     </dl>
   );
 }
+
+const SECTIONS: [string, string][] = [["sec-gap", "The gap"], ["sec-versions", "Across versions"], ["sec-investigation", "The investigation"],
+  ["sec-report", "The report"]];
 
 const GAUGE_STATES: ["before" | "after", string][] = [["before", "As released"], ["after", "After GapFinder’s change"]];
 
@@ -55,8 +59,9 @@ export default function Case({ slug, query }: { slug: string; query: URLSearchPa
           <span>Showing engine <Term k="version">version</Term> {vName(v)}{status ? ` (${status})` : ""}</span>
         </div>
       </header>
+      <SectionNav items={SECTIONS} />
 
-      <section className="document" aria-labelledby="gap-title">
+      <section className="document" id="sec-gap" aria-labelledby="gap-title">
         <h2 id="gap-title">The gap</h2>
         <div className="two">
           <div>
@@ -79,7 +84,7 @@ export default function Case({ slug, query }: { slug: string; query: URLSearchPa
         </div>
       </section>
 
-      <section className="document" aria-labelledby="versions-title">
+      <section className="document" id="sec-versions" aria-labelledby="versions-title">
         <h2 id="versions-title">Across versions</h2>
         <ol className="timeline">
           {versions.map((x) => (
@@ -94,11 +99,11 @@ export default function Case({ slug, query }: { slug: string; query: URLSearchPa
         </ol>
       </section>
 
-      <section className="document" aria-labelledby="inv-title">
+      <section className="document" id="sec-investigation" aria-labelledby="inv-title">
         <h2 id="inv-title">The investigation</h2>
         {run ? <Replay run={run} key={run.id} /> : <Loading what="Loading the recorded run…" />}
       </section>
-      <section className="document" aria-label="The full report">
+      <section className="document" id="sec-report" aria-label="The full report">
         {run ? <Report run={run} /> : <Loading what="Loading the report…" />}
       </section>
       <p className="notice spaced"><Term k="posthoc">Post-hoc</Term> rerun. The cause is documented, and the engine’s fixes since

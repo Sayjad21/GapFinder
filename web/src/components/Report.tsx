@@ -3,7 +3,7 @@ import { api, pct, LABEL_CLASS } from "../api.ts";
 import type { Belief as BeliefT, Changes, Claim, Effect as EffectT, Experiment as ExperimentT, Measured as MeasuredT, PaperClaim,
   Provenance as ProvenanceT, Report as ReportT, Run, Unknown as UnknownT } from "../types.ts";
 import { changeText, changesText, prettyKnob } from "../ui.tsx";
-import { PlainLabel, WithCode, claimName, plain } from "../words.tsx";
+import { PlainLabel, Term, WithCode, claimName, plain } from "../words.tsx";
 
 // The Gap Report, readable at three depths: the claims at a glance; each claim's verdict, cause and gap; and, one click
 // further, the five questions a reviewer asks, each with a one-line answer on its heading.
@@ -145,7 +145,7 @@ const isName = (s: string) => !/\s/.test(s);
 
 function unknownGist(u: UnknownT | null | undefined): string {
   if (!u) return NR;
-  const parts = [u.unmapped.length && plural(u.unmapped.length, "difference the harness can’t set", "differences the harness can’t set"),
+  const parts = [u.unmapped.length && plural(u.unmapped.length, "difference it couldn’t test", "differences it couldn’t test"),
     u.leads.length && plural(u.leads.length, "unconfirmed lead", "unconfirmed leads"),
     u.untestable.length && `${u.untestable.length} untestable within the budget`];
   return parts.filter(Boolean).join(", ") || "nothing left open";
@@ -162,7 +162,7 @@ function Unknown({ u }: { u: UnknownT | null | undefined }) {
         <ul>{sentences.map((s) => <li key={s}><WithCode text={s} /></li>)}</ul>
       </>}
       {names.length > 0 && <>
-        <p className="sub-head">Settings the paper names that this harness can’t change</p>
+        <p className="sub-head">Settings the paper names that this run couldn’t change (they aren’t in the <Term k="harness">harness</Term>)</p>
         <p className="chips-text">{names.map((k) => <code key={k}>{k}</code>)}</p>
       </>}
       {leads.length > 0 && <>
@@ -219,12 +219,13 @@ const KIND_TEXT: Record<string, string> = {
   insufficient: "not enough measurements",
 };
 
+const worst = (r: { I?: Record<string, number> }) => Math.max(...Object.values(r.I || {}));
+
 function Diagnosis({ c }: { c: Claim }) {
   const d = c.diagnosis;
   const eq = (c.equivalent || []).filter((e): e is { config: Changes } => Boolean(e && e.config));
   if (!d && eq.length < 2) return null;
   const tid = c.target.claim_id;
-  const worst = (r: { I?: Record<string, number> }) => Math.max(...Object.values(r.I || {}));
   const fits = ((d?.per_claim || {})[tid] || []).filter((r) => Object.keys(r.config || {}).length);
   const oos = (d?.kind || "").startsWith("out_of_space");
   const islands = (d?.islands || []).filter((i) => i.length);
@@ -238,7 +239,7 @@ function Diagnosis({ c }: { c: Claim }) {
         <ul>{eq.map((e, i) => <li key={i}><code>{knobs(e.config)}</code>{i === 0 && " (reported)"}</li>)}</ul>
       </>}
       {d && <>
-        <p className="sub-head">History matching: {KIND_TEXT[d.kind] || d.kind}</p>
+        <p className="sub-head">Fitting every number at once: {KIND_TEXT[d.kind] || d.kind}</p>
         <p><WithCode text={d.text} /></p>
         {oos && fits.length > 1 && <p className="small">Fit to this number alone (worst claim’s implausibility; lowest is least
           inconsistent): {fits.slice().sort((a, b) => worst(a) - worst(b)).slice(0, 6).map((r, i) =>

@@ -50,12 +50,13 @@ export default function Gauge({ g, show = "after", playKey = 0, label, compact =
   const hasAfter = Boolean(g && g.after !== null && g.after !== undefined);
   const target = hasAfter && show === "after" ? 1 : 0;
   const reduced = prefersReducedMotion();
-  const [p, setP] = useState(target);
+  const [anim, setP] = useState(target);
+  const p = reduced ? target : anim; // under reduced motion the jaw is simply where it belongs
   const from = useRef(p);
   // `playKey` replays the move from the start: a toggle pressed again shows it again
   const lastKey = useRef(playKey);
   useEffect(() => {
-    if (reduced) { setP(target); from.current = target; return undefined; }
+    if (reduced) { from.current = target; return undefined; }
     let raf = 0;
     const start = performance.now();
     const replay = lastKey.current !== playKey && target === 1;
@@ -71,7 +72,7 @@ export default function Gauge({ g, show = "after", playKey = 0, label, compact =
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [target, playKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [target, playKey, reduced]); // oxlint-disable-line react/exhaustive-effect-dependencies -- moves only when the target or the replay key changes
 
   if (!g) return null;
   const after = hasAfter ? (g.after as number) : null;

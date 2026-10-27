@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import HeroInstrument from "../components/Hero.tsx";
-import { PlantedChart, VersionStrips } from "../components/Record.tsx";
+import GapField from "../components/GapField.tsx";
+import { PlantedChart } from "../components/Record.tsx";
 import Replay from "../components/Replay.tsx";
 import { useRun, useShowcase } from "../data.ts";
 import { href } from "../nav.ts";
@@ -100,14 +101,15 @@ export default function Home() {
       <section className="section" aria-labelledby="record-title">
         <header>
           <h2 id="record-title">Sixteen earlier papers, misses included</h2>
-          <p>Each square is one paper with a documented cause, re-run on each <Term k="version">version</Term> of the engine. The fixes
-            since {vName(data.real_versions?.[0] || "c5")} were found on these same papers, so the rows are <Term k="posthoc">post-hoc</Term>:
-            they show what the engine does now, not what it would do on a paper it has never seen.</p>
+          <p>Every paper with a documented cause, its gap drawn from the paper’s number, then closed by what each <Term k="version">version</Term> of
+            the engine found. The fixes since {vName(data.real_versions?.[0] || "c5")} were found on these same papers, so this is <Term k="posthoc">post-hoc</Term>:
+            it shows what the engine does now, not what it would do on a paper it has never seen.</p>
         </header>
-        <VersionStrips data={data} />
+        <GapField data={data} />
         <p className="small after-chart">
           On {vName(cur)}, the current version and the one every paper was re-run on: {tally.found || 0} found, {tally.partial || 0} partly
-          found, {tally.no_gap || 0} correctly reported no gap, and {tally.missed || 0} missed. <a href={href("/cases")}>Read every case</a>.
+          found, {tally.no_gap || 0} correctly reported no gap, and {tally.missed || 0} missed. <a href={href("/cases")}>Read every case</a>, or
+          see <a href={href("/evidence")}>each version paper by paper</a>.
         </p>
       </section>
 
