@@ -1,0 +1,451 @@
+{
+  "paper": "test-v12-07",
+  "artifact": "rlbench",
+  "generated": "2026-10-16 01:59",
+  "partial": false,
+  "runs": 13,
+  "setup_runs": 0,
+  "cost": {
+    "sandbox_usd": 0.0,
+    "sandbox_runs": 13,
+    "setup_runs": 0,
+    "tokens": {},
+    "total_usd": 0.0,
+    "cap_usd": null
+  },
+  "naive": {
+    "mean_reward": 176.06,
+    "min_reward": 50.5
+  },
+  "noise": {
+    "mean_reward": {
+      "metric": "mean_reward",
+      "n": 5,
+      "median": 176.06,
+      "band": 4.189999999999998,
+      "cv": 0.045835820439795186
+    },
+    "min_reward": {
+      "metric": "min_reward",
+      "n": 5,
+      "median": 50.5,
+      "band": 45.80000000000001,
+      "cv": 0.7382854538381785
+    }
+  },
+  "unmapped_assumptions": [
+    "CartPole physics constants (g, mc, mp, l, f, dt)",
+    "Discretization bounds (theta: -0.21 to 0.21, omega: -2.0 to 2.0)",
+    "Episode termination thresholds (x>2.4, th>12*pi/180)",
+    "Initial state distribution (uniform -0.05 to 0.05 for all 4 vars)",
+    "max_steps",
+    "Force magnitude (f)",
+    "Seed base (RL_SEED_BASE / RUN_TAG)",
+    "CartPole mass cart (mc)",
+    "CartPole mass pole (mp)",
+    "CartPole length (l)",
+    "CartPole timestep (dt)",
+    "CartPole gravity (g)",
+    "RUN_TAG",
+    "RL_SEED_BASE",
+    "Q-table default for unseen states during evaluation",
+    "Output rounding precision",
+    "Python random module implementation"
+  ],
+  "untestable": [],
+  "closest_overall": [
+    {
+      "changes": {
+        "lr_schedule": "inv"
+      },
+      "runs": 4,
+      "gaps": {
+        "C1": 0.28464305618888386,
+        "C2": -0.5930293501048218
+      },
+      "mean_abs_gap": 0.43883620314685284
+    },
+    {
+      "changes": {
+        "lr_schedule": "linear"
+      },
+      "runs": 4,
+      "gaps": {
+        "C1": 0.7062370167705324,
+        "C2": 0.4874213836477987
+      },
+      "mean_abs_gap": 0.5968292002091655
+    },
+    {
+      "changes": {},
+      "runs": 5,
+      "gaps": {
+        "C1": 0.7840603941835131,
+        "C2": -0.4706498951781971
+      },
+      "mean_abs_gap": 0.6273551446808552
+    }
+  ],
+  "triaged_failures": [],
+  "setup_check": null,
+  "effect_threshold": 1.0,
+  "provenance": {
+    "gapfinder": {
+      "commit": "ac9cc82263ea2a8d609167080c75e6a79b5dd162",
+      "dirty": true
+    },
+    "models": {
+      "ultra": "nvidia/Nemotron-3-Ultra-550b-a55b",
+      "super": "nvidia/nemotron-3-super-120b-a12b",
+      "nano": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+      "omni": "nvidia/Nemotron-3-Nano-Omni"
+    },
+    "prompt_sha256": {
+      "CLAIM_PROMPT": "79757ce60aaaf5377dde8465230665347bfca143f0f05b752c9efa3b5bde5e34",
+      "FILTER_PROMPT": "439a83d5b510aa71fcfc50c1fdf62816af0a26cce0a8403ac89618d16cabbe32",
+      "ASSUMPTION_PROMPT": "85630aca4795a387ca8bb3c6e51dab78b3cd5c5276c9157843d84ef0128d019b",
+      "TRIAGE_PROMPT": "26293319ecd0ace0815fb8293cf05b4cbb11142f0c2e3e05e580faa74e1e9d5e",
+      "MISSING_SENTENCE_PROMPT": "b935383290f13c0a18521b2e0db1b556e66f5e5e61de1318671d8ad09dcb72e0"
+    },
+    "harness_spec_sha256": "f01046dd2f29515a730f43fce26caac555dcb0d94d0216bdeffa04fc793fd571",
+    "cost": {
+      "nemotron_billed_usd": 0,
+      "sandbox_reported_usd": 0.0,
+      "total_usd": 0.0,
+      "scope": "this search; ledger extraction is included only if it shared the search's router"
+    }
+  },
+  "claims": [
+    {
+      "status": "searched",
+      "gap_before": 0.7840603941835131,
+      "band": 0.042458327000050644,
+      "changes": {
+        "lr_schedule": "inv"
+      },
+      "gap_after": 0.28464305618888386,
+      "held_out": {
+        "C2": {
+          "gap_before": -0.4706498951781971,
+          "gap_after": -0.5930293501048218,
+          "ok": true
+        }
+      },
+      "counterfactual": {
+        "lr_schedule": {
+          "gap_without": 0.7840603941835131,
+          "ok": true
+        }
+      },
+      "screen": [
+        {
+          "knob": "lr_schedule",
+          "value": "linear",
+          "assumption": "A9",
+          "units": 1.99,
+          "gap": 0.6997517353194508
+        },
+        {
+          "knob": "lr_schedule",
+          "value": "inv",
+          "assumption": "A9",
+          "units": 14.99,
+          "gap": 0.1477428180574555
+        }
+      ],
+      "hypotheses_tested": 2,
+      "replay": [
+        {
+          "parent_checkpoint": "da479e31-2944-4698-ab40-4cfacce11ab5",
+          "result_checkpoint": "e58ea3e4-1c68-4ee5-8eb3-fb9656cf966c",
+          "command": "\"${PYTHON:-python3}\" cartpole_q.py --episodes 400 --gamma 0.99 --lr 0.1 --lr_schedule inv --eps_start 1.0 --eps_end 0.05 --eps_decay 0.99 --theta_bins 6 --omega_bins 6 --reward_norm off --init_q 0.0 --seeds 10 --eval_episodes 20 --out out/result.json",
+          "env": {
+            "RUN_TAG": "06f0bef9b05c"
+          },
+          "run_tag": "06f0bef9b05c"
+        },
+        {
+          "parent_checkpoint": "da479e31-2944-4698-ab40-4cfacce11ab5",
+          "result_checkpoint": "94a71f39-829a-405c-8489-ffdee0d50fc7",
+          "command": "\"${PYTHON:-python3}\" cartpole_q.py --episodes 400 --gamma 0.99 --lr 0.1 --lr_schedule inv --eps_start 1.0 --eps_end 0.05 --eps_decay 0.99 --theta_bins 6 --omega_bins 6 --reward_norm off --init_q 0.0 --seeds 10 --eval_episodes 20 --out out/result.json",
+          "env": {
+            "RUN_TAG": "b594c1b06606"
+          },
+          "run_tag": "b594c1b06606"
+        },
+        {
+          "parent_checkpoint": "da479e31-2944-4698-ab40-4cfacce11ab5",
+          "result_checkpoint": "cf1f3f5e-ae12-481f-84d6-61c528264590",
+          "command": "\"${PYTHON:-python3}\" cartpole_q.py --episodes 400 --gamma 0.99 --lr 0.1 --lr_schedule inv --eps_start 1.0 --eps_end 0.05 --eps_decay 0.99 --theta_bins 6 --omega_bins 6 --reward_norm off --init_q 0.0 --seeds 10 --eval_episodes 20 --out out/result.json",
+          "env": {
+            "RUN_TAG": "f66556f79e25"
+          },
+          "run_tag": "f66556f79e25"
+        },
+        {
+          "parent_checkpoint": "da479e31-2944-4698-ab40-4cfacce11ab5",
+          "result_checkpoint": "3b997368-ca4e-49db-aa3e-64db329626a8",
+          "command": "\"${PYTHON:-python3}\" cartpole_q.py --episodes 400 --gamma 0.99 --lr 0.1 --lr_schedule inv --eps_start 1.0 --eps_end 0.05 --eps_decay 0.99 --theta_bins 6 --omega_bins 6 --reward_norm off --init_q 0.0 --seeds 10 --eval_episodes 20 --out out/result.json",
+          "env": {
+            "RUN_TAG": "4e463a3b1d58"
+          },
+          "run_tag": "4e463a3b1d58"
+        }
+      ],
+      "notes": [],
+      "value_sets": {
+        "lr_schedule": [
+          "inv"
+        ]
+      },
+      "diagnosis": {
+        "kind": "out_of_space_likely",
+        "text": "out-of-space likely: no tested configuration comes within 3 sigma of C1, among 2 tested",
+        "joint": [],
+        "islands": [],
+        "per_claim": {
+          "C1": [],
+          "C2": [
+            {
+              "config": {},
+              "I": {
+                "C1": 10.92,
+                "C2": 0.92
+              }
+            },
+            {
+              "config": {
+                "lr_schedule": "linear"
+              },
+              "I": {
+                "C1": 9.56,
+                "C2": 1.02
+              }
+            },
+            {
+              "config": {
+                "lr_schedule": "inv"
+              },
+              "I": {
+                "C1": 3.53,
+                "C2": 1.6
+              }
+            }
+          ]
+        },
+        "params": {
+          "paper_n": 4.5,
+          "disc": 0.05,
+          "cutoff": 3.0
+        },
+        "leads": []
+      },
+      "closes": false,
+      "equivalent": [
+        {
+          "config": {
+            "lr_schedule": "inv"
+          },
+          "loglik": -4.895
+        }
+      ],
+      "target": {
+        "claim_id": "C1",
+        "metric": "mean_reward",
+        "paper_value": 98.685,
+        "held_out": false,
+        "figure": null
+      },
+      "attribution": {
+        "claim_id": "C1",
+        "assumption_set": [
+          "A9:lr_schedule=inv"
+        ],
+        "gap_before": 0.7840603941835131,
+        "gap_after": 0.28464305618888386,
+        "noise_band": 0.042458327000050644,
+        "held_out_result": "C2: ok",
+        "counterfactual_ok": true,
+        "hypotheses_tested": 2,
+        "checkpoint_ids": [
+          "e58ea3e4-1c68-4ee5-8eb3-fb9656cf966c",
+          "94a71f39-829a-405c-8489-ffdee0d50fc7",
+          "cf1f3f5e-ae12-481f-84d6-61c528264590",
+          "3b997368-ca4e-49db-aa3e-64db329626a8"
+        ],
+        "confidence_label": "Fits but unsupported"
+      },
+      "plausibility": {
+        "lr_schedule": {
+          "supported": false,
+          "reason": "no evidence mentions 'inv'; it fits, but nothing says the authors used it",
+          "partial": false
+        }
+      },
+      "paper_claim": {
+        "quote": "Figure 1 (final evaluation): mean reward 98.7; worst seed 95.4.",
+        "page": 1,
+        "figure": "Figure 1",
+        "unit": "steps",
+        "headline": true,
+        "metric": "mean_reward",
+        "paper_value": 98.685,
+        "recorded": true
+      },
+      "measured": {
+        "metric": "mean_reward",
+        "median": 176.06,
+        "repeats": [
+          190.635,
+          168.185,
+          175.54,
+          176.06,
+          178.155
+        ],
+        "n": 5,
+        "min": 168.185,
+        "max": 190.635,
+        "band": 4.189999999999998,
+        "cv": 0.045835820439795186,
+        "gap": 0.7840603941835131,
+        "band_rel": 0.042458327000050644,
+        "status": "searched",
+        "setup_check": null
+      },
+      "experiment": {
+        "found": true,
+        "changes": {
+          "lr_schedule": "inv"
+        },
+        "config": [
+          {
+            "knob": "lr_schedule",
+            "naive": "const",
+            "candidate": "inv"
+          }
+        ],
+        "branches": [
+          {
+            "id": "B0007",
+            "run_tag": "06f0bef9b05c",
+            "result_checkpoint": "e58ea3e4-1c68-4ee5-8eb3-fb9656cf966c",
+            "value": 113.265
+          },
+          {
+            "id": "B0011",
+            "run_tag": "b594c1b06606",
+            "result_checkpoint": "94a71f39-829a-405c-8489-ffdee0d50fc7",
+            "value": 151.83
+          },
+          {
+            "id": "B0012",
+            "run_tag": "f66556f79e25",
+            "result_checkpoint": "cf1f3f5e-ae12-481f-84d6-61c528264590",
+            "value": 94.79
+          },
+          {
+            "id": "B0013",
+            "run_tag": "4e463a3b1d58",
+            "result_checkpoint": "3b997368-ca4e-49db-aa3e-64db329626a8",
+            "value": 140.285
+          }
+        ],
+        "command": "\"${PYTHON:-python3}\" cartpole_q.py --episodes 400 --gamma 0.99 --lr 0.1 --lr_schedule inv --eps_start 1.0 --eps_end 0.05 --eps_decay 0.99 --theta_bins 6 --omega_bins 6 --reward_norm off --init_q 0.0 --seeds 10 --eval_episodes 20 --out out/result.json",
+        "env": {
+          "RUN_TAG": "06f0bef9b05c"
+        },
+        "parent_checkpoint": "da479e31-2944-4698-ab40-4cfacce11ab5",
+        "result_checkpoint": "e58ea3e4-1c68-4ee5-8eb3-fb9656cf966c",
+        "repeats": 4,
+        "metric": "mean_reward",
+        "gap_after": 0.28464305618888386
+      },
+      "belief": {
+        "checks": [
+          {
+            "kind": "reversal",
+            "ok": true,
+            "text": "without `lr_schedule` the gap is +78.4% (it comes back)"
+          },
+          {
+            "kind": "held_out",
+            "ok": true,
+            "text": "C2: -47.1% to -59.3% (not worse beyond noise)"
+          },
+          {
+            "kind": "evidence",
+            "ok": false,
+            "text": "`lr_schedule=inv`: no evidence mentions 'inv'; it fits, but nothing says the authors used it"
+          },
+          {
+            "kind": "effect",
+            "ok": true,
+            "text": "candidate minus naive is -49.28 with a 95% bootstrap interval that excludes 0"
+          }
+        ],
+        "note": null
+      },
+      "unknown": {
+        "untestable": [],
+        "unmapped": [
+          "CartPole physics constants (g, mc, mp, l, f, dt)",
+          "Discretization bounds (theta: -0.21 to 0.21, omega: -2.0 to 2.0)",
+          "Episode termination thresholds (x>2.4, th>12*pi/180)",
+          "Initial state distribution (uniform -0.05 to 0.05 for all 4 vars)",
+          "max_steps",
+          "Force magnitude (f)",
+          "Seed base (RL_SEED_BASE / RUN_TAG)",
+          "CartPole mass cart (mc)",
+          "CartPole mass pole (mp)",
+          "CartPole length (l)",
+          "CartPole timestep (dt)",
+          "CartPole gravity (g)",
+          "RUN_TAG",
+          "RL_SEED_BASE",
+          "Q-table default for unseen states during evaluation",
+          "Output rounding precision",
+          "Python random module implementation"
+        ],
+        "setup": null,
+        "leads": [
+          {
+            "knob": "lr_schedule",
+            "value": "linear",
+            "units": 1.99,
+            "gap": 0.6997517353194508
+          }
+        ],
+        "alternatives": [
+          {
+            "changes": {
+              "lr_schedule": "linear"
+            },
+            "runs": 4,
+            "gap": 0.7062370167705324,
+            "mean_abs_gap": 0.5968292002091655
+          }
+        ]
+      },
+      "cause": {
+        "kind": "plausible_explanation",
+        "confirmed": false,
+        "text": "Plausible explanation (fits but unsupported): it fits the number, but nothing says the authors used it"
+      },
+      "effect": {
+        "metric": "mean_reward",
+        "naive": 176.06,
+        "candidate": 126.775,
+        "diff": -49.285,
+        "ci": [
+          -85.33799999999998,
+          -23.668333333333322
+        ],
+        "alpha": 0.05,
+        "n_naive": 5,
+        "n_candidate": 4,
+        "excludes_zero": true,
+        "diff_of_paper": -0.49941733799462934
+      }
+    }
+  ]
+}

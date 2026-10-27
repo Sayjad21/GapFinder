@@ -1,0 +1,83 @@
+name: pyg
+base: 3a358250-f2ee-4694-8872-aa858cac0734
+source: <scratch>/db2/pyg/repo
+run:
+  command: export OMP_NUM_THREADS=1 PYTHONWARNINGS=ignore PYTHONDONTWRITEBYTECODE=1; mkdir -p out; cd benchmark/citation; P="/work/benchmark${PYTHONPATH:+:$PYTHONPATH}"; F=""; if [ "{random_splits}" = 1 ]; then F="$F --random_splits"; fi; if [ "{no_normalize_features}" = 1 ]; then F="$F --no_normalize_features"; fi; GCN="--runs 100 --epochs {gcn_epochs} --lr {gcn_lr} --weight_decay {gcn_weight_decay}
+    --early_stopping {gcn_early_stopping} --hidden {gcn_hidden} --dropout {gcn_dropout}"; GAT="--runs 10 --epochs {gat_epochs} --lr {gat_lr} --weight_decay {gat_weight_decay} --early_stopping {gat_early_stopping} --hidden {gat_hidden} --dropout {gat_dropout} --heads {gat_heads} --output_heads {gat_output_heads}"; for d in Cora CiteSeer; do PYTHONPATH="$P" python gcn.py --dataset=$d $GCN $F > /work/out/gcn_$d.log
+    2>&1 & PYTHONPATH="$P" python gat.py --dataset=$d $GAT $F > /work/out/gat_$d.log 2>&1 & done; wait; cd /work; bash gf_harness/emit.sh
+  output: stdout
+  format: kv
+  timeout: 3500
+knobs:
+  random_splits:
+    layer: config
+    default: '0'
+    choices:
+    - '0'
+    - '1'
+  no_normalize_features:
+    layer: config
+    default: '0'
+    choices:
+    - '0'
+    - '1'
+  gcn_epochs:
+    layer: config
+    default: '200'
+    max: 1000
+  gcn_lr:
+    layer: config
+    default: '0.01'
+  gcn_weight_decay:
+    layer: config
+    default: '0.0005'
+  gcn_early_stopping:
+    layer: config
+    default: '10'
+  gcn_hidden:
+    layer: config
+    default: '16'
+    max: 64
+  gcn_dropout:
+    layer: config
+    default: '0.5'
+  gat_epochs:
+    layer: config
+    default: '1000'
+    max: 1500
+  gat_lr:
+    layer: config
+    default: '0.005'
+  gat_weight_decay:
+    layer: config
+    default: '0.0005'
+  gat_early_stopping:
+    layer: config
+    default: '100'
+  gat_hidden:
+    layer: config
+    default: '8'
+    max: 16
+  gat_dropout:
+    layer: config
+    default: '0.6'
+  gat_heads:
+    layer: config
+    default: '8'
+    max: 16
+  gat_output_heads:
+    layer: config
+    default: '1'
+    max: 8
+allowed_paths:
+- out/
+metrics:
+- gat_cora_acc
+- gat_citeseer_acc
+- gcn_cora_acc
+- gcn_citeseer_acc
+- gat_cora_std
+- gat_citeseer_std
+- gcn_cora_std
+- gcn_citeseer_std
+discrepancy: 0.05

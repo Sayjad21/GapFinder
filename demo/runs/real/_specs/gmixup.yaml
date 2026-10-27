@@ -1,0 +1,43 @@
+name: gmixup
+base: d6cea2d6-3592-4331-b6f4-0564404bd77d
+source: <scratch>/devbatch/gmixup/repo
+run:
+  command: export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1; mkdir -p out; S=$(( $(printf %s "$RUN_TAG" | cksum | cut -d" " -f1) % 100000 )); A="--lr {lr} --batch_size {batch_size} --num_hidden {num_hidden} --epoch {epoch} --aug_ratio {aug_ratio} --aug_num {aug_num} --ge USVT"; for k in 0; do s=$((S + 10000*k)); for ds in IMDB-BINARY IMDB-MULTI; do for gm in False True; do PYTHONPATH="/work/src${PYTHONPATH:+:$PYTHONPATH}"
+    python -u ./src/gmixup.py --data_path . --model GIN --dataset $ds --gmixup $gm --seed $s --log_screen True --lam_range "[{lam_lo},{lam_hi}]" $A > out/${ds}_${gm}_$k.log 2>&1 & done; done; wait; done; bash gf_harness/emit.sh
+  output: stdout
+  format: kv
+  timeout: 3500
+knobs:
+  epoch:
+    layer: config
+    default: '800'
+    max: 1600
+  batch_size:
+    layer: config
+    default: '128'
+  lr:
+    layer: config
+    default: '0.01'
+  num_hidden:
+    layer: config
+    default: '64'
+    max: 256
+  lam_lo:
+    layer: config
+    default: '0.005'
+  lam_hi:
+    layer: config
+    default: '0.01'
+  aug_ratio:
+    layer: config
+    default: '0.15'
+  aug_num:
+    layer: config
+    default: '10'
+allowed_paths:
+- out/
+metrics:
+- gin_imdbb_gmixup_acc
+- gin_imdbb_vanilla_acc
+- gin_imdbm_gmixup_acc
+- gin_imdbm_vanilla_acc

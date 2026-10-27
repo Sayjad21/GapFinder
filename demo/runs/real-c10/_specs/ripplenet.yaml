@@ -1,0 +1,55 @@
+name: b4a
+base: ac13dc48-a859-4a2f-adcc-acdc56bf4780
+source: C:/Users/Legion/AppData/Local/Temp/claude/c--Users-Legion-Downloads-nvidia-hackathon/e8c91548-6b05-48d1-bf91-8a391c52c901/scratchpad/b4/b4a/repo
+run:
+  command: cd /work; mkdir -p out; export TF_CPP_MIN_LOG_LEVEL=2 OMP_NUM_THREADS=1 TF_NUM_INTRAOP_THREADS=1 TF_NUM_INTEROP_THREADS=1; cd src; n=0; for r in 1 2 3 4 5; do python main.py --dataset book --dim {dim} --n_hop {n_hop} --kge_weight {kge_weight} --l2_weight {l2_weight} --lr {lr} --batch_size {batch_size} --n_epoch {n_epoch} --n_memory {n_memory} --item_update_mode {item_update_mode} > ../out/run$r.log
+    2>&1 & n=$((n+1)); if [ $((n % 4)) -eq 0 ]; then wait; fi; done; wait; cd ..; bash gf_harness/emit.sh
+  output: stdout
+  format: kv
+  timeout: 3300
+knobs:
+  dim:
+    layer: config
+    default: '4'
+    max: 64
+  n_hop:
+    layer: config
+    default: '2'
+    max: 4
+  kge_weight:
+    layer: config
+    default: '0.01'
+  l2_weight:
+    layer: config
+    default: 1e-7
+  lr:
+    layer: config
+    default: '0.02'
+  batch_size:
+    layer: config
+    default: '1024'
+  n_epoch:
+    layer: config
+    default: '10'
+    max: 50
+  n_memory:
+    layer: config
+    default: '32'
+    max: 128
+  item_update_mode:
+    layer: config
+    default: plus_transform
+    choices:
+    - replace
+    - plus
+    - replace_transform
+    - plus_transform
+allowed_paths:
+- out/
+metrics:
+- book_auc
+- book_acc
+- book_eval_auc
+- book_eval_acc
+- book_train_auc
+- book_runs

@@ -1,0 +1,58 @@
+name: harness
+base: 8ba556c0-fb7a-4264-8ca1-b371cead9a67
+source: <scratch>/b5/b5b/repo
+run:
+  command: mkdir -p out; rm -f out/run*.log; export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 TF_NUM_INTRAOP_THREADS=1 TF_NUM_INTEROP_THREADS=1; GF_SEED=$("${PYTHON:-python}" -c "import os, zlib; print(zlib.crc32(os.environ.get('RUN_TAG', 'x').encode('utf-8')) % 100000)"); n=0; for r in $(seq 1 10); do ("${PYTHON:-python}" sdcn.py --name acm --k {k} --lr {lr} --n_clusters {n_clusters}
+    --n_z {n_z}) > out/run$r.log 2>&1 & n=$((n+1)); if [ $((n % 4)) -eq 0 ]; then wait; fi; done; wait; "${PYTHON:-python}" gf_harness/emit.py
+  output: stdout
+  format: kv
+  timeout: 3300
+knobs:
+  k:
+    layer: config
+    default: '3'
+  lr:
+    layer: config
+    default: 1e-3
+  n_clusters:
+    layer: config
+    default: '3'
+  n_z:
+    layer: config
+    default: '10'
+allowed_paths:
+- out/
+metrics:
+- c_z_acc
+- c_z_nmi
+- c_z_ari
+- c_z_f1
+- c_q_acc
+- c_q_nmi
+- c_q_ari
+- c_q_f1
+- c_z_acc__0
+- c_z_acc__1
+- c_z_acc__2
+- c_z_nmi__0
+- c_z_nmi__1
+- c_z_nmi__2
+- c_z_ari__0
+- c_z_ari__1
+- c_z_ari__2
+- c_z_f1__0
+- c_z_f1__1
+- c_z_f1__2
+- c_q_acc__0
+- c_q_acc__1
+- c_q_acc__2
+- c_q_nmi__0
+- c_q_nmi__1
+- c_q_nmi__2
+- c_q_ari__0
+- c_q_ari__1
+- c_q_ari__2
+- c_q_f1__0
+- c_q_f1__1
+- c_q_f1__2
+- gf_runs

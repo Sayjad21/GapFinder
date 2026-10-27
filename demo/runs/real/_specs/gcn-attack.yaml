@@ -1,0 +1,43 @@
+name: harness
+base: dd76b337-f894-4e8e-92cd-a2fcab421114
+source: <scratch>/b5/b5a/repo
+run:
+  command: mkdir -p out; rm -f out/run*.log; GF_SEED=$("${PYTHON:-python}" -c "import os, zlib; print(zlib.crc32(os.environ.get('RUN_TAG', 'x').encode('utf-8')) % 100000)"); r=1; ("${PYTHON:-python}" attack.py --model_dir nat_cora --dataset cora --steps {steps} --learning_rate {learning_rate} --hidden1 {hidden1} --dropout {dropout} --early_stopping {early_stopping} --method {method} --perturb_ratio
+    {perturb_ratio} --weight_decay {weight_decay}) > out/run1.log 2>&1; "${PYTHON:-python}" gf_harness/emit.py
+  output: stdout
+  format: kv
+  timeout: 3300
+knobs:
+  steps:
+    layer: config
+    default: '100'
+    max: 5236
+  learning_rate:
+    layer: config
+    default: '0.001'
+  hidden1:
+    layer: config
+    default: '16'
+  dropout:
+    layer: config
+    default: '0.'
+  early_stopping:
+    layer: config
+    default: '10'
+  method:
+    layer: config
+    default: PGD
+  perturb_ratio:
+    layer: config
+    default: '0.05'
+  weight_decay:
+    layer: config
+    default: 5e-4
+allowed_paths:
+- out/
+metrics:
+- c_t3_5_acc
+- c_t3_5_acc__0
+- c_t3_5_acc__1
+- c_t3_5_acc__2
+- gf_runs
