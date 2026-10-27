@@ -76,6 +76,7 @@ REAL = {
 }
 VERSION_DIRS = {"c5": "real", "c7": "real-c7", "c8": "real-c8", "c9": "real-c9"}
 TALLY_VERSION = "c7"  # every paper was re-run on it; c8 and c9 re-ran a few
+PENDING = {"c10"}  # frozen, its fresh batch (seed 9) not yet scored
 RUN_DIR = {("c7", "bond"): "bond.cut2"}  # BOND on c7: three searches (48, 60, 80 runs); the 60-run one is shown
 
 # slug -> version -> (verdict, one line): our reading of each run against the documented cause
@@ -283,6 +284,17 @@ def gapbench() -> tuple[list[dict], dict]:
                  "by_category": s["by_category"]}
 
 
+def versions() -> dict:
+    """Each engine version's frozen date and standing, for the page to name: the current one (the tally's), an earlier
+    adopted one, one on trial (frozen, its fresh batch not yet scored), or one not adopted."""
+    out = {}
+    for v, frozen, adopted in sorted(VERSIONS.values(), key=lambda x: int(x[0][1:])):
+        status = ("current" if v == TALLY_VERSION else "on trial" if v in PENDING else "earlier" if adopted
+                  else "not adopted")
+        out[v] = {"frozen": frozen, "adopted": adopted, "status": status}
+    return out
+
+
 def main() -> None:
     r = real()
     p, totals = planted()
@@ -294,7 +306,7 @@ def main() -> None:
                  "development measurements. The only clean evidence is the sealed blind record (docs/CONTEXT_v11.md "
                  "5.1). Totals include every miss."),
         "verdict_words": VERDICT_WORDS, "real": r, "real_tally": dict(tally), "tally_version": TALLY_VERSION,
-        "real_versions": list(VERSION_DIRS), "blind": BLIND, "dev_suite": DEV_SUITE,
+        "real_versions": list(VERSION_DIRS), "versions": versions(), "blind": BLIND, "dev_suite": DEV_SUITE,
         "planted": p, "planted_totals": totals, "gapbench": g, "gapbench_totals": suite})
     print(f"real {len(r)} {dict(tally)}, planted {len(p)}, gapbench {len(g)}; demo/runs {size / 1e6:.1f} MB")
 

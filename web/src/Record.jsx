@@ -1,12 +1,13 @@
 import { useRef, useState, useEffect } from "react";
 import { Glyph, VERDICT, Verdict, useTooltip } from "./ui.jsx";
+import { vName, versionStatus } from "./words.jsx";
 
 const ORDER = ["found", "partial", "no_gap", "missed"];
 const GOOD = new Set(["found", "no_gap"]);
-const VERSION_NOTE = { c5: "adopted 2026-10-23", c7: "adopted 2026-10-27", c8: "withdrawn: dev suite", c9: "frozen 2026-10-27" };
 
 // Every real paper, one square each, per engine version: a part-to-whole that keeps each paper clickable.
-export function VersionStrips({ real, versions = ["c5", "c7"] }) {
+export function VersionStrips({ data }) {
+  const real = data.real, versions = data.real_versions || ["c5", "c7"];
   const tip = useTooltip();
   const [table, setTable] = useState(false);
   const rows = versions.map((v) => {
@@ -24,13 +25,13 @@ export function VersionStrips({ real, versions = ["c5", "c7"] }) {
         const good = cells.filter((c) => GOOD.has(c.r.verdict)).length;
         return (
           <div className="strip-row" key={v}>
-            <div className="ver">{v}<small>{[cells.length < n && `${cells.length} of ${n} papers`, VERSION_NOTE[v]].filter(Boolean).join(" · ")}</small></div>
-            <div className="strip" style={{ "--n": n }} role="list" aria-label={`${v}: one square per paper`}>
+            <div className="ver">{vName(v)}<small>{versionStatus(data, v)}</small>{cells.length < n && <small>{cells.length} of {n} papers</small>}</div>
+            <div className="strip" style={{ "--n": n }} role="list" aria-label={`${vName(v)}: one square per paper`}>
               {cells.map(({ p, r }) => (
-                <a key={p.slug} role="listitem" className={`cell ${r.verdict}`} href={`#/case/${p.slug}`}
+                <a key={p.slug} role="listitem" className={`cell ${r.verdict}`} href={`#/case/${p.slug}${v !== p.current ? `?v=${v}` : ""}`}
                    aria-label={`${p.title}: ${VERDICT[r.verdict]}`}
-                   onPointerEnter={(e) => tip.show(e, <><b>{p.title}</b>{VERDICT[r.verdict]} on {v}. {r.reading}</>)}
-                   onPointerLeave={tip.hide} onFocus={(e) => tip.show(e, <><b>{p.title}</b>{VERDICT[r.verdict]} on {v}.</>)} onBlur={tip.hide}>
+                   onPointerEnter={(e) => tip.show(e, <><b>{p.title}</b>{VERDICT[r.verdict]} on {vName(v)}. {r.reading}</>)}
+                   onPointerLeave={tip.hide} onFocus={(e) => tip.show(e, <><b>{p.title}</b>{VERDICT[r.verdict]} on {vName(v)}.</>)} onBlur={tip.hide}>
                   <Glyph v={r.verdict} />
                 </a>
               ))}
@@ -45,9 +46,9 @@ export function VersionStrips({ real, versions = ["c5", "c7"] }) {
           {table ? "Hide the table" : "Show as a table"}
         </button>
         {table && (
-          <div className="ledger-wrap" style={{ marginTop: 16 }}>
+          <div className="ledger-wrap spaced-s">
             <table>
-              <thead><tr><th scope="col">Paper</th>{rows.map(({ v }) => <th scope="col" key={v}>{v}</th>)}</tr></thead>
+              <thead><tr><th scope="col">Paper</th>{rows.map(({ v }) => <th scope="col" key={v}>{vName(v)}</th>)}</tr></thead>
               <tbody>
                 {real.map((p) => (
                   <tr key={p.slug}>
@@ -95,12 +96,12 @@ export function PlantedChart({ totals }) {
   return (
     <div className="chart" ref={ref}>
       <svg width={w} height={H} viewBox={`0 0 ${w} ${H}`} role="img"
-           aria-label={`Share of planted gaps found per version: ${byVer.map((b) => `${b.v} ${b.f} of ${b.g}`).join("; ")}`}>
+           aria-label={`Share of planted gaps found per version: ${byVer.map((b) => `${vName(b.v)} ${b.f} of ${b.g}`).join("; ")}`}>
         <g className="grid">
           {grid.map((s) => <line key={s} x1={left} x2={w - right} y1={y(s)} y2={y(s)} />)}
         </g>
         {grid.map((s) => <text key={s} className="axis-label" x={left - 8} y={y(s) + 4} textAnchor="end">{Math.round(s * 100)}%</text>)}
-        {versions.map((v) => <text key={v} className="axis-label" x={x(v)} y={H - 14} textAnchor="middle">{v}</text>)}
+        {versions.map((v) => <text key={v} className="axis-label" x={x(v)} y={H - 14} textAnchor="middle">{vName(v)}</text>)}
         {byVer.map((b) => b.s !== null && (
           <line key={`m${b.v}`} className="mean" x1={x(b.v) - 22} x2={x(b.v) + 22} y1={y(b.s)} y2={y(b.s)} />
         ))}
@@ -108,9 +109,9 @@ export function PlantedChart({ totals }) {
           <g key={`${p.version}-${p.seed}`}>
             <circle className={`dot${p.adopted ? "" : " rejected"}`} cx={x(p.version) + jitter(p)} cy={y(p.s)} r={5} />
             <circle className="hit" cx={x(p.version) + jitter(p)} cy={y(p.s)} r={14} tabIndex={0}
-                    aria-label={`${p.version}, seed ${p.seed}: ${p.found} of ${p.gaps} planted gaps found`}
-                    onPointerEnter={(e) => tip.show(e, <><b>{p.found} of {p.gaps}</b>planted gaps found by {p.version} on seed {p.seed}{p.confidently_wrong ? `; ${p.confidently_wrong} confidently wrong` : "; none confidently wrong"}{p.adopted ? "" : ". Not adopted."}</>)}
-                    onPointerLeave={tip.hide} onFocus={(e) => tip.show(e, <><b>{p.found} of {p.gaps}</b>{p.version}, seed {p.seed}</>)} onBlur={tip.hide} />
+                    aria-label={`${vName(p.version)}, fresh batch ${p.seed}: ${p.found} of ${p.gaps} planted gaps found`}
+                    onPointerEnter={(e) => tip.show(e, <><b>{p.found} of {p.gaps}</b>planted gaps found by {vName(p.version)} on fresh batch {p.seed}{p.confidently_wrong ? `; ${p.confidently_wrong} confidently wrong` : "; none confidently wrong"}{p.adopted ? "" : ". Not adopted."}</>)}
+                    onPointerLeave={tip.hide} onFocus={(e) => tip.show(e, <><b>{p.found} of {p.gaps}</b>{vName(p.version)}, fresh batch {p.seed}</>)} onBlur={tip.hide} />
           </g>
         ))}
       </svg>

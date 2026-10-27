@@ -7,6 +7,7 @@ import Replay from "./Replay.jsx";
 import Report from "./Report.jsx";
 import Scoreboard from "./Scoreboard.jsx";
 import { VERDICT, Verdict, changesText, num, prettyKnob, signedPct, useShowcase } from "./ui.jsx";
+import { GLOSSARY, PlainLabel, Term, currentVersion, vName, versionStatus } from "./words.jsx";
 
 export const href = (path, q = {}) => {
   const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v)).toString();
@@ -47,6 +48,7 @@ export function Home() {
   if (!data) return <div className="shell"><Loading error={error} /></div>;
   const cases = HERO_CASES.map((s) => data.real.find((r) => r.slug === s)).filter(Boolean);
   const tally = data.real_tally || {};
+  const cur = currentVersion(data);
   const p7 = data.planted_totals.filter((t) => t.adopted).sort((a, b) => b.seed - a.seed || +b.version.slice(1) - +a.version.slice(1))[0];
   const dev = [...data.dev_suite].reverse().find((d) => d.adopted !== false) || data.dev_suite[data.dev_suite.length - 1];
   return (
@@ -61,13 +63,14 @@ export function Home() {
       <section className="section" aria-labelledby="record-title">
         <header>
           <h2 id="record-title">Sixteen earlier papers, misses included</h2>
-          <p>Each square is one paper whose cause is documented, re-run on each version of the engine. The fixes since c5 were
-            found on these same papers, so the rows show what the engine does now, not what it would do on a paper it has never seen.</p>
+          <p>Each square is one paper with a documented cause, re-run on each <Term k="version">version</Term> of the engine. The fixes
+            since {vName(data.real_versions?.[0] || "c5")} were found on these same papers, so the rows are <Term k="posthoc">post-hoc</Term>:
+            they show what the engine does now, not what it would do on a paper it has never seen.</p>
         </header>
-        <VersionStrips real={data.real} versions={data.real_versions} />
-        <p className="small" style={{ marginTop: 16 }}>
-          On {data.tally_version || "the current version"}, the version every paper was re-run on: {tally.found || 0} found, {tally.partial || 0} partly found, {tally.no_gap || 0} correctly reported no gap,
-          and {tally.missed || 0} missed. <a href={href("/cases")}>Read every case</a>.
+        <VersionStrips data={data} />
+        <p className="small after-chart">
+          On {vName(cur)}, the current version and the one every paper was re-run on: {tally.found || 0} found, {tally.partial || 0} partly
+          found, {tally.no_gap || 0} correctly reported no gap, and {tally.missed || 0} missed. <a href={href("/cases")}>Read every case</a>.
         </p>
       </section>
 
@@ -79,27 +82,32 @@ export function Home() {
         <div className="facts">
           <div className="fact">
             <div className="figure">{data.blind.correct} <small>of {data.blind.papers}</small></div>
-            <p>sealed blind papers explained, all run before this work. {data.blind.partial} partly, {data.blind.missed} missed, {data.blind.confidently_wrong} confidently wrong.</p>
+            <p><Term k="sealed">sealed blind papers</Term> explained, all run before this work: {data.blind.partial} partly,
+              {" "}{data.blind.missed} missed, {data.blind.confidently_wrong} <Term k="confidently_wrong">confidently wrong</Term>.</p>
           </div>
           {p7 && (
             <div className="fact">
               <div className="figure">{p7.found} <small>of {p7.gaps}</small></div>
-              <p>fresh planted gaps found by {p7.version}, the adopted version, on seed {p7.seed}, with {p7.confidently_wrong} confidently wrong and {p7.controls_correct} of {p7.controls} controls left alone.</p>
+              <p><Term k="planted">planted gaps</Term> found by {vName(p7.version)}, the {versionStatus(data, p7.version) || "adopted"} version,
+                on <Term k="batch">fresh batch</Term> {p7.seed}: {p7.confidently_wrong} confidently wrong, and {p7.controls_correct} of
+                {" "}{p7.controls} <Term k="control">controls</Term> left alone.</p>
             </div>
           )}
           {dev && (
             <div className="fact">
               <div className="figure">{dev.correct} <small>of 138</small></div>
-              <p>dev-suite runs with a cause found by {dev.version}, the adopted version, pooled over two replicates, and every one of the 114 abstentions correct.</p>
+              <p>runs of the <Term k="dev_suite">dev suite</Term> with a cause found by {vName(dev.version)}, pooled over two replicates;
+                all 114 <Term k="abstain">abstentions</Term> correct.</p>
             </div>
           )}
         </div>
-        <div style={{ marginTop: 48 }}>
+        <div className="subsection">
           <h3>Planted gaps found by each version</h3>
-          <p className="muted" style={{ marginTop: 8 }}>Gaps planted into papers whose code reproduces, searched without the paper. Each dot is a fresh batch made after the version was frozen.</p>
+          <p className="muted">Gaps planted into papers whose code reproduces, searched without the paper. Each dot is a fresh batch
+            made after the version was frozen.</p>
           <PlantedChart totals={data.planted_totals} />
         </div>
-        <p style={{ marginTop: 24 }}><a href={href("/evidence")}>See all the measurements</a>, including the comparison with a general coding agent.</p>
+        <p className="after-chart"><a href={href("/evidence")}>See all the measurements</a>, including the comparison with a general coding agent.</p>
       </section>
     </div>
   );
@@ -114,17 +122,17 @@ export function Cases() {
   const rows = [...data.real].sort((a, b) => order[a.versions[a.current].verdict] - order[b.versions[b.current].verdict]);
   return (
     <div className="shell">
-      <section className="hero" style={{ paddingBottom: 0 }}>
+      <section className="hero page-head">
         <h1>Cases</h1>
         <p className="lede">Sixteen papers whose reproduction gap has a documented cause, each re-run on the engine’s later versions.</p>
-        <p className="notice">Post-hoc: these causes were known, and the engine’s fixes since c5 were found on these runs. Read them as a
-          demonstration of what the current engine does, not as evidence of how it does on new papers.</p>
+        <p className="notice"><Term k="posthoc">Post-hoc</Term>: these causes were known, and the engine’s fixes since {vName(versions[0])} were
+          found on these runs. Read them as a demonstration of what the current engine does, not as evidence of how it does on new papers.</p>
       </section>
-      <div className="ledger-wrap" style={{ marginTop: 32 }}>
+      <div className="ledger-wrap spaced">
         <table>
           <thead><tr>
-            <th scope="col">Paper</th><th scope="col">Documented cause</th><th scope="col">GapFinder now</th>
-            {versions.map((v) => <th scope="col" key={v}>{v}</th>)}
+            <th scope="col">Paper</th><th scope="col">Documented cause</th><th scope="col">What the current version ({vName(currentVersion(data))}) found</th>
+            {versions.map((v) => <th scope="col" key={v}><span title={versionStatus(data, v) || ""}>{vName(v)}</span></th>)}
           </tr></thead>
           <tbody>
             {rows.map((p) => {
@@ -133,7 +141,7 @@ export function Cases() {
                 <tr key={p.slug} className="link">
                   <td className="paper-cell"><a href={href(`/case/${p.slug}`)}>{p.title}</a><small>{p.venue}</small></td>
                   <td className="cause">{p.documented_cause}</td>
-                  <td style={{ maxWidth: "34ch" }}>{cur.reading}</td>
+                  <td className="reading">{cur.reading}</td>
                   {versions.map((v) => <td key={v}>{p.versions[v] ? <Verdict v={p.versions[v].verdict} short /> : <span className="muted">not run</span>}</td>)}
                 </tr>
               );
@@ -150,11 +158,11 @@ function Answer({ v, g }) {
   if (!g) return null;
   return (
     <dl className="facts-list">
-      <dt>Label</dt><dd>{g.label}</dd>
-      <dt>Change</dt><dd>{Object.keys(g.changes || {}).length ? <code>{changesText(g.changes)}</code> : "none"}</dd>
+      <dt>Verdict</dt><dd><PlainLabel label={g.label} formal /></dd>
+      <dt>Change</dt><dd>{Object.keys(g.changes || {}).length ? <code>{changesText(g.changes)}</code> : "no setting changed"}</dd>
       <dt>Gap</dt><dd className="num">{signedPct((g.code - g.paper) / Math.abs(g.paper))}{g.after != null ? ` to ${signedPct((g.after - g.paper) / Math.abs(g.paper))}` : ""}</dd>
-      <dt>Runs</dt><dd className="num">{g.runs} in sandboxes, on {v}</dd>
-      {g.figure && <><dt>Claim</dt><dd>{g.figure}</dd></>}
+      <dt>Runs</dt><dd className="num">{g.runs} in sandboxes, on {vName(v)}</dd>
+      {g.figure && <><dt>Number</dt><dd>{g.figure}</dd></>}
     </dl>
   );
 }
@@ -181,9 +189,11 @@ export function Case({ slug, query }) {
           <span>{c.venue}</span>
           <nav className="toggle" aria-label="Engine version">
             {(data.real_versions || ["c5", "c7"]).filter((x) => c.versions[x]).map((x) => (
-              <a key={x} href={href(`/case/${slug}`, { v: x })} aria-current={x === v ? "page" : undefined}>{x}</a>
+              <a key={x} href={href(`/case/${slug}`, { v: x })} aria-current={x === v ? "page" : undefined}
+                 title={versionStatus(data, x) || ""}>{vName(x)}</a>
             ))}
           </nav>
+          <span>Showing engine <Term k="version">version</Term> {vName(v)}{versionStatus(data, v) ? ` (${versionStatus(data, v)})` : ""}</span>
         </div>
       </header>
 
@@ -192,7 +202,7 @@ export function Case({ slug, query }) {
         <div className="two">
           <div>
             {hasAfter && (
-              <div className="toggle" role="group" aria-label="Show the code’s reading" style={{ marginBottom: 12 }}>
+              <div className="toggle gauge-toggle" role="group" aria-label="Show the code’s number">
                 {[["before", "As released"], ["after", "After GapFinder’s change"]].map(([k, t]) => (
                   <button key={k} type="button" aria-pressed={show === k} onClick={() => { setShow(k); setPlay((n) => n + 1); }}>{t}</button>
                 ))}
@@ -201,9 +211,9 @@ export function Case({ slug, query }) {
             <Gauge g={g} show={show} playKey={play} label={c.title} />
           </div>
           <div>
-            <h3 style={{ fontSize: "var(--t1)", marginBottom: 8 }}>The documented cause</h3>
+            <h3 className="minor-head">The documented cause</h3>
             <p className="claimtext quote">{c.documented_cause}</p>
-            <h3 style={{ fontSize: "var(--t1)", margin: "24px 0 8px" }}>What GapFinder found</h3>
+            <h3 className="minor-head">What GapFinder found</h3>
             <p>{sel.reading}</p>
             <Answer v={v} g={g} />
           </div>
@@ -215,7 +225,7 @@ export function Case({ slug, query }) {
         <ol className="timeline">
           {(data.real_versions || ["c5", "c7"]).filter((x) => c.versions[x]).map((x) => (
             <li key={x}>
-              <div className="v">{x}</div>
+              <div className="v">{vName(x)}<small>{versionStatus(data, x)}</small></div>
               <div>
                 <Verdict v={c.versions[x].verdict} />
                 <p>{c.versions[x].reading} {x !== v && <a href={href(`/case/${slug}`, { v: x })}>Show this run</a>}</p>
@@ -233,22 +243,24 @@ export function Case({ slug, query }) {
         <h2 id="report-title" className="visually-hidden">The full report</h2>
         {run ? <Report run={run} /> : <Loading what="Loading the report…" />}
       </section>
-      <p className="notice" style={{ marginTop: 24 }}>Post-hoc rerun. The cause is documented, and the engine’s fixes since c5 were found on these
-        very runs, so this is a demonstration, not evidence.</p>
+      <p className="notice spaced"><Term k="posthoc">Post-hoc</Term> rerun. The cause is documented, and the engine’s fixes since
+        {" "}{vName((data.real_versions || ["c5"])[0])} were found on these very runs, so this is a demonstration, not evidence.</p>
     </div>
   );
 }
 
 // a planted change as the scorer words it ("scale: lr: the paper's v is the code's 0.5 x v", "setting: wd = 0.001"):
 // the identifier as code, the description as prose
+// in words: "the paper's v is the code's 0.5 x v" reads "a value the paper states as v is 0.5 × v in the code"
 function Planted({ text }) {
   const t = text.replace(/^\w+: /, "");
   const i = t.indexOf(": ");
   if (i > 0 && !t.slice(0, i).includes(" ")) {
-    return <span style={{ display: "block" }}><code>{prettyKnob(t.slice(0, i))}</code> {t.slice(i + 2).replace(/ x /g, " × ")}</span>;
+    const rest = t.slice(i + 2).replace(/ x /g, " × ").replace(/^the paper's v is the code's (.+?) × v$/, "a value the paper states as v is $1 × v in the code");
+    return <span className="planted"><code>{prettyKnob(t.slice(0, i))}</code> {rest}</span>;
   }
   const [k, v] = t.split(" = ");
-  return <span style={{ display: "block" }}><code>{v !== undefined ? `${prettyKnob(k)} = ${v}` : t}</code></span>;
+  return <span className="planted"><code>{v !== undefined ? `${prettyKnob(k)} = ${v}` : t}</code></span>;
 }
 
 // ------------------------------------------------------------------ synthetic cases
@@ -330,17 +342,20 @@ export function RunPage({ id }) {
       <a className="crumb" href={href("/synthetic", m.group === "gapbench" ? { tab: "gapbench" } : {})}>Synthetic cases</a>
       <header className="case-head">
         <h1>{m.title || run.report?.paper || id}</h1>
-        <div className="meta">{m.version && <span>{m.version}{m.seed ? `, seed ${m.seed}` : ""}</span>}{g?.label && <span>{g.label}</span>}</div>
+        <div className="meta">
+          {m.version && <span>Engine <Term k="version">version</Term> {vName(m.version)}{m.seed ? <>, <Term k="batch">fresh batch</Term> {m.seed}</> : ""}</span>}
+          {g?.label && <PlainLabel label={g.label} formal />}
+        </div>
       </header>
       <section className="document" aria-labelledby="gap-title">
         <h2 id="gap-title">The gap</h2>
         <div className="two">
           <div>{g ? <Gauge g={g} label={m.title} /> : <p className="muted">This run records no gap on its target.</p>}</div>
           <div>
-            {m.planted && <><h3 style={{ fontSize: "var(--t1)", marginBottom: 8 }}>What was planted</h3>
-              <p>{m.planted.length ? m.planted.map((x) => <code key={x}>{x}</code>) : "Nothing: a control, where the right answer is no gap."}</p></>}
-            {m.hidden && <><h3 style={{ fontSize: "var(--t1)", marginBottom: 8 }}>The hidden setting</h3><p><code>{changesText(m.hidden)}</code></p></>}
-            <h3 style={{ fontSize: "var(--t1)", margin: "16px 0 8px" }}>What GapFinder found</h3>
+            {m.planted && <><h3 className="minor-head">What was <Term k="planted">planted</Term></h3>
+              <p>{m.planted.length ? m.planted.map((x) => <Planted key={x} text={x} />) : <>Nothing: a <Term k="control">control</Term>, where the right answer is no gap.</>}</p></>}
+            {m.hidden && <><h3 className="minor-head">The hidden setting</h3><p><code>{changesText(m.hidden)}</code></p></>}
+            <h3 className="minor-head">What GapFinder found</h3>
             <p>{g && Object.keys(g.changes || {}).length ? <code>{changesText(g.changes)}</code> : "No change: it reported the number as reproduced."}</p>
             {m.note && <p className="small">{m.note}</p>}
           </div>
@@ -355,7 +370,7 @@ export function RunPage({ id }) {
 // ------------------------------------------------------------------ how it works
 const STEPS = [
   ["Read the paper", "Nemotron reads the paper and lists every number it reports, each with its exact quote, and every setting it states or leaves out."],
-  ["Describe how to run the code", "A harness says how to build the released code, run it, read its output, and which settings may change. A person approves it."],
+  ["Describe how to run the code", "A harness, a short file, says how to build the released code, run it, read its output, and which settings may change. A person approves it."],
   ["Measure the noise", "Five runs of the code as released give its number and its run-to-run spread. A gap inside that spread is not a gap."],
   ["Search the settings", "Each candidate setting runs once from the same saved checkpoint in its own sandbox. What moves the number is repeated, and what survives is combined."],
   ["Check the answer", "Revert each change: the gap must come back. Held-out claims must not get worse. The value needs evidence beyond the fact that it fits."],
@@ -366,23 +381,30 @@ const STEPS = [
 export function How() {
   return (
     <div className="shell">
-      <section className="hero" style={{ paddingBottom: 0 }}>
+      <section className="hero page-head">
         <h1>How it works</h1>
         <p className="lede">An investigation is a sequence of experiments, each forked from one built and loaded copy of the code, so a
           hypothesis costs one run, not one setup.</p>
       </section>
-      <section className="section" style={{ paddingTop: 32 }}>
+      <section className="section tight">
         <ol className="steps">
           {STEPS.map(([t, d]) => <li key={t}><div><h3>{t}</h3><p>{d}</p></div></li>)}
         </ol>
       </section>
       <section className="section" aria-labelledby="limits-title">
         <header><h2 id="limits-title">What it can’t do yet</h2></header>
-        <ul style={{ maxWidth: "68ch", paddingLeft: 20 }}>
+        <ul className="prose-list">
           <li>Tell apart causes that fit the paper’s numbers equally well. With one reported number, several changes often fit, and it says so.</li>
           <li>Find a cause the paper never states and the code doesn’t express, such as a different model variant behind the number.</li>
           <li>Prove itself on new papers. Its blind record on sealed papers is 1 of 8, from before this work; a fresh blind batch is the next test.</li>
         </ul>
+      </section>
+      <section className="section" aria-labelledby="words-title">
+        <header><h2 id="words-title">Words used on this site</h2>
+          <p>Underlined words elsewhere on the site show these definitions on hover, focus or tap.</p></header>
+        <dl className="glossary">
+          {Object.entries(GLOSSARY).map(([k, [w, d]]) => <div key={k}><dt>{w}</dt><dd>{d}</dd></div>)}
+        </dl>
       </section>
     </div>
   );
@@ -402,7 +424,7 @@ export function Evidence() {
       <section className="section" aria-labelledby="ev-real">
         <header><h2 id="ev-real">Real papers, re-run post-hoc</h2>
           <p>Sixteen papers with documented causes. A demonstration: the fixes were found on them.</p></header>
-        <VersionStrips real={data.real} versions={data.real_versions} />
+        <VersionStrips data={data} />
       </section>
       <section className="section" aria-labelledby="ev-planted">
         <header><h2 id="ev-planted">Planted gaps on fresh batches</h2>
