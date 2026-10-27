@@ -1,0 +1,38 @@
+name: at
+base: 111b6ab0-27dc-4341-8328-aa45b8835814
+source: <scratch>/db2/at/repo
+run:
+  command: mkdir -p out; A="--lr {lr} --num_epochs {num_epochs} --k {k} --win_size {win_size} --batch_size {batch_size} --anormly_ratio {anormly_ratio}"; python main.py $A --mode train --dataset SMD --data_path dataset/SMD --input_c 38 > out/train.log 2>&1; python main.py $A --mode test --dataset SMD --data_path dataset/SMD --input_c 38 --pretrained_model 20 > out/test.log 2>&1; bash gf_harness/emit.sh
+  output: stdout
+  format: kv
+  timeout: 3500
+knobs:
+  lr:
+    layer: config
+    default: 1e-4
+  num_epochs:
+    layer: config
+    default: '3'
+    max: 3
+  k:
+    layer: config
+    default: '3'
+  win_size:
+    layer: config
+    default: '100'
+    max: 100
+  batch_size:
+    layer: config
+    default: '32'
+    max: 32
+  anormly_ratio:
+    layer: config
+    default: '0.5'
+allowed_paths:
+- out/
+- checkpoints/
+metrics:
+- smd_f1
+- smd_precision
+- smd_recall
+discrepancy: 0.05

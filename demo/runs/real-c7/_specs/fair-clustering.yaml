@@ -1,0 +1,47 @@
+name: b3a
+base: 507a8c7f-af37-4a64-ac24-1f373177be7d
+source: <scratch>/b3/b3a/repo
+run:
+  command: cd /work; mkdir -p out; export OMP_NUM_THREADS=1 NUMBA_NUM_THREADS=1 MPLBACKEND=Agg; n=0; for c in kmeans kmedian; do for d in Synthetic Synthetic-unequal; do case "$c-$d" in kmeans-Synthetic) L={kmeans_synthetic_lmbda};; kmeans-Synthetic-unequal) L={kmeans_unequal_lmbda};; kmedian-Synthetic) L={kmedian_synthetic_lmbda};; *) L={kmedian_unequal_lmbda};; esac; for s in 0 1 2 3 4 5 6 7 8 9;
+    do dd=/tmp/gfdata/$c-$d-$s; mkdir -p $dd; python test_fair_clustering.py -d $d --cluster_option $c --lmbda $L --lmbda-tune {lmbda_tune} --seed $s --data_dir $dd > out/${c}_${d}_s${s}.log 2>&1 & n=$((n+1)); if [ $((n % 4)) -eq 0 ]; then wait; fi; done; done; done; wait; bash gf_harness/emit.sh
+  output: stdout
+  format: kv
+  timeout: 3300
+knobs:
+  kmeans_synthetic_lmbda:
+    layer: config
+    default: '10'
+  kmeans_unequal_lmbda:
+    layer: config
+    default: '10'
+  kmedian_synthetic_lmbda:
+    layer: config
+    default: '10'
+  kmedian_unequal_lmbda:
+    layer: config
+    default: '10'
+  lmbda_tune:
+    layer: config
+    default: 'False'
+    choices:
+    - 'False'
+    - 'True'
+allowed_paths:
+- out/
+metrics:
+- kmeans_synthetic_objective
+- kmeans_synthetic_balance
+- kmeans_synthetic_fairness_error
+- kmeans_synthetic_avg_balance
+- kmeans_unequal_objective
+- kmeans_unequal_balance
+- kmeans_unequal_fairness_error
+- kmeans_unequal_avg_balance
+- kmedian_synthetic_objective
+- kmedian_synthetic_balance
+- kmedian_synthetic_fairness_error
+- kmedian_synthetic_avg_balance
+- kmedian_unequal_objective
+- kmedian_unequal_balance
+- kmedian_unequal_fairness_error
+- kmedian_unequal_avg_balance

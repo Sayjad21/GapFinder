@@ -1,0 +1,58 @@
+name: gat
+base: 3f93d0a9-644f-4d74-9d14-a62d484d4f10
+source: <scratch>/devbatch/gat/repo
+run:
+  command: bash gf_harness/run_cell.sh batch_size={batch_size} nb_epochs={nb_epochs} patience={patience} lr={lr} l2_coef={l2_coef} hid_units={hid_units} n_heads={n_heads} residual={residual} nonlinearity={nonlinearity} model={model} sparse={sparse}
+  output: stdout
+  format: kv
+  timeout: 3300
+knobs:
+  batch_size:
+    layer: config
+    default: '1'
+  nb_epochs:
+    layer: config
+    default: '100000'
+  patience:
+    layer: config
+    default: '100'
+    max: 1000
+  lr:
+    layer: config
+    default: '0.005'
+  l2_coef:
+    layer: config
+    default: '0.0005'
+  hid_units:
+    layer: config
+    default: '8'
+  n_heads:
+    layer: config
+    default: 8,1
+  residual:
+    layer: config
+    default: 'False'
+    choices:
+    - 'False'
+    - 'True'
+  nonlinearity:
+    layer: config
+    default: tf.nn.elu
+  model:
+    layer: config
+    default: SpGAT
+    choices:
+    - SpGAT
+    - GAT
+  sparse:
+    layer: config
+    default: 'True'
+    choices:
+    - 'True'
+    - 'False'
+allowed_paths:
+- out/
+metrics:
+- gat_pubmed_acc
+- gat_cora_acc
+- gat_citeseer_acc

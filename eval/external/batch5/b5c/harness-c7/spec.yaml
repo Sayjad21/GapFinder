@@ -1,0 +1,588 @@
+# written by `gapfinder harness`; read HARNESS.md and approve the commands
+name: harness-c7
+base: aaa2e17a-0318-463c-ba00-52858edbf951
+source: C:\Users\Legion\AppData\Local\Temp\claude\c--Users-Legion-Downloads-nvidia-hackathon\e8c91548-6b05-48d1-bf91-8a391c52c901\scratchpad\b5\b5c\repo
+run:
+  command: e="{gf_paper_era_code}"; if [ "$e" = 1 ]; then cp -rf "${GF_ERA_DIR:-/opt/gf_paper_era}/." ./; elif [ "$e" != 0 ]; then d="${GF_ERA_REL:-/tmp/gf_era}/$e"; [ -d "$d" ] || "${PYTHON:-python}" gf_harness/era_fetch.py
+    "$e" "$d" >/dev/null 2>&1 || echo "GF_ERA_FETCH_FAIL $e" >&2; cp -rf "$d/." ./; fi; v="{gf_paper_year_env}"; if [ "$v" != 0 ]; then gf_pip() { if [ -n "$GF_PIP" ]; then $GF_PIP "$@"; else "${PYTHON:-python}"
+    -m pip "$@"; fi; }; [ "$v" = 1 ] && v=all; r="${GF_PY_ROOT:-/opt/gf_py}"; [ "$v" = all ] && v="$(ls "$r" 2>/dev/null | tr "\n" ",")"; GF_LIB_DIRS=""; for p in $(echo "$v" | tr "," " "); do case "$p"
+    in *==*) d="${GF_PY_REL:-/tmp/gf_py}/$p"; case "$p" in torch==*|torchvision==*|torchaudio==*) ix="--index-url https://download.pytorch.org/whl/cpu";; *) ix="";; esac; [ -d "$d" ] || PIP_NO_CACHE_DIR=1
+    gf_pip install -q --no-deps $ix --target "$d" "$p" >/dev/null 2>&1 || echo "GF_LIB_INSTALL_FAIL $p" >&2;; *) d="$r/$p";; esac; GF_LIB_DIRS="${GF_LIB_DIRS:+$GF_LIB_DIRS|}$d"; done; export GF_LIB_DIRS;
+    fi; mkdir -p out; rm -f out/run*.log; GF_SEED=$("${PYTHON:-python}" -c "import os, zlib; print(zlib.crc32(os.environ.get('RUN_TAG', 'x').encode('utf-8')) % 100000)"); r=1; (timeout ${GF_TIME_CUT:-0}
+    "${GF_BASH:-bash}" -c 'cd benchmark && PYTHONPATH="$OLDPWD${PYTHONPATH:+${GF_PATHSEP:-:}$PYTHONPATH}" "${PYTHON:-python}" main.py --model dominant --dataset inj_cora --gpu -1') > out/run1.log 2>&1;
+    "${PYTHON:-python}" gf_harness/emit.py
+  output: stdout
+  format: kv
+  timeout: 3300
+  time_cut: true
+knobs:
+  '@ast:benchmark/utils.py:11:weight_decay':
+    layer: environment
+    default: '0.01'
+    env: true
+  '@ast:benchmark/utils.py:15:batch_size':
+    layer: environment
+    default: '64'
+    env: true
+  '@ast:benchmark/utils.py:17:epoch':
+    layer: environment
+    default: '2'
+    env: true
+  '@ast:benchmark/utils.py:19:batch_size':
+    layer: environment
+    default: '0'
+    env: true
+  '@ast:benchmark/utils.py:21:epoch':
+    layer: environment
+    default: '300'
+    env: true
+  '@ast:pygod/detector/adone.py:113:hid_dim':
+    layer: environment
+    default: '64'
+    env: true
+  '@ast:pygod/detector/adone.py:113:num_layers':
+    layer: environment
+    default: '4'
+    env: true
+  '@ast:pygod/detector/adone.py:113:dropout':
+    layer: environment
+    default: '0.0'
+    env: true
+  '@ast:pygod/detector/adone.py:113:weight_decay':
+    layer: environment
+    default: '0.0'
+    env: true
+  '@ast:pygod/detector/adone.py:113:lr':
+    layer: environment
+    default: '0.004'
+    env: true
+  '@ast:pygod/detector/adone.py:113:epoch':
+    layer: environment
+    default: '100'
+    env: true
+  '@ast:pygod/detector/adone.py:113:batch_size':
+    layer: environment
+    default: '0'
+    env: true
+  gf_paper_year_env:
+    layer: environment
+    default: '0'
+    choices:
+    - '0'
+    - all
+    - pygod
+    - pyod
+    - scikit_learn
+    - tqdm
+  gf_paper_era_code:
+    layer: environment
+    default: '0'
+    choices:
+    - '0'
+    - '1'
+allowed_paths:
+- out/
+metrics:
+- c_auc
+- c_ap
+- c_rec_recall
+- c_ap__x_best
+- c_ap__x_argbest
+- c_ap__x_len
+- c_ap__x_last5
+- c_ap__x_bestval
+- c_ap__x_attarget
+- c_ap__x_atbestval
+- c_ap__x_maxrun
+- c_ap__x_minrun
+- c_ap__x_medrun
+- c_auc__x_best
+- c_auc__x_argbest
+- c_auc__x_len
+- c_auc__x_last5
+- c_auc__x_bestval
+- c_auc__x_attarget
+- c_auc__x_atbestval
+- c_auc__x_maxrun
+- c_auc__x_minrun
+- c_auc__x_medrun
+- c_rec_recall__x_best
+- c_rec_recall__x_argbest
+- c_rec_recall__x_len
+- c_rec_recall__x_last5
+- c_rec_recall__x_bestval
+- c_rec_recall__x_attarget
+- c_rec_recall__x_atbestval
+- c_rec_recall__x_maxrun
+- c_rec_recall__x_minrun
+- c_rec_recall__x_medrun
+- gf_runs
+library:
+  pins:
+    pygod:
+      old: 0.3.0
+      installed: 1.0.0
+      dir: pygod
+      bundle:
+      - pygod
+      deps: {}
+      releases:
+      - 0.3.0
+      - 0.3.1
+      - 0.4.0
+      - 1.0.0
+      own: true
+      imports_alone: true
+      modules:
+      - pygod
+      path: pygod
+    pyod:
+      old: 1.0.2
+      installed: 2.1.0
+      dir: pyod
+      bundle:
+      - pyod
+      deps: {}
+      releases:
+      - 1.0.2
+      - 1.0.3
+      - 1.0.4
+      - 1.0.5
+      - 1.0.6
+      - 1.0.7
+      - 1.0.8
+      - 1.0.9
+      - 1.1.0
+      - 1.1.1
+      - 1.1.2
+      - 1.1.3
+      - 2.0.0
+      - 2.0.1
+      - 2.0.2
+      - 2.0.3
+      - 2.0.4
+      - 2.0.5
+      - 2.0.6
+      - 2.0.7
+      - 2.1.0
+      own: false
+      imports_alone: true
+      modules:
+      - pyod
+      path: null
+    scikit-learn:
+      old: 1.1.1
+      installed: 1.3.2
+      dir: scikit_learn
+      bundle:
+      - scikit_learn
+      deps: {}
+      releases:
+      - 1.1.1
+      - 1.1.2
+      - 1.1.3
+      - 1.2.0
+      - 1.2.1
+      - 1.2.2
+      - 1.3.0
+      - 1.3.1
+      - 1.3.2
+      own: false
+      imports_alone: true
+      modules:
+      - sklearn
+      path: null
+    torch-geometric:
+      old: 2.0.4
+      installed: 2.3.0
+      dir: torch_geometric
+      bundle:
+      - torch_geometric
+      deps: {}
+      releases:
+      - 2.0.4
+      - 2.1.0
+      - 2.1.0.post1
+      - 2.2.0
+      - 2.3.0
+      own: false
+      imports_alone: false
+      modules:
+      - torch_geometric
+      path: null
+    tqdm:
+      old: 4.64.0
+      installed: 4.70.1
+      dir: tqdm
+      bundle:
+      - tqdm
+      deps: {}
+      releases:
+      - 4.64.0
+      - 4.64.1
+      - 4.65.0
+      - 4.65.1
+      - 4.65.2
+      - 4.66.0
+      - 4.66.1
+      - 4.66.2
+      - 4.66.3
+      - 4.66.4
+      - 4.66.5
+      - 4.66.6
+      - 4.67.0
+      - 4.67.1
+      - 4.67.2
+      - 4.67.3
+      - 4.68.0
+      - 4.68.1
+      - 4.68.2
+      - 4.68.3
+      - 4.68.4
+      - 4.69.0
+      - 4.69.1
+      - 4.70.0
+      - 4.70.1
+      own: false
+      imports_alone: true
+      modules:
+      - tqdm
+      path: null
+  date: '2022-07-01'
+  python: 3.8.20
+  era:
+    repo: https://github.com/pygod-team/pygod
+    commit: 61dd13f322cf598acb22976010217aecfd17380c
+    sha: 7de5d925ef59afcc0c9d4d2cb301d2583341be87
+    date: '2022-06-25'
+    message: 'Merge pull request #36 from pygod-team/dev'
+    kind: before
+    commits:
+    - sha: 089bc9cc7d94fb7c0b55f84ea037a70eaeba229d
+      date: '2022-06-25'
+      message: update doc
+    - sha: 7de5d925ef59afcc0c9d4d2cb301d2583341be87
+      date: '2022-06-25'
+      message: 'Merge pull request #36 from pygod-team/dev'
+    - sha: b960645e467af2b8d689dc889d77de72eb3e5e56
+      date: '2022-07-05'
+      message: add security check
+    - sha: d06e683218c986dd691674ed1b8599b64fc826e6
+      date: '2022-07-11'
+      message: 'FIX issue #39'
+    - sha: 446965b08858705fb3c77fae8a86348c949ecd63
+      date: '2022-07-11'
+      message: FIX issue 39
+    - sha: 812f69a1518b638b1e50bbf3503aea0a48a06b4f
+      date: '2022-07-11'
+      message: Add args to time.py
+    - sha: 91932f7df135e9c10861b918cca32a3d94276b03
+      date: '2022-07-11'
+      message: 'Merge pull request #40 from cshjin/issue_39'
+    - sha: ad3d37bdce4cfd7efb7b6b36291fe6f4ad0ac798
+      date: '2022-07-11'
+      message: fix arg info
+    - sha: 8c3af8625b54e2eccb5caef3728d0f6f9e38c7cd
+      date: '2022-07-11'
+      message: Merge branch 'main' into dev
+    - sha: c0f4eea9cbbb1d7a0be7d42ef9fd6f7c6c88936b
+      date: '2022-07-11'
+      message: fix benchmark dataset loading (#41)
+    - sha: 21da848b4fd0011e97afdf33df0a3f92b69a4643
+      date: '2022-08-11'
+      message: fix a docstring error
+    - sha: b5738e3940e0558309f9d8d8f46aaf134007e96e
+      date: '2022-08-12'
+      message: fix minor typo
+    - sha: 42e1d0172570f576899506dd9d6f1e90d1483bfb
+      date: '2022-08-12'
+      message: Merge branch 'dev' of github.com:pygod-team/pygod into dev
+    - sha: 8a57ba984406dacbbbf57ab9cfbf73a30a94adb1
+      date: '2022-09-01'
+      message: Update README.rst
+    - sha: ab8aa2c223752fc5d62a57a7a5c800429319f14a
+      date: '2022-09-01'
+      message: add the demo
+    - sha: 1829421d5aea6f1c663a7dd7448d78a608eec634
+      date: '2022-09-05'
+      message: update structural outlier injection and benchmark
+    - sha: 85e223f14a0c4794ba640b6a3e83bdd5ebe46c94
+      date: '2022-09-06'
+      message: Merge branch 'main' into dev
+    - sha: 3f53ade38138f49ee5901a296bf51445a3e34a9e
+      date: '2022-09-06'
+      message: 'Merge pull request #47 from pygod-team/dev'
+    - sha: a87e918be28c03c9b32d486ab706c7d9e3e61113
+      date: '2022-09-06'
+      message: move tiger graph script
+    - sha: 90c85ae288fae8b03b2efb6b83d6322c29371772
+      date: '2022-10-17'
+      message: fix dominant num_layers
+    - sha: d67eeb251374446ad4064bf8b3920d46e04c6b2b
+      date: '2022-10-17'
+      message: fix dominant num_layers
+    - sha: 93a41bfd423852eff092160c3a1776907c8718a2
+      date: '2022-10-18'
+      message: fix dominant num_layers
+    - sha: 8d6f5b03c4889695ea3783dd7774a81c389c83e7
+      date: '2022-10-25'
+      message: benchmark setting update
+    - sha: c83a21cfa77d3ab25f20b94929749e079a7122c1
+      date: '2022-11-08'
+      message: Update README.md
+    - sha: 743bb06bff438ec12b1ea0c0e76dab9403f1684d
+      date: '2022-11-08'
+      message: Update README.md
+    - sha: 10d0a11ec0840c95e690582f12d28b2a8f1771da
+      date: '2023-01-03'
+      message: ungrade pytorch in requirements_ci.txt
+    - sha: ad709d1b3e91e98549226eec557b17c10997ada5
+      date: '2023-01-03'
+      message: modify int in base
+    - sha: 60b330ae38b1b824dedee0096b1747a421ecc689
+      date: '2023-01-03'
+      message: update workflow
+    - sha: d5f28cce45a99c7c69a7159f84b79e68bbea0b30
+      date: '2023-01-03'
+      message: update workflow
+    - sha: d96af5ea558c7ab8a538236468f691029f58d92b
+      date: '2023-01-04'
+      message: update workflow
+    - sha: 1f93bd3d9fa811442ef07241071686c90d876900
+      date: '2023-01-04'
+      message: update workflow
+    - sha: ae1890d4caf1c34a0ae827e66c10ac006e018b79
+      date: '2023-01-04'
+      message: update workflow
+    - sha: eee43e089c2973c9550c2048f65b48454b69f571
+      date: '2023-01-04'
+      message: update workflow
+    - sha: d72fec796a3ff57da4e5afc11497d0f28f636491
+      date: '2023-01-06'
+      message: update doc
+    - sha: 84451e06de950395f23af6cff9df4b97f68a0b7d
+      date: '2023-01-12'
+      message: initialize the scalable version
+    - sha: 0643590d940622b04e2f37116c1298893bf7704d
+      date: '2023-01-16'
+      message: Merge branch 'dev' of github.com:pygod-team/pygod into dev
+    - sha: 8e01da2ab93bf37e60db35d3ce437f98f9b3e11a
+      date: '2023-01-31'
+      message: mixture refactor
+    - sha: a159ff0f199e1297a6f41752994f5c44cc599d76
+      date: '2023-01-31'
+      message: add structure embedding
+    - sha: 6bf0224f28a141d635b7c9f6029fc0a041d88791
+      date: '2023-03-26'
+      message: refactor metrics and generator
+    - sha: 9e15e6be94cad6cbbeed981391e4cdb3a289d549
+      date: '2023-03-26'
+      message: readthedocs python version
+    - sha: 4f7d15f06d06ce2d3626ae14a07ff06078120e72
+      date: '2023-03-27'
+      message: fix docs
+    - sha: 399c0838f47a15a8abef498bc82fbbf017e1325f
+      date: '2023-03-27'
+      message: fix docs
+    - sha: 9e3717250d97898a3263fbcaafc9f3eca142506d
+      date: '2023-04-10'
+      message: refactoring
+    - sha: e8563d89d26196b88d30f8a5e943f13e3103ec1d
+      date: '2023-04-10'
+      message: refactoring
+    - sha: 187f946bd3e00d5a7f86b27f76f229a63eb1bb88
+      date: '2023-04-25'
+      message: refactoring
+    - sha: ed992ffc715b2ae1aa69e702c7d53ce02323998a
+      date: '2023-05-01'
+      message: refactored
+    - sha: de227de4a9b2f71c254ec58eccca96f905e0ff54
+      date: '2023-05-01'
+      message: rename to detectors
+    - sha: 26c6d7f2412c6866ca1050d425e5d67a212e5ccb
+      date: '2023-05-01'
+      message: delete deprecation doc
+    - sha: 364a2e22889e7f22f55a6703bdf387e9fb417ba8
+      date: '2023-05-07'
+      message: fix test
+    - sha: 64c3b7215f4ae395fa83180540e9a61adcb7c93c
+      date: '2023-05-07'
+      message: fix test
+    - sha: 3d4ba1a5e4463ceb71805757e28b8629a4b29bad
+      date: '2023-05-07'
+      message: remove deprecated test
+    - sha: 1e7979d6de3067414898e9603366c99a38ad4572
+      date: '2023-05-07'
+      message: fix emb
+    - sha: 1f7a65338f4bd51bd94668256cf12adcfd6eb155
+      date: '2023-05-07'
+      message: fix doc
+    - sha: d8dac38614079dec79c0d0998eb44398797fe335
+      date: '2023-05-07'
+      message: fix doc
+    - sha: b546576839dc719a49791fce0b577300dc58c560
+      date: '2023-05-07'
+      message: fix doc
+    - sha: 4ef2a8bacaf118bda1bcdb8242da1bb1e07adf89
+      date: '2023-05-07'
+      message: fix doc
+    - sha: fa8f05d6eadab82d20b2e3c5711c528646686fc4
+      date: '2023-05-07'
+      message: fix tutorial
+    - sha: ce63709141063c68b25b08b6561e459b1470f4d6
+      date: '2023-05-07'
+      message: fix docs
+    - sha: 5dc3fdf1e0a7c6097d62bc6a495df7652d2aa600
+      date: '2023-05-09'
+      message: refactored docs
+    - sha: ac2fa0fdbc65f3ea98c14f2cac0b9bb42b5bc3e8
+      date: '2023-05-09'
+      message: refactored tutorial
+    - sha: ea29b70a037655f67ebf6c17d7216a96b96f7a87
+      date: '2023-05-09'
+      message: refactored tutorial
+    - sha: df49e77cdab279a8ca36e5a28eba3b5bd6a2d896
+      date: '2023-05-09'
+      message: modified tutorial
+    - sha: beb1ac598b937a7e126ea37cdcae842ae687d12c
+      date: '2023-05-09'
+      message: fix test
+    - sha: 198c3d28206e9b165967afe71f0642a600cb20a0
+      date: '2023-05-09'
+      message: fix test
+    - sha: 6d8e3e060c7a590117cdce57f611d3f447366d77
+      date: '2023-05-09'
+      message: fix test
+    - sha: 2989302cc6c44f7a41c96329b8e51efcbfd419d2
+      date: '2023-05-09'
+      message: fix test
+    - sha: f11af6de0ca8e968837b97ef69c07f1c6402097b
+      date: '2023-05-10'
+      message: fix test
+    - sha: 87c41463bbb0e10851ed39a5aa13f7434f0c35e9
+      date: '2023-05-10'
+      message: fix test
+    - sha: c9c997f3030222744bea218f5f5e560d6dc653fc
+      date: '2023-05-10'
+      message: fix test
+    - sha: dc0d593833dfb62dfc829f6641a512b2c75af4ed
+      date: '2023-05-10'
+      message: fix test
+    - sha: 35e299dcb94f1ff1306d0f47a53a138e5e572de5
+      date: '2023-05-10'
+      message: fix test
+    - sha: 7e5ffb36c627df6b3479f5ae6d4093fc778229df
+      date: '2023-05-10'
+      message: Simplify Requirements (#1)
+    - sha: 3f14c39afd4a2b8b57efd0f7b480feeab5ca38ce
+      date: '2023-05-10'
+      message: refactored dominant test
+    - sha: 36eaadf02bbff95e002d385a252b788b9fdc8a8d
+      date: '2023-05-10'
+      message: refactored dominant test
+    - sha: cc44f2bfad53963fff186d2786c83f8c20973728
+      date: '2023-05-10'
+      message: refactored dominant test
+    - sha: 16b82473e9ea36ff996f550acbe04101b757a4ec
+      date: '2023-05-11'
+      message: add done/adone test
+    - sha: d049fcd06966df4cbcba98916592c15bcbfcc497
+      date: '2023-05-11'
+      message: fix done/adone test
+    - sha: 931d61dc543d1990e2d76af42075f42c291b8383
+      date: '2023-05-11'
+      message: fix done/adone test
+    - sha: 98f318b3ce009de6f45b409a778ebb63c8018ca1
+      date: '2023-05-11'
+      message: add anomalydae, cola, conad test
+    - sha: 0c87910c856b217255709beb6f665c63a256e195
+      date: '2023-05-11'
+      message: add anomalydae, cola, conad test
+    - sha: eb00adbcf265cc6828ff6a4e8be1c3425adceca0
+      date: '2023-05-11'
+      message: add gaan, gae, guide test
+    - sha: 8f7425b1ce66b1a9346d83b7426c253773d75578
+      date: '2023-05-11'
+      message: add ocgnn test
+    - sha: 50ff13e6df298089fc3cb1f39d4b687d8f4ccb4f
+      date: '2023-05-11'
+      message: add radar test
+    - sha: d8d10b229c3fdbc02b48b13bb3082bd618d854b7
+      date: '2023-05-11'
+      message: fix test
+    - sha: 3d08d8549ef7b6e059837e1e1ba81b79a580386f
+      date: '2023-05-11'
+      message: fix test
+    - sha: e2cea8abfeddef172375b159dbd01c01c3357e80
+      date: '2023-05-11'
+      message: fix test
+    - sha: 6efedecbc9abc6bd0417f84e11f3913502df7434
+      date: '2023-05-11'
+      message: fix test
+    - sha: 4a9ab351c0ccb63e7c7bd475a8b172412135bde7
+      date: '2023-05-11'
+      message: add one, anomalous, and scan test
+    - sha: 1515c169453c8037db67727750adbb97881ed0ac
+      date: '2023-05-11'
+      message: fix test
+    - sha: 01e3ab129dbe317a8c4dccffd1cf9e75dae170e1
+      date: '2023-05-11'
+      message: fix test
+    - sha: 796b76928e2a26041372381a40aa5e16749ec7b5
+      date: '2023-05-11'
+      message: fix test
+    - sha: 586b136a6083b25183c4b6e4b86b0e0d0a4e1a0f
+      date: '2023-05-11'
+      message: fix conad
+    - sha: c6453e2f3e3faae50667b4558f6532ae70146eba
+      date: '2023-05-12'
+      message: fix scan
+    - sha: 810132b6145ba33ee2d23f459eb6ce070c81230b
+      date: '2023-05-12'
+      message: fix scan
+    - sha: 4472e635040c48ef131a94c2b55fb546f524c83c
+      date: '2023-05-12'
+      message: fix guide
+    - sha: 574742160134ac295629f7349137f842d50b4677
+      date: '2023-05-12'
+      message: improved test coverage
+    - sha: ef2fa87ee77fbf664b9fd61e3f7bae88bd226764
+      date: '2023-05-12'
+      message: add description for multiple modules
+    - sha: 2334b7c8fb12245a14b1de0b72ad08025622a907
+      date: '2023-05-12'
+      message: fix test and docs
+    - sha: 4d9b473de13b45d41b44e66f2d5c712c1a2aa72b
+      date: '2023-05-12'
+      message: 'Merge pull request #77 from pygod-team/dev'
+    - sha: 0d3cd9bb5dc0ef394b0f9e3fcc8992ba30044cb3
+      date: '2023-07-15'
+      message: modify install guide
+    - sha: 6e30347c5d6446bf36daf7491669a6031f6b60fa
+      date: '2023-07-16'
+      message: add python 3.11 test
+    - sha: aba6190a4e3352e2955663ba937885c5b0734ba2
+      date: '2023-07-19'
+      message: correct OCGNN backbone
+    - sha: ff43bb54d17a79d8088981127a0558d9d3b7289c
+      date: '2023-07-19'
+      message: ready for v1.0.0
+    - sha: 5b49e618c10fa9951895ea128a1c065fc250a92a
+      date: '2023-07-19'
+      message: ready for v1.0.0
+    - sha: 03ec7ff7b85fb0eb9cad82b1549b36897eee1be5
+      date: '2023-07-25'
+      message: Fix the typo of attribute name decision_score_
+    - sha: 8d9a4c11bc08b44e0be757a73178b77f76006c9b
+      date: '2023-07-26'
+      message: 'Merge pull request #80 from OldPanda/fix-typo'
+    - sha: 7783b31a69c0f276b5c6f26a7d46763e7e42c03b
+      date: '2023-07-31'
+      message: add benchmark dependencies
+    - sha: 987776c12dce665874b490a898dc319c90430c3e
+      date: '2023-07-31'
+      message: Merge branch 'main' of github.com:pygod-team/pygod
+    - sha: 61dd13f322cf598acb22976010217aecfd17380c
+      date: '2023-08-16'
+      message: fix torch.mean(), max(), std()
+    files: 59

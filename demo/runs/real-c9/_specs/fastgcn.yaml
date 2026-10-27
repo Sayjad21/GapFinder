@@ -1,0 +1,42 @@
+name: fastgcn
+base: e6a5358e-5cb8-4cb3-afcb-7190e86cebb7
+source: <scratch>/blind1/FastGCN
+run:
+  command: export GF_SEED_FROM_RUN_TAG=1 OMP_NUM_THREADS=1 TF_CPP_MIN_LOG_LEVEL=2; mkdir -p out; A="--model {model} --learning_rate {learning_rate} --epochs {epochs} --hidden1 {hidden1} --dropout {dropout} --weight_decay {weight_decay} --early_stopping {early_stopping} --max_degree {max_degree}"; python pubmed-original_transductive_FastGCN.py --dataset cora $A > out/trans_cora.log 2>&1 & python pubmed-original_transductive_FastGCN.py
+    --dataset pubmed $A > out/trans_pubmed.log 2>&1 & python pubmed-original_inductive_FastGCN.py --dataset cora $A > out/ind_cora.log 2>&1 & python pubmed-original_inductive_FastGCN.py --dataset pubmed $A > out/ind_pubmed.log 2>&1 & wait; bash gf_harness/emit.sh
+  output: stdout
+  format: kv
+  timeout: 3600
+knobs:
+  model:
+    layer: config
+    default: gcn_mix
+  learning_rate:
+    layer: config
+    default: '0.01'
+  epochs:
+    layer: config
+    default: '100'
+    max: 2000
+  hidden1:
+    layer: config
+    default: '16'
+  dropout:
+    layer: config
+    default: '0.0'
+  weight_decay:
+    layer: config
+    default: 5e-4
+  early_stopping:
+    layer: config
+    default: '10'
+  max_degree:
+    layer: config
+    default: '3'
+allowed_paths:
+- out/
+metrics:
+- trans_cora_acc
+- trans_pubmed_acc
+- ind_cora_acc
+- ind_pubmed_acc

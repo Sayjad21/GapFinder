@@ -1,0 +1,116 @@
+name: patchtst
+base: 23e57d5c-44df-4710-8692-505e45c6d102
+source: <scratch>/devbatch/patchtst/src
+run:
+  command: mkdir -p out; S=$(( $(printf %s "$RUN_TAG" | cksum | cut -d" " -f1) % 100000 )); export OMP_NUM_THREADS=2; cd PatchTST_supervised && PYTHONPATH="/work${PYTHONPATH:+:$PYTHONPATH}" python -u run_longExp.py --random_seed $S --is_training 1 --root_path ./dataset/ --data_path ETTh1.csv --model_id ETTh1_96 --model PatchTST --data ETTh1 --features M --pred_len 96 --enc_in 7 --des Exp --itr 1 --seq_len
+    {seq_len} --e_layers {e_layers} --n_heads {n_heads} --d_model {d_model} --d_ff {d_ff} --dropout {dropout} --fc_dropout {fc_dropout} --head_dropout {head_dropout} --patch_len {patch_len} --stride {stride} --padding_patch {padding_patch} --revin {revin} --affine {affine} --subtract_last {subtract_last} --decomposition {decomposition} --kernel_size {kernel_size} --individual {individual} --train_epochs
+    {train_epochs} --patience {patience} --batch_size {batch_size} --learning_rate {learning_rate} --lradj {lradj} --pct_start {pct_start} > ../out/h96.log 2>&1; cd ..; bash gf_harness/emit.sh
+  output: stdout
+  format: kv
+  timeout: 3300
+knobs:
+  seq_len:
+    layer: config
+    default: '336'
+    max: 720
+  e_layers:
+    layer: config
+    default: '3'
+  n_heads:
+    layer: config
+    default: '4'
+  d_model:
+    layer: config
+    default: '16'
+  d_ff:
+    layer: config
+    default: '128'
+  dropout:
+    layer: config
+    default: '0.3'
+  fc_dropout:
+    layer: config
+    default: '0.3'
+  head_dropout:
+    layer: config
+    default: '0'
+  patch_len:
+    layer: config
+    default: '16'
+  stride:
+    layer: config
+    default: '8'
+  padding_patch:
+    layer: config
+    default: end
+    choices:
+    - end
+    - None
+  revin:
+    layer: config
+    default: '1'
+    choices:
+    - '0'
+    - '1'
+  affine:
+    layer: config
+    default: '0'
+    choices:
+    - '0'
+    - '1'
+  subtract_last:
+    layer: config
+    default: '0'
+    choices:
+    - '0'
+    - '1'
+  decomposition:
+    layer: config
+    default: '0'
+    choices:
+    - '0'
+    - '1'
+  kernel_size:
+    layer: config
+    default: '25'
+  individual:
+    layer: config
+    default: '0'
+    choices:
+    - '0'
+    - '1'
+  train_epochs:
+    layer: config
+    default: '50'
+    max: 100
+  patience:
+    layer: config
+    default: '100'
+  batch_size:
+    layer: config
+    default: '128'
+  learning_rate:
+    layer: config
+    default: '0.0001'
+  lradj:
+    layer: config
+    default: type3
+    choices:
+    - type1
+    - type2
+    - type3
+    - constant
+    - '3'
+    - '4'
+    - '5'
+    - '6'
+    - TST
+  pct_start:
+    layer: config
+    default: '0.3'
+allowed_paths:
+- out/
+metrics:
+- etth1_96_mse
+- etth1_96_mae
+discrepancy: 0.05

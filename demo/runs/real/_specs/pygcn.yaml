@@ -1,0 +1,29 @@
+name: pygcn
+base: 69abd25a-45ee-4e12-8b94-2cfde545816c
+source: <scratch>/devset/pygcn
+run:
+  command: mkdir -p out; S=$(( $(printf %s "$RUN_TAG" | cksum | cut -d" " -f1) % 100000 )); cd pygcn && PYTHONPATH="/work${PYTHONPATH:+:$PYTHONPATH}" python train.py --no-cuda --seed $S --epochs {epochs} --lr {lr} --weight_decay {weight_decay} --hidden {hidden} --dropout {dropout} > ../out/run.log 2>&1; cd ..; bash gf_harness/emit.sh
+  output: stdout
+  format: kv
+  timeout: 1200
+knobs:
+  epochs:
+    layer: config
+    default: '200'
+    max: 5000
+  lr:
+    layer: config
+    default: '0.01'
+  weight_decay:
+    layer: config
+    default: 5e-4
+  hidden:
+    layer: config
+    default: '16'
+  dropout:
+    layer: config
+    default: '0.5'
+allowed_paths:
+- out/
+metrics:
+- cora_acc

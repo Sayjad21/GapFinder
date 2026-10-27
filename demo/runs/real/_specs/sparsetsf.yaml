@@ -1,0 +1,91 @@
+name: b3c
+base: 73fbaf23-9abd-4621-a4b7-f0c0d970300a
+source: <scratch>/b3/b3c/repo
+run:
+  command: cd /work; mkdir -p out logs; export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1; n=0; for d in ETTh1 ETTh2; do if [ $d = ETTh1 ]; then LR={etth1_learning_rate}; else LR={etth2_learning_rate}; fi; for p in 96 192 336 720; do python -u run_longExp.py --is_training 1 --root_path ./dataset/ --data_path $d.csv --model_id ${d}_{seq_len}_$p --model SparseTSF --data $d --features M --seq_len {seq_len} --pred_len
+    $p --label_len {label_len} --period_len {period_len} --enc_in 7 --train_epochs {train_epochs} --patience {patience} --itr {itr} --batch_size {batch_size} --learning_rate $LR --lradj {lradj} --pct_start {pct_start} --loss {loss} --embed {embed} --num_workers 0 > out/${d}_$p.log 2>&1 & n=$((n+1)); if [ $((n % 4)) -eq 0 ]; then wait; fi; done; done; wait; bash gf_harness/emit.sh
+  output: stdout
+  format: kv
+  timeout: 3300
+knobs:
+  seq_len:
+    layer: config
+    default: '720'
+  period_len:
+    layer: config
+    default: '24'
+  label_len:
+    layer: config
+    default: '48'
+  train_epochs:
+    layer: config
+    default: '30'
+    max: 100
+  patience:
+    layer: config
+    default: '5'
+  itr:
+    layer: config
+    default: '1'
+    max: 10
+  batch_size:
+    layer: config
+    default: '256'
+  etth1_learning_rate:
+    layer: config
+    default: '0.02'
+  etth2_learning_rate:
+    layer: config
+    default: '0.03'
+  lradj:
+    layer: config
+    default: type3
+    choices:
+    - type1
+    - type2
+    - type3
+    - constant
+    - '3'
+    - '4'
+    - '5'
+    - '6'
+    - TST
+  pct_start:
+    layer: config
+    default: '0.3'
+  loss:
+    layer: config
+    default: mse
+    choices:
+    - mse
+    - mae
+  embed:
+    layer: config
+    default: learned
+    choices:
+    - timeF
+    - fixed
+    - learned
+allowed_paths:
+- out/
+- logs/
+- checkpoints/
+- results/
+- test_results/
+metrics:
+- etth1_96_mse
+- etth1_192_mse
+- etth1_336_mse
+- etth1_720_mse
+- etth2_96_mse
+- etth2_192_mse
+- etth2_336_mse
+- etth2_720_mse
+- etth1_96_mae
+- etth1_192_mae
+- etth1_336_mae
+- etth1_720_mae
+- etth2_96_mae
+- etth2_192_mae
+- etth2_336_mae
+- etth2_720_mae

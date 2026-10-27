@@ -1,0 +1,194 @@
+# written by `gapfinder harness`; read HARNESS.md and approve the commands
+name: harness-c7
+base: 8efa00ce-6e81-4277-8735-1142bdaa9798
+source: C:\Users\Legion\AppData\Local\Temp\claude\c--Users-Legion-Downloads-nvidia-hackathon\e8c91548-6b05-48d1-bf91-8a391c52c901\scratchpad\b5\b5b\repo
+run:
+  command: e="{gf_paper_era_code}"; if [ "$e" = 1 ]; then cp -rf "${GF_ERA_DIR:-/opt/gf_paper_era}/." ./; elif [ "$e" != 0 ]; then d="${GF_ERA_REL:-/tmp/gf_era}/$e"; [ -d "$d" ] || "${PYTHON:-python}" gf_harness/era_fetch.py
+    "$e" "$d" >/dev/null 2>&1 || echo "GF_ERA_FETCH_FAIL $e" >&2; cp -rf "$d/." ./; fi; mkdir -p out; rm -f out/run*.log; GF_SEED=$("${PYTHON:-python}" -c "import os, zlib; print(zlib.crc32(os.environ.get('RUN_TAG',
+    'x').encode('utf-8')) % 100000)"); r={shard}; (timeout ${GF_TIME_CUT:-0} "${GF_BASH:-bash}" -c '"${PYTHON:-python}" sdcn.py --name acm --k {k} --lr {lr} --n_clusters {n_clusters} --n_z {n_z}') > out/run{shard}.log
+    2>&1; "${PYTHON:-python}" gf_harness/emit.py
+  output: stdout
+  format: kv
+  timeout: 3300
+  shards:
+  - '1'
+  - '2'
+  - '3'
+  - '4'
+  - '5'
+  - '6'
+  - '7'
+  - '8'
+  - '9'
+  - '10'
+  shard_mean: true
+  time_cut: true
+knobs:
+  k:
+    layer: config
+    default: '3'
+  lr:
+    layer: config
+    default: 1e-3
+  n_clusters:
+    layer: config
+    default: '3'
+  n_z:
+    layer: config
+    default: '10'
+  gf_paper_era_code:
+    layer: environment
+    default: '0'
+    choices:
+    - '0'
+    - '1'
+allowed_paths:
+- out/
+metrics:
+- c_z_acc
+- c_z_nmi
+- c_z_ari
+- c_z_f1
+- c_q_acc
+- c_q_nmi
+- c_q_ari
+- c_q_f1
+- c_z_acc__0
+- c_z_acc__1
+- c_z_acc__2
+- c_z_nmi__0
+- c_z_nmi__1
+- c_z_nmi__2
+- c_z_ari__0
+- c_z_ari__1
+- c_z_ari__2
+- c_z_f1__0
+- c_z_f1__1
+- c_z_f1__2
+- c_q_acc__0
+- c_q_acc__1
+- c_q_acc__2
+- c_q_nmi__0
+- c_q_nmi__1
+- c_q_nmi__2
+- c_q_ari__0
+- c_q_ari__1
+- c_q_ari__2
+- c_q_f1__0
+- c_q_f1__1
+- c_q_f1__2
+- c_q_acc__x_best
+- c_q_acc__x_argbest
+- c_q_acc__x_len
+- c_q_acc__x_last5
+- c_q_acc__x_bestval
+- c_q_acc__x_attarget
+- c_q_acc__x_atbestval
+- c_q_acc__x_maxrun
+- c_q_acc__x_minrun
+- c_q_acc__x_medrun
+- c_q_ari__x_best
+- c_q_ari__x_argbest
+- c_q_ari__x_len
+- c_q_ari__x_last5
+- c_q_ari__x_bestval
+- c_q_ari__x_attarget
+- c_q_ari__x_atbestval
+- c_q_ari__x_maxrun
+- c_q_ari__x_minrun
+- c_q_ari__x_medrun
+- c_q_f1__x_best
+- c_q_f1__x_argbest
+- c_q_f1__x_len
+- c_q_f1__x_last5
+- c_q_f1__x_bestval
+- c_q_f1__x_attarget
+- c_q_f1__x_atbestval
+- c_q_f1__x_maxrun
+- c_q_f1__x_minrun
+- c_q_f1__x_medrun
+- c_q_nmi__x_best
+- c_q_nmi__x_argbest
+- c_q_nmi__x_len
+- c_q_nmi__x_last5
+- c_q_nmi__x_bestval
+- c_q_nmi__x_attarget
+- c_q_nmi__x_atbestval
+- c_q_nmi__x_maxrun
+- c_q_nmi__x_minrun
+- c_q_nmi__x_medrun
+- c_z_acc__x_best
+- c_z_acc__x_argbest
+- c_z_acc__x_len
+- c_z_acc__x_last5
+- c_z_acc__x_bestval
+- c_z_acc__x_attarget
+- c_z_acc__x_atbestval
+- c_z_acc__x_maxrun
+- c_z_acc__x_minrun
+- c_z_acc__x_medrun
+- c_z_ari__x_best
+- c_z_ari__x_argbest
+- c_z_ari__x_len
+- c_z_ari__x_last5
+- c_z_ari__x_bestval
+- c_z_ari__x_attarget
+- c_z_ari__x_atbestval
+- c_z_ari__x_maxrun
+- c_z_ari__x_minrun
+- c_z_ari__x_medrun
+- c_z_f1__x_best
+- c_z_f1__x_argbest
+- c_z_f1__x_len
+- c_z_f1__x_last5
+- c_z_f1__x_bestval
+- c_z_f1__x_attarget
+- c_z_f1__x_atbestval
+- c_z_f1__x_maxrun
+- c_z_f1__x_minrun
+- c_z_f1__x_medrun
+- c_z_nmi__x_best
+- c_z_nmi__x_argbest
+- c_z_nmi__x_len
+- c_z_nmi__x_last5
+- c_z_nmi__x_bestval
+- c_z_nmi__x_attarget
+- c_z_nmi__x_atbestval
+- c_z_nmi__x_maxrun
+- c_z_nmi__x_minrun
+- c_z_nmi__x_medrun
+- gf_runs
+library:
+  era:
+    repo: https://github.com/bdy9527/SDCN
+    commit: f97d142bc4ff86129ccaae180ad106b21c2277a8
+    sha: 0e0af8e10e86c7fefafbbdb019a4afb5795e0d20
+    date: '2020-02-22'
+    message: Add files via upload
+    kind: before
+    commits:
+    - sha: 68fb8fc67f6f1e2bbc4229a599bea87477aaee4a
+      date: '2020-02-22'
+      message: Add files via upload
+    - sha: b3809e52c2f56453e4eec699d583519555996573
+      date: '2020-02-22'
+      message: Delete sdcn.py
+    - sha: 0e0af8e10e86c7fefafbbdb019a4afb5795e0d20
+      date: '2020-02-22'
+      message: Add files via upload
+    - sha: e984abb3fb2cb4ef8cb2f7519b2e35683166dddf
+      date: '2020-04-27'
+      message: Update README.md
+    - sha: 05167b8db6d262c239d3af2ba31ccffd5df2aefb
+      date: '2020-04-27'
+      message: Update README.md
+    - sha: b7285d87df517f35f4c8e94d0fd771fed3d82201
+      date: '2020-04-27'
+      message: Update README.md
+    - sha: 7ce815305a381b619ee8480680ebd1369256ecf1
+      date: '2020-07-01'
+      message: Update README.md
+    - sha: f97d142bc4ff86129ccaae180ad106b21c2277a8
+      date: '2020-12-02'
+      message: Update sdcn.py
+    files: 7
