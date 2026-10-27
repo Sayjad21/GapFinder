@@ -200,8 +200,9 @@ def scoreboard() -> dict:
 @app.post("/api/live")
 def live() -> JSONResponse:
     """Live mode needs Sandboxes access and an access code; until then it refuses politely and spends nothing."""
-    return JSONResponse({"ok": False, "reason": "Live mode is not enabled on this deployment. "
-                         "Replay mode shows recorded runs at no cost."}, status_code=503)
+    return JSONResponse({"ok": False, "reason": "This deployment replays recorded investigations; starting a new one "
+                         "needs live mode, which runs every experiment in Sandboxes, and it isn't switched on here."},
+                        status_code=503)
 
 
 if WEB_DIST.exists():

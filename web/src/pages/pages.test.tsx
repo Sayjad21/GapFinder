@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import axe from "axe-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App.tsx";
 import { primeShowcase } from "../data.ts";
 import { EVENTS, RUN, SCOREBOARD, SHOWCASE } from "../test/fixtures.ts";
@@ -16,6 +16,7 @@ vi.mock("../api.ts", async (orig) => {
       events: async () => fx.EVENTS,
       scoreboard: async () => fx.SCOREBOARD,
       showcase: async () => fx.SHOWCASE,
+      submit: async () => ({ ok: false, reason: "This public site replays recorded investigations; it can’t start new ones." }),
     },
   };
 });
@@ -46,6 +47,7 @@ describe("every page renders and passes axe", () => {
     ["#/run/synthetic~planted~a", "FastGCN (on c7)"],
     ["#/evidence", "The evidence"],
     ["#/how", "How it works"],
+    ["#/check", "Check a paper"],
   ];
   for (const [hash, h1] of PAGES) {
     it(hash, async () => {
@@ -134,5 +136,59 @@ describe("the synthetic page", () => {
     expect(screen.getByText(/4 solved across 3 papers/)).toBeTruthy();
     expect(screen.getByText("FastGCN").closest("summary")?.textContent).toMatch(/2 solved.*1 setting, 1 scale convention/);
     expect(screen.getByText("edit: reduce with sum instead (src/train.py:58)")).toBeTruthy();
+  });
+});
+
+const pdf = (name: string, text: string) => new File([Uint8Array.from(text, (c) => c.charCodeAt(0))], name, { type: "application/pdf" });
+
+describe("checking a paper", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("says what is missing, takes a PDF and a repository, and makes the request without starting it", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ description: "The sample codes for FastGCN", language: "Python",
+      stargazers_count: 400, pushed_at: "2019-01-01T00:00:00Z", size: 5196, license: null, archived: false, default_branch: "master" }))));
+    await open("#/check", "Check a paper");
+    const start = screen.getByRole("button", { name: "Start the investigation" });
+    fireEvent.click(start);
+    expect(await screen.findByText("Add the paper’s PDF or its arXiv link.")).toBeTruthy();
+    expect(screen.getByText("Add the repository the paper released.")).toBeTruthy();
+    const drop = screen.getByLabelText(/Drop the paper’s PDF here/);
+    expect(document.activeElement).toBe(drop);
+
+    fireEvent.change(drop, { target: { files: [new File(["just text"], "notes.txt", { type: "text/plain" })] } });
+    expect(await screen.findByText(/That file isn’t a PDF/)).toBeTruthy();
+    fireEvent.change(drop, { target: { files: [pdf("1801.10247v2.pdf", "%PDF-1.4\n<< /Type /Page >>\n<< /Type /Page >>\n<< /Title (FastGCN: Fast Learning with GCNs) >>")] } });
+    expect(await screen.findByText("1801.10247v2.pdf")).toBeTruthy();
+    expect(screen.getByText(/2 pages/)).toBeTruthy();
+    expect((screen.getByLabelText(/^Title/) as HTMLInputElement).value).toBe("FastGCN: Fast Learning with GCNs");
+    expect((screen.getByLabelText(/^arXiv ID/) as HTMLInputElement).value).toBe("1801.10247v2");
+
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "https://github.com/matenure/FastGCN" } });
+    expect(await screen.findByText("The sample codes for FastGCN", undefined, { timeout: 2000 })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "200 runs" }));
+    fireEvent.click(start);
+
+    expect(await screen.findByRole("heading", { name: "Your request is ready" })).toBeTruthy();
+    expect(screen.getByText("Not started")).toBeTruthy();
+    expect(screen.getByText(/can’t start new ones/)).toBeTruthy();
+    const script = document.querySelector("pre.script")?.textContent ?? "";
+    expect(script).toContain("git clone https://github.com/matenure/FastGCN work/fastgcn");
+    expect(script).toContain("--max-runs 200");
+    expect(await violations(document.body)).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Change the request" }));
+    expect((screen.getByLabelText("Repository") as HTMLInputElement).value).toBe("https://github.com/matenure/FastGCN");
+  });
+
+  it("fills in a real example, and keeps going when GitHub can't be reached", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
+    await open("#/check", "Check a paper");
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "someone/elsewhere" } });
+    expect(await screen.findByText(/couldn’t be reached/, undefined, { timeout: 2000 })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Fill in an example" }));
+    expect((screen.getByLabelText("Repository") as HTMLInputElement).value).toBe("https://github.com/matenure/FastGCN");
+    fireEvent.click(screen.getByRole("button", { name: "Start the investigation" }));
+    expect(await screen.findByRole("heading", { name: "Your request is ready" })).toBeTruthy();
+    expect(screen.getByText("Number").nextElementSibling?.textContent).toBe("Table 5, transductive Cora accuracy · the paper reports 0.818");
   });
 });

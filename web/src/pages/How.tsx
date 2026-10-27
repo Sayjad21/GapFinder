@@ -30,6 +30,7 @@ export default function How() {
           <li>Find a cause the paper never states and the code doesn’t express, such as a different model variant behind the number.</li>
           <li>Prove itself on new papers. Its blind record on sealed papers is 1 of 8, from before this work; a fresh blind batch is the next test.</li>
         </ul>
+        <p className="spaced-s">To try it on a paper of your own, <a href="#/check">check a paper</a>.</p>
       </section>
       <section className="section" aria-labelledby="words-title">
         <header><h2 id="words-title">Words used on this site</h2>

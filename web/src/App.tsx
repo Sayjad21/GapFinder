@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
 import Search from "./components/Search.tsx";
 import { href, parseHash } from "./nav.ts";
-import { Loading, ThemeToggle } from "./ui.tsx";
+import { Loading, PageBoundary, ThemeToggle } from "./ui.tsx";
 import Home from "./pages/Home.tsx";
 
 // The home page ships in the first bundle; every other page loads when it is first opened.
@@ -11,6 +11,7 @@ const Synthetic = lazy(() => import("./pages/Synthetic.tsx"));
 const RunPage = lazy(() => import("./pages/RunPage.tsx"));
 const How = lazy(() => import("./pages/How.tsx"));
 const Evidence = lazy(() => import("./pages/Evidence.tsx"));
+const Check = lazy(() => import("./pages/Check.tsx"));
 
 const NAV: [string, string][] = [["/cases", "Cases"], ["/synthetic", "Known answers"], ["/evidence", "Evidence"], ["/how", "How it works"]];
 
@@ -61,6 +62,7 @@ export default function App() {
   else if (top === "run" && a) page = <RunPage id={[a, b].filter(Boolean).join("/")} />;
   else if (top === "how") page = <How />;
   else if (top === "evidence") page = <Evidence />;
+  else if (top === "check") page = <Check />;
   else page = <NotFound />;
 
   const current = (p: string) => section === p || (p === "/cases" && top === "case") || (p === "/synthetic" && top === "run");
@@ -72,13 +74,16 @@ export default function App() {
           <Wordmark />
           <nav className="mainnav" aria-label="Main">
             {NAV.map(([p, t]) => <a key={p} href={`#${p}`} aria-current={current(p) ? "page" : undefined}>{t}</a>)}
+            <a className="nav-cta" href="#/check" aria-current={top === "check" ? "page" : undefined}>Check a paper</a>
           </nav>
           <Search />
           <ThemeToggle />
         </div>
       </header>
       <main id="main" ref={mainRef} tabIndex={-1}>
-        <Suspense fallback={<div className="shell"><Loading what="Loading the page…" /></div>}>{page}</Suspense>
+        <PageBoundary key={key}>
+          <Suspense fallback={<div className="shell"><Loading what="Loading the page…" /></div>}>{page}</Suspense>
+        </PageBoundary>
       </main>
       <footer className="colophon">
         <div className="shell">

@@ -11,7 +11,7 @@ import { createGzip } from "node:zlib";
 const LIGHTHOUSE = "lighthouse@13.4.1";
 // every page the site has: each route once, a real case and a planted run for the two templates
 const PAGES = ["#/", "#/cases", "#/case/fastgcn-v15", "#/synthetic", "#/synthetic?tab=gapbench", "#/run/synthetic~planted~L1-b3a-s2-2-c1",
-  "#/evidence", "#/how"];
+  "#/evidence", "#/how", "#/check"];
 const FLOOR = { accessibility: 0.95, "best-practices": 0.9 };
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".md": "text/markdown",
   ".svg": "image/svg+xml" };

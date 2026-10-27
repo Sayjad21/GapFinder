@@ -143,11 +143,19 @@ src/ui.tsx          formatting, verdict word and glyph, theme, tooltips
 src/words.tsx       the vocabulary: v-names and standing, plain labels, the glossary and <Term>
 src/replay.ts       the event fold, the stage timeline, the cached fold behind seeking
 src/story.ts        the same events as the narrator's chapters and as the Hunt's runs
+src/check.ts        check a paper: reading the PDF and the links in the browser, the request and its commands
 src/components/     Gauge, Hero, GapField, Hunt, Record (version strips, planted chart), Replay, Report, Scoreboard,
                     Search (/ or Ctrl+K), SectionNav (a long page's sticky contents)
 src/pages/          one file per page; every page but Home loads on first visit
 src/test/           fixtures and setup; *.test.ts(x) sit beside what they test
 ```
+
+**Check a paper** (`#/check`) takes the paper as a PDF or an arXiv link, the code as a public GitHub repository and,
+optionally, the number to explain. The PDF is read in the browser (its page count and title, when they are stored
+uncompressed) and never leaves it; the repository is looked up on GitHub's public API. The request goes to the
+server's `POST /api/live`, which starts nothing until live mode is switched on; the static site makes the request
+locally. Either way the page ends on the request itself: what a deployment would do with it, step by step, and the
+exact `gapfinder` commands, to copy or download.
 
 Styles live in `src/styles.css` as tokens and classes. Inline styles are kept for computed values only: a tooltip's
 position, a strip's count, the replay's progress.

@@ -1,9 +1,24 @@
-import { useEffect, useState, type PointerEvent, type FocusEvent, type ReactNode } from "react";
+import { Component, useEffect, useState, type PointerEvent, type FocusEvent, type ReactNode } from "react";
 import type { Changes, VerdictWord } from "./types.ts";
 
 export function Loading({ what = "Loading…", error }: { what?: string; error?: Error | null }) {
   if (error) return <p className="notice" role="alert">Couldn’t load the showcase data ({String(error.message || error)}). Start the server with <code>uvicorn gapfinder.api.server:app</code> and reload.</p>;
   return <p className="status-line" aria-live="polite">{what}</p>;
+}
+
+// A page that fails to render says so in a sentence, and the rest of the site keeps working
+export class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div className="shell">
+        <h1 className="not-found">This page couldn’t be shown</h1>
+        <p>Something on it failed to load. <a href="#/">Go to the start</a>, or reload the page.</p>
+      </div>
+    );
+  }
 }
 
 // ------------------------------------------------------------------ numbers
