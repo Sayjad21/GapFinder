@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
 import Gauge from "./Gauge.jsx";
+import HeroInstrument from "./Hero.jsx";
 import { PlantedChart, VersionStrips } from "./Record.jsx";
 import Replay from "./Replay.jsx";
 import Report from "./Report.jsx";
@@ -43,12 +44,8 @@ function gaugeOf(report) {
 // ------------------------------------------------------------------ home
 export function Home() {
   const { data, error } = useShowcase();
-  const [pick, setPick] = useState(HERO_CASES[0]);
-  const [play, setPlay] = useState(1);
   if (!data) return <div className="shell"><Loading error={error} /></div>;
   const cases = HERO_CASES.map((s) => data.real.find((r) => r.slug === s)).filter(Boolean);
-  const c = cases.find((x) => x.slug === pick) || cases[0];
-  const cur = c?.versions[c.current];
   const tally = data.real_tally || {};
   const p7 = data.planted_totals.filter((t) => t.adopted).sort((a, b) => b.seed - a.seed || +b.version.slice(1) - +a.version.slice(1))[0];
   const dev = [...data.dev_suite].reverse().find((d) => d.adopted !== false) || data.dev_suite[data.dev_suite.length - 1];
@@ -58,24 +55,7 @@ export function Home() {
         <h1 id="hero-title">When a paper’s number and its code’s number disagree, GapFinder finds out why.</h1>
         <p className="lede">It runs the released code in cloud sandboxes, changes one condition at a time, and ends each claim with a
           verdict: the cause, part of it, or a plain statement that nothing it could change explains the gap.</p>
-        {c && (
-          <div className="hero-instrument">
-            <div className="case-switch" role="group" aria-label="Choose a case">
-              {cases.map((x) => (
-                <button key={x.slug} type="button" className="seg" aria-pressed={x.slug === c.slug}
-                        onClick={() => { setPick(x.slug); setPlay((k) => k + 1); }}>{SHORT[x.slug] || x.title}</button>
-              ))}
-            </div>
-            <Gauge key={c.slug} g={cur.gauge} autoplay playKey={play} label={c.title} />
-            <div className="closed-by">
-              <div>
-                <p className="what">{cur.reading}</p>
-                <p className="small">{c.title}, {c.venue}. Documented cause: {c.documented_cause} Found in {cur.gauge?.runs} sandbox runs.</p>
-              </div>
-              <a className="btn quiet" href={href(`/case/${c.slug}`)}>Open this case</a>
-            </div>
-          </div>
-        )}
+        {cases.length > 0 && <HeroInstrument cases={cases} short={SHORT} href={href} />}
       </section>
 
       <section className="section" aria-labelledby="record-title">
