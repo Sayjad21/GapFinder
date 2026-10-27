@@ -1,7 +1,9 @@
-export async function getJSON(path) {
+import type { GfEvent, Run, Scoreboard, Showcase } from "./types.ts";
+
+export async function getJSON<T>(path: string): Promise<T> {
   const r = await fetch(path);
   if (!r.ok) throw new Error(`${path}: ${r.status}`);
-  return r.json();
+  return r.json() as Promise<T>;
 }
 
 // VITE_STATIC=1 builds the server-free site (GitHub Pages): data comes from files written by
@@ -9,8 +11,17 @@ export async function getJSON(path) {
 export const STATIC = import.meta.env.VITE_STATIC === "1";
 const enc = encodeURIComponent;
 
-export const api = STATIC ? {
-  runs: () => getJSON("data/runs.json"),
+export interface Api {
+  run: (id: string) => Promise<Run>;
+  scoreboard: () => Promise<Scoreboard>;
+  showcase: () => Promise<Showcase>;
+  events: (id: string) => Promise<GfEvent[]>;
+  reportMdUrl: (id: string) => string;
+  issueDraftUrl: (id: string) => string;
+  runJsonUrl: (id: string) => string;
+}
+
+export const api: Api = STATIC ? {
   run: (id) => getJSON(`data/runs/${enc(id)}.json`),
   scoreboard: () => getJSON("data/scoreboard.json"),
   showcase: () => getJSON("data/showcase.json"),
@@ -19,7 +30,6 @@ export const api = STATIC ? {
   issueDraftUrl: (id) => `data/runs/${enc(id)}/issue_draft.md`,
   runJsonUrl: (id) => `data/runs/${enc(id)}.json`,
 } : {
-  runs: () => getJSON("/api/runs"),
   run: (id) => getJSON(`/api/runs/${enc(id)}`),
   scoreboard: () => getJSON("/api/scoreboard"),
   showcase: () => getJSON("/api/showcase"),
@@ -29,9 +39,10 @@ export const api = STATIC ? {
   runJsonUrl: (id) => `/api/runs/${enc(id)}`,
 };
 
-export const pct = (x) => (x === null || x === undefined ? "n/a" : `${x >= 0 ? "+" : ""}${(x * 100).toFixed(1)}%`);
+export const pct = (x: number | null | undefined): string =>
+  (x === null || x === undefined ? "n/a" : `${x >= 0 ? "+" : ""}${(x * 100).toFixed(1)}%`);
 
-export const LABEL_CLASS = {
+export const LABEL_CLASS: Record<string, string> = {
   Explained: "ok",
   "Paper-artifact inconsistency": "ok",
   "Fits but unsupported": "warn",

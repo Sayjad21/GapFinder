@@ -1,18 +1,17 @@
-import { useEffect, useRef, useState } from "react";
-import { href } from "./nav.js";
-import { Case, Cases, Home, How, RunPage } from "./pages.jsx";
-import Evidence from "./pages/Evidence.jsx";
-import Synthetic from "./pages/Synthetic.jsx";
-import { ThemeToggle } from "./ui.jsx";
+import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
+import { href, parseHash } from "./nav.ts";
+import { Loading, ThemeToggle } from "./ui.tsx";
+import Home from "./pages/Home.tsx";
 
-// Hash routes (see nav.js): the path picks the page, the query holds its state
-function parse() {
-  const raw = window.location.hash.replace(/^#/, "") || "/";
-  const [path, qs = ""] = raw.split("?");
-  return { parts: path.split("/").filter(Boolean).map(decodeURIComponent), query: new URLSearchParams(qs) };
-}
+// The home page ships in the first bundle; every other page loads when it is first opened.
+const Cases = lazy(() => import("./pages/Cases.tsx"));
+const Case = lazy(() => import("./pages/Case.tsx"));
+const Synthetic = lazy(() => import("./pages/Synthetic.tsx"));
+const RunPage = lazy(() => import("./pages/RunPage.tsx"));
+const How = lazy(() => import("./pages/How.tsx"));
+const Evidence = lazy(() => import("./pages/Evidence.tsx"));
 
-const NAV = [["/cases", "Cases"], ["/synthetic", "Synthetic"], ["/evidence", "Evidence"], ["/how", "How it works"]];
+const NAV: [string, string][] = [["/cases", "Cases"], ["/synthetic", "Synthetic"], ["/evidence", "Evidence"], ["/how", "How it works"]];
 
 function Wordmark() {
   return (
@@ -27,11 +26,15 @@ function Wordmark() {
   );
 }
 
+function NotFound() {
+  return <div className="shell"><h1 className="not-found">Nothing here</h1><p>That page doesn’t exist. <a href="#/">Go to the start</a>.</p></div>;
+}
+
 export default function App() {
-  const [route, setRoute] = useState(parse);
-  const mainRef = useRef(null);
+  const [route, setRoute] = useState(() => parseHash(window.location.hash));
+  const mainRef = useRef<HTMLElement>(null);
   useEffect(() => {
-    const on = () => setRoute(parse());
+    const on = () => setRoute(parseHash(window.location.hash));
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
@@ -44,21 +47,21 @@ export default function App() {
     const h = mainRef.current?.querySelector("h1");
     if (h) { h.setAttribute("tabindex", "-1"); h.focus({ preventScroll: true }); }
   }, [key]);
-  const navigate = (path, q) => { window.location.hash = href(path, q).slice(1); };
+  const navigate = (path: string, q: Record<string, string>) => { window.location.hash = href(path, q).slice(1); };
   const [top, a, b] = route.parts;
   const section = `/${top || ""}`;
 
-  let page;
+  let page: ReactNode;
   if (!top) page = <Home />;
   else if (top === "cases") page = <Cases />;
-  else if (top === "case") page = <Case slug={a} query={route.query} />;
+  else if (top === "case" && a) page = <Case slug={a} query={route.query} />;
   else if (top === "synthetic") page = <Synthetic query={route.query} navigate={navigate} />;
-  else if (top === "run") page = <RunPage id={[a, b].filter(Boolean).join("/")} />;
+  else if (top === "run" && a) page = <RunPage id={[a, b].filter(Boolean).join("/")} />;
   else if (top === "how") page = <How />;
   else if (top === "evidence") page = <Evidence />;
-  else page = <div className="shell"><h1 style={{ marginTop: 64 }}>Nothing here</h1><p>That page doesn’t exist. <a href="#/">Go to the start</a>.</p></div>;
+  else page = <NotFound />;
 
-  const current = (p) => section === p || (p === "/cases" && top === "case") || (p === "/synthetic" && top === "run");
+  const current = (p: string) => section === p || (p === "/cases" && top === "case") || (p === "/synthetic" && top === "run");
   return (
     <>
       <a className="skip" href="#main" onClick={(e) => { e.preventDefault(); mainRef.current?.focus(); }}>Skip to the content</a>
@@ -71,7 +74,9 @@ export default function App() {
           <ThemeToggle />
         </div>
       </header>
-      <main id="main" ref={mainRef} tabIndex={-1} style={{ outline: "none" }}>{page}</main>
+      <main id="main" ref={mainRef} tabIndex={-1}>
+        <Suspense fallback={<div className="shell"><Loading what="Loading the page…" /></div>}>{page}</Suspense>
+      </main>
       <footer className="colophon">
         <div className="shell">
           <p>GapFinder runs released code in Nebius Token Factory Sandboxes and reads papers with NVIDIA Nemotron. Every number on this

@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { PlantedChart, VersionStrips } from "../Record.jsx";
-import Scoreboard from "../Scoreboard.jsx";
-import { Loading, useShowcase } from "../ui.jsx";
-import { Term, vName, versionStatus } from "../words.jsx";
+import { PlantedChart, VersionStrips } from "../components/Record.tsx";
+import Scoreboard from "../components/Scoreboard.tsx";
+import { useShowcase } from "../data.ts";
+import type { Showcase } from "../types.ts";
+import { Loading } from "../ui.tsx";
+import { Term, vName, versionStatus } from "../words.tsx";
 
-const KIND_SHORT = { setting: "settings", scale: "scale", data: "data cuts", code: "code", reporting: "reporting" };
+const KIND_SHORT: Record<string, string> = { setting: "settings", scale: "scale", data: "data cuts", code: "code", reporting: "reporting" };
 
-function PlantedTable({ data }) {
+function PlantedTable({ data }: { data: Showcase }) {
   const [open, setOpen] = useState(false);
   const rows = [...data.planted_totals].sort((a, b) => a.seed - b.seed || +a.version.slice(1) - +b.version.slice(1));
   return (
@@ -36,16 +38,20 @@ function PlantedTable({ data }) {
   );
 }
 
+const HEAD = (
+  <section className="hero page-head">
+    <h1>The evidence</h1>
+    <p className="lede">Every measurement, with what it can and can’t show. Only the <Term k="sealed">sealed blind papers</Term> are
+      clean evidence; the rest were made while the engine was being built.</p>
+  </section>
+);
+
 export default function Evidence() {
   const { data, error } = useShowcase();
-  if (!data) return <div className="shell"><Loading error={error} /></div>;
+  if (!data) return <div className="shell">{HEAD}<Loading error={error} /></div>;
   return (
     <div className="shell">
-      <section className="hero page-head">
-        <h1>The evidence</h1>
-        <p className="lede">Every measurement, with what it can and can’t show. Only the <Term k="sealed">sealed blind papers</Term> are
-          clean evidence; the rest were made while the engine was being built.</p>
-      </section>
+      {HEAD}
       <section className="section" aria-labelledby="ev-real">
         <header><h2 id="ev-real">Real papers, re-run post-hoc</h2>
           <p>Sixteen papers with documented causes. A demonstration: the fixes were found on them.</p></header>

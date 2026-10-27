@@ -1,42 +1,53 @@
 import { useEffect, useRef, useState } from "react";
-import { digits, num, prefersReducedMotion, signedPct } from "./ui.jsx";
+import type { GaugeData } from "../types.ts";
+import { digits, num, prefersReducedMotion, signedPct } from "../ui.tsx";
 
 // The gap gauge: a measuring rule with two jaws, the paper’s reading and the code’s, and the gap highlighted between
 // them. With an answer, the code’s jaw moves to its reading after GapFinder’s change and the highlight shrinks to what
 // is left; a faint line, labelled, stays where the code started. Every reading is labelled on the rule itself, so the
-// gauge needs no legend. `g`: {paper, code, after, band (relative), metric, figure}. `show`: "before" or "after".
-// `compact`: one-line labels and no caption (the replay's claims); `live`: a reading the code's jaw follows (the closest
-// run so far), labelled `liveLabel`.
+// gauge needs no legend. `show`: "before" or "after". `compact`: one-line labels and no caption (the replay's other
+// claims); `live`: a reading the code's jaw follows (the closest run so far), labelled `liveLabel`.
 
 const H0 = 204, HC = 108;
 const Y0 = { pLabel: 20, pVal: 46, jawTop: 58, gLabel: 74, gVal: 90, gapTop: 94, gapBot: 112, axis: 120, tickLab: 142, jawBot: 152,
              cLabel: 176, cVal: 198 };
-const YC = { pLabel: 14, jawTop: 22, gapTop: 38, gapBot: 50, axis: 56, tickLab: 74, jawBot: 80, cLabel: 100 };
+const YC = { pLabel: 14, pVal: 14, jawTop: 22, gLabel: 0, gVal: 0, gapTop: 38, gapBot: 50, axis: 56, tickLab: 74, jawBot: 80, cLabel: 100, cVal: 100 };
 
-function niceTicks(lo, hi, n = 6) {
+function niceTicks(lo: number, hi: number, n = 6): { ticks: number[]; step: number } {
   const raw = (hi - lo) / n;
   const mag = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) || raw;
-  const out = [];
+  const out: number[] = [];
   for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-12; v += step) out.push(+v.toFixed(12));
   return { ticks: out, step };
 }
 
-const easeOut = (t) => 1 - (1 - t) ** 3;
+const easeOut = (t: number) => 1 - (1 - t) ** 3;
+
+export interface GaugeProps {
+  g: GaugeData | null;
+  show?: "before" | "after";
+  playKey?: number;
+  label?: string;
+  compact?: boolean;
+  live?: number | null;
+  liveLabel?: string;
+  caption?: boolean;
+}
 
 export default function Gauge({ g, show = "after", playKey = 0, label, compact = false, live = null,
-                                liveLabel = "closest run so far", caption = true }) {
+                                liveLabel = "closest run so far", caption = true }: GaugeProps) {
   const H = compact ? HC : H0, Y = compact ? YC : Y0;
-  const ref = useRef(null);
+  const ref = useRef<HTMLElement>(null);
   const [w, setW] = useState(760);
   useEffect(() => {
-    if (!ref.current) return undefined;
+    if (!ref.current || typeof ResizeObserver === "undefined") return undefined;
     const ro = new ResizeObserver(([e]) => setW(Math.max(280, Math.round(e.contentRect.width))));
     ro.observe(ref.current);
     return () => ro.disconnect();
   }, []);
 
-  const hasAfter = g && g.after !== null && g.after !== undefined;
+  const hasAfter = Boolean(g && g.after !== null && g.after !== undefined);
   const target = hasAfter && show === "after" ? 1 : 0;
   const reduced = prefersReducedMotion();
   const [p, setP] = useState(target);
@@ -51,7 +62,7 @@ export default function Gauge({ g, show = "after", playKey = 0, label, compact =
     lastKey.current = playKey;
     const p0 = replay ? 0 : from.current;
     const dur = 1400;
-    const tick = (now) => {
+    const tick = (now: number) => {
       const t = Math.min(1, (now - start) / dur);
       const v = p0 + (target - p0) * easeOut(t);
       from.current = v;
@@ -63,26 +74,27 @@ export default function Gauge({ g, show = "after", playKey = 0, label, compact =
   }, [target, playKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!g) return null;
+  const after = hasAfter ? (g.after as number) : null;
   const band = (g.band || 0) * Math.abs(g.paper);
-  const vals = [g.paper, g.code, ...(hasAfter ? [g.after] : []), ...(live !== null ? [live] : []), g.paper - band, g.paper + band];
+  const vals = [g.paper, g.code, ...(after !== null ? [after] : []), ...(live !== null ? [live] : []), g.paper - band, g.paper + band];
   const lo0 = Math.min(...vals), hi0 = Math.max(...vals);
   const pad = (hi0 - lo0) * 0.28 || Math.abs(g.paper) * 0.04 || 1;
   const lo = lo0 - pad, hi = hi0 + pad;
   const L = 18, R = 18;
-  const x = (v) => L + ((v - lo) / (hi - lo)) * (w - L - R);
+  const x = (v: number) => L + ((v - lo) / (hi - lo)) * (w - L - R);
   const { ticks, step } = niceTicks(lo, hi, w < 480 ? 4 : 7);
-  const minor = [];
+  const minor: number[] = [];
   for (let v = Math.ceil(lo / (step / 5)) * (step / 5); v <= hi; v += step / 5) minor.push(v);
-  const d = digits([g.paper, g.code, ...(hasAfter ? [g.after] : [])]);
+  const d = digits([g.paper, g.code, ...(after !== null ? [after] : [])]);
   const td = Math.max(0, Math.min(4, Math.ceil(-Math.log10(step)) + (step / 10 ** Math.floor(Math.log10(step)) === 2.5 ? 1 : 0)));
 
-  const codeNow = live !== null ? live : hasAfter ? g.code + (g.after - g.code) * p : g.code;
+  const codeNow = live !== null ? live : after !== null ? g.code + (after - g.code) * p : g.code;
   const xp = x(g.paper), xc = x(codeNow), xc0 = x(g.code);
   const gapNow = (codeNow - g.paper) / Math.abs(g.paper);
   const gapW = Math.abs(xp - xc);
   const left = Math.min(xp, xc);
   const slant = Math.min(5, gapW / 4);
-  const anchor = (xx) => (xx < 90 ? "start" : xx > w - 90 ? "end" : "middle");
+  const anchor = (xx: number) => (xx < 90 ? "start" : xx > w - 90 ? "end" : "middle");
   const moved = (hasAfter && p > 0.02) || (live !== null && live !== g.code);
   const codeLabel = live !== null ? liveLabel : hasAfter && p > 0.5 ? "after GapFinder’s change" : "the code, as released";
   // the start line's label sits on the far side from the paper, so it never crosses the paper's jaw
@@ -93,8 +105,9 @@ export default function Gauge({ g, show = "after", playKey = 0, label, compact =
   const besideRight = moved ? ghostLeft : Math.max(xp, xc) + 60 < w;
   const gapX = inside ? left + gapW / 2 : besideRight ? Math.max(xp, xc) + 8 : left - 8;
   const desc = `${label ? `${label}. ` : ""}The paper reports ${num(g.paper, d)}. The code, as released, gives ${num(g.code, d)}, a gap of `
-    + `${signedPct((g.code - g.paper) / Math.abs(g.paper))}.` + (hasAfter ? ` After GapFinder’s change it gives ${num(g.after, d)}, `
-    + `${signedPct((g.after - g.paper) / Math.abs(g.paper))} from the paper.` : " GapFinder changed nothing that moved it.");
+    + `${signedPct((g.code - g.paper) / Math.abs(g.paper))}.` + (after !== null ? ` After GapFinder’s change it gives ${num(after, d)}, `
+    + `${signedPct((after - g.paper) / Math.abs(g.paper))} from the paper.` : live !== null ? ` The ${liveLabel} gives ${num(live, d)}.`
+    : " GapFinder changed nothing that moved it.");
 
   return (
     <figure className="gauge" ref={ref}>
@@ -140,7 +153,7 @@ export default function Gauge({ g, show = "after", playKey = 0, label, compact =
       {!compact && caption && (g.figure || band > 0) && (
         <figcaption className="gauge-caption">
           {g.figure && <span>The paper’s number: {g.figure}.</span>}
-          {band > 0 && <span><span className="sw band" aria-hidden="true" /> Shaded on the rule: the run-to-run noise around the paper’s number, ±{(g.band * 100).toFixed(1)}%.</span>}
+          {band > 0 && <span><span className="sw band" aria-hidden="true" /> Shaded on the rule: the run-to-run noise around the paper’s number, ±{((g.band || 0) * 100).toFixed(1)}%.</span>}
         </figcaption>
       )}
     </figure>

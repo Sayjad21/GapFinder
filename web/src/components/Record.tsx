@@ -1,12 +1,14 @@
-import { useRef, useState, useEffect } from "react";
-import { Glyph, VERDICT, Verdict, useTooltip } from "./ui.jsx";
-import { vName, versionStatus } from "./words.jsx";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { href } from "../nav.ts";
+import type { PlantedTotal, Showcase, VerdictWord } from "../types.ts";
+import { Glyph, VERDICT, Verdict, useTooltip } from "../ui.tsx";
+import { vName, versionStatus } from "../words.tsx";
 
-const ORDER = ["found", "partial", "no_gap", "missed"];
-const GOOD = new Set(["found", "no_gap"]);
+const ORDER: VerdictWord[] = ["found", "partial", "no_gap", "missed"];
+const GOOD = new Set<VerdictWord>(["found", "no_gap"]);
 
 // Every real paper, one square each, per engine version: a part-to-whole that keeps each paper clickable.
-export function VersionStrips({ data }) {
+export function VersionStrips({ data }: { data: Showcase }) {
   const real = data.real, versions = data.real_versions || ["c5", "c7"];
   const tip = useTooltip();
   const [table, setTable] = useState(false);
@@ -26,14 +28,16 @@ export function VersionStrips({ data }) {
         return (
           <div className="strip-row" key={v}>
             <div className="ver">{vName(v)}<small>{versionStatus(data, v)}</small>{cells.length < n && <small>{cells.length} of {n} papers</small>}</div>
-            <div className="strip" style={{ "--n": n }} role="list" aria-label={`${vName(v)}: one square per paper`}>
+            <div className="strip" style={{ "--n": n } as CSSProperties} role="list" aria-label={`${vName(v)}: one square per paper`}>
               {cells.map(({ p, r }) => (
-                <a key={p.slug} role="listitem" className={`cell ${r.verdict}`} href={`#/case/${p.slug}${v !== p.current ? `?v=${v}` : ""}`}
-                   aria-label={`${p.title}: ${VERDICT[r.verdict]}`}
-                   onPointerEnter={(e) => tip.show(e, <><b>{p.title}</b>{VERDICT[r.verdict]} on {vName(v)}. {r.reading}</>)}
-                   onPointerLeave={tip.hide} onFocus={(e) => tip.show(e, <><b>{p.title}</b>{VERDICT[r.verdict]} on {vName(v)}.</>)} onBlur={tip.hide}>
-                  <Glyph v={r.verdict} />
-                </a>
+                <span key={p.slug} role="listitem" className="cell-item">
+                  <a className={`cell ${r.verdict}`} href={href(`/case/${p.slug}`, { v: v !== p.current ? v : undefined })}
+                     aria-label={`${p.title}: ${VERDICT[r.verdict]}`}
+                     onPointerEnter={(e) => tip.show(e, <><b>{p.title}</b>{VERDICT[r.verdict]} on {vName(v)}. {r.reading}</>)}
+                     onPointerLeave={tip.hide} onFocus={(e) => tip.show(e, <><b>{p.title}</b>{VERDICT[r.verdict]} on {vName(v)}.</>)} onBlur={tip.hide}>
+                    <Glyph v={r.verdict} />
+                  </a>
+                </span>
               ))}
             </div>
             <div className="count"><b>{good}</b> of {cells.length} right</div>
@@ -52,7 +56,7 @@ export function VersionStrips({ data }) {
               <tbody>
                 {real.map((p) => (
                   <tr key={p.slug}>
-                    <td><a href={`#/case/${p.slug}`}>{p.title}</a></td>
+                    <td><a href={href(`/case/${p.slug}`)}>{p.title}</a></td>
                     {rows.map(({ v }) => <td key={v}>{p.versions[v]?.verdict ? <Verdict v={p.versions[v].verdict} short /> : <span className="muted">not run</span>}</td>)}
                   </tr>
                 ))}
@@ -66,11 +70,11 @@ export function VersionStrips({ data }) {
 }
 
 // The planted curriculum: the share of fresh planted gaps each frozen version found, one dot per fresh batch.
-export function PlantedChart({ totals }) {
-  const ref = useRef(null);
+export function PlantedChart({ totals }: { totals: PlantedTotal[] }) {
+  const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(640);
   useEffect(() => {
-    if (!ref.current) return undefined;
+    if (!ref.current || typeof ResizeObserver === "undefined") return undefined;
     const ro = new ResizeObserver(([e]) => setW(Math.max(300, Math.round(e.contentRect.width))));
     ro.observe(ref.current);
     return () => ro.disconnect();
@@ -78,20 +82,19 @@ export function PlantedChart({ totals }) {
   const tip = useTooltip();
   const versions = [...new Set(totals.map((t) => t.version))].sort((a, b) => +a.slice(1) - +b.slice(1));
   const H = 240, top = 16, bottom = 40, left = 40, right = 12;
-  const x = (v) => left + ((versions.indexOf(v) + 0.5) / versions.length) * (w - left - right);
+  const x = (v: string) => left + ((versions.indexOf(v) + 0.5) / versions.length) * (w - left - right);
   const yMax = 0.6;
-  const y = (s) => top + (1 - s / yMax) * (H - top - bottom);
+  const y = (s: number) => top + (1 - s / yMax) * (H - top - bottom);
   const grid = [0, 0.2, 0.4, 0.6];
   const pts = totals.filter((t) => t.gaps > 0).map((t) => ({ ...t, s: t.found / t.gaps }));
   const byVer = versions.map((v) => {
     const ps = pts.filter((p) => p.version === v);
     const f = ps.reduce((a, p) => a + p.found, 0), g = ps.reduce((a, p) => a + p.gaps, 0);
-    return { v, s: g ? f / g : null, f, g, adopted: ps.every((p) => p.adopted) };
+    return { v, s: g ? f / g : null, f, g };
   });
-  const jitter = (p) => {
+  const jitter = (p: (typeof pts)[number]) => {
     const same = pts.filter((q) => q.version === p.version);
-    const i = same.indexOf(p);
-    return (i - (same.length - 1) / 2) * 14;
+    return (same.indexOf(p) - (same.length - 1) / 2) * 14;
   };
   return (
     <div className="chart" ref={ref}>
@@ -108,7 +111,7 @@ export function PlantedChart({ totals }) {
         {pts.map((p) => (
           <g key={`${p.version}-${p.seed}`}>
             <circle className={`dot${p.adopted ? "" : " rejected"}`} cx={x(p.version) + jitter(p)} cy={y(p.s)} r={5} />
-            <circle className="hit" cx={x(p.version) + jitter(p)} cy={y(p.s)} r={14} tabIndex={0}
+            <circle className="hit" cx={x(p.version) + jitter(p)} cy={y(p.s)} r={14} tabIndex={0} role="img"
                     aria-label={`${vName(p.version)}, fresh batch ${p.seed}: ${p.found} of ${p.gaps} planted gaps found`}
                     onPointerEnter={(e) => tip.show(e, <><b>{p.found} of {p.gaps}</b>planted gaps found by {vName(p.version)} on fresh batch {p.seed}{p.confidently_wrong ? `; ${p.confidently_wrong} confidently wrong` : "; none confidently wrong"}{p.adopted ? "" : ". Not adopted."}</>)}
                     onPointerLeave={tip.hide} onFocus={(e) => tip.show(e, <><b>{p.found} of {p.gaps}</b>{vName(p.version)}, fresh batch {p.seed}</>)} onBlur={tip.hide} />

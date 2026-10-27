@@ -104,7 +104,8 @@ small, .small { color: var(--graphite); font-size: var(--t-1); }
 .iconbtn:hover { background: var(--sheet-2); }
 @media (max-width: 720px) { .masthead .shell { flex-wrap: wrap; gap: var(--s2); padding-top: var(--s2); padding-bottom: var(--s2); }
   .mainnav { order: 3; width: 100%; margin-left: -10px; overflow-x: auto; flex-wrap: nowrap; } .theme { margin-left: auto; } }
-main { min-height: 70vh; }
+main { min-height: 70vh; outline: none; }
+.not-found { margin-top: var(--s8); }
 .colophon { border-top: 1px solid var(--rule); margin-top: var(--s9); padding: var(--s6) 0 var(--s7); color: var(--graphite);
   font-size: var(--t-1); }
 .colophon .shell { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--s5); }
@@ -153,6 +154,7 @@ td.reading { max-width: 34ch; }
 .hero h1 { max-width: 18ch; font-weight: 400; }
 .hero .lede { margin-top: var(--s4); }
 .hero-instrument { margin-top: var(--s7); }
+.instrument-placeholder { margin-top: var(--s7); min-height: 520px; }
 .instrument-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s3) var(--s5);
   margin-bottom: var(--s4); }
 .case-switch { display: flex; flex-wrap: wrap; gap: var(--s2); }
@@ -219,7 +221,8 @@ td.reading { max-width: 34ch; }
 .strip-row .ver { font-weight: 600; font-size: var(--t-1); }
 .strip-row .ver small { display: block; font-weight: 400; }
 .strip { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 2px; }
-.cell { aspect-ratio: 1; min-width: 0; max-height: 44px; border-radius: 3px; display: grid; place-items: center; border: 0; padding: 0; cursor: pointer;
+.cell-item { display: block; min-width: 0; }
+.cell { width: 100%; aspect-ratio: 1; min-width: 0; max-height: 44px; border-radius: 3px; display: grid; place-items: center; border: 0; padding: 0; cursor: pointer;
   text-decoration: none; touch-action: manipulation; transition: transform 0.12s var(--ease); }
 .cell svg { width: 42%; height: 42%; max-width: 14px; max-height: 14px; }
 .cell:hover, .cell:focus-visible { transform: translateY(-2px); }
@@ -229,9 +232,11 @@ td.reading { max-width: 34ch; }
 .strip-row .count { font-variant-numeric: tabular-nums; font-size: var(--t-1); color: var(--graphite); white-space: nowrap; }
 .strip-row .count b { color: var(--ink); font-size: var(--t1); font-weight: 600; font-variant-numeric: normal; }
 .legend-row { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5); }
-@media (max-width: 640px) { .strip-row { grid-template-columns: 1fr; gap: var(--s2); } }
+/* on a phone a strip wraps to rows of eight, so each square stays a comfortable touch target */
+@media (max-width: 640px) { .strip-row { grid-template-columns: 1fr; gap: var(--s2); }
+  .strip { grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; } }
 
-.tooltip { position: fixed; z-index: 30; pointer-events: none; background: var(--ink); color: var(--sheet); padding: 8px 10px;
+.tooltip { position: fixed; z-index: 30; pointer-events: none; transform: translateY(-100%); background: var(--ink); color: var(--sheet); padding: 8px 10px;
   border-radius: var(--radius-s); font-size: var(--t-1); line-height: 1.35; max-width: 300px; box-shadow: 0 6px 24px rgba(10, 20, 35, 0.18); }
 .tooltip b { display: block; font-size: var(--t0); }
 
@@ -295,7 +300,7 @@ details.group > .ledger-wrap table { font-size: var(--t-1); }
 .pertask-controls label { display: inline-flex; align-items: center; gap: var(--s2); color: var(--graphite); }
 .pertask-controls select { font: inherit; color: var(--ink); background: var(--raised); border: 1px solid var(--rule-strong); border-radius: var(--radius-s);
   padding: 4px 8px; }
-.panel h4 { font-size: var(--t1); margin: var(--s5) 0 var(--s2); }
+.panel .sub-title { font-size: var(--t1); margin: var(--s5) 0 var(--s2); }
 
 /* ---------------------------------------------------------------- case page */
 .crumb { display: inline-block; margin-top: var(--s6); font-size: var(--t-1); color: var(--graphite); text-decoration: none; }
@@ -326,7 +331,7 @@ dl.facts-list dd { margin: 0; }
 .steps li { counter-increment: step; display: grid; grid-template-columns: 3rem minmax(0, 1fr); gap: var(--s4); padding: var(--s5) 0;
   border-top: 1px solid var(--rule); }
 .steps li::before { content: counter(step); font: 500 var(--t2)/1 var(--serif); color: var(--graphite); }
-.steps h3 { font-size: var(--t1); margin-bottom: var(--s2); }
+.steps .step-title { font-size: var(--t1); margin-bottom: var(--s2); }
 .steps p { color: var(--graphite); margin: 0; }
 
 /* ---------------------------------------------------------------- the investigation (replay) */
@@ -491,7 +496,7 @@ ins.drafted { background: color-mix(in srgb, var(--found) 16%, transparent); col
 tr.us td { font-weight: 600; } tr.bad td { color: var(--missed); }
 .matrices { display: flex; flex-wrap: wrap; gap: var(--s4); margin: var(--s2) 0 var(--s3); }
 .matrix { flex: 1 1 320px; min-width: 0; }
-.matrix h5 { margin: 0 0 4px; font: 600 var(--t-1) var(--sans); }
+.matrix h4 { margin: 0 0 4px; font: 600 var(--t-1) var(--sans); letter-spacing: 0; }
 .matrix th { white-space: normal; vertical-align: bottom; }
 .matrix td { text-align: center; font-variant-numeric: tabular-nums; }
 .matrix td.zero { color: var(--graphite); }

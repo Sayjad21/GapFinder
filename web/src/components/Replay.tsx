@@ -1,49 +1,29 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "./api.js";
-import Gauge from "./Gauge.jsx";
-import { ROUNDS, STAGE_NAME, STAGE_SHORT, chipClass, gap, initialState, reduce, stages } from "./replay.js";
-import { changesText, signedPct } from "./ui.jsx";
-import { claimName, plain } from "./words.jsx";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { api } from "../api.ts";
+import { ROUNDS, STAGE_NAME, STAGE_SHORT, chipClass, gap, stages, useFold, type ReplayState, type RunState, type Segment,
+  type Round } from "../replay.ts";
+import type { GfEvent, Run, Target } from "../types.ts";
+import { changesText, signedPct } from "../ui.tsx";
+import { claimName, plain } from "../words.tsx";
+import Gauge from "./Gauge.tsx";
 
 const SPEEDS = [4, 16, 64];
-const SNAP = 64; // a folded state is kept every SNAP events, so dragging back never refolds more than SNAP
 
-function useEvents(runId) {
-  const [events, setEvents] = useState(null);
-  const [error, setError] = useState(null);
+function useEvents(runId: string | undefined) {
+  const [events, setEvents] = useState<GfEvent[] | null>(null);
+  const [error, setError] = useState<Error | null>(null);
   useEffect(() => {
+    if (!runId) return undefined;
     let dead = false;
     setEvents(null); setError(null);
-    api.events(runId).then((e) => !dead && setEvents(e)).catch((e) => !dead && setError(e));
+    api.events(runId).then((e) => !dead && setEvents(e)).catch((e: Error) => !dead && setError(e));
     return () => { dead = true; };
   }, [runId]);
   return { events, error };
 }
 
-// The state after the first `pos` events: folded forward from where it was, or from the nearest kept state behind.
-function useFold(events, pos) {
-  const cache = useRef(null);
-  return useMemo(() => {
-    if (!events) return initialState();
-    let c = cache.current;
-    if (!c || c.events !== events) c = cache.current = { events, snaps: new Map([[0, initialState()]]), pos: 0, state: initialState() };
-    let from = c.pos, s = c.state;
-    if (pos < from) {
-      from = Math.floor(pos / SNAP) * SNAP;
-      while (!c.snaps.has(from)) from -= SNAP;
-      s = c.snaps.get(from);
-    }
-    for (let i = from; i < pos; i++) {
-      s = reduce(s, events[i]);
-      if ((i + 1) % SNAP === 0) c.snaps.set(i + 1, s);
-    }
-    c.pos = pos; c.state = s;
-    return s;
-  }, [events, pos]);
-}
-
 // Plays the recorded spacing divided by `speed`: each frame shows the next event, and any that follow within 30 ms.
-function usePlayer(events, speed) {
+function usePlayer(events: GfEvent[] | null, speed: number) {
   const [pos, setPos] = useState(0);
   const [playing, setPlaying] = useState(false);
   useEffect(() => { setPos(0); setPlaying(false); }, [events]);
@@ -65,8 +45,8 @@ function usePlayer(events, speed) {
 }
 
 // the closest finished run to the paper's number on this claim's metric, among runs that changed something
-function closest(state, target) {
-  let best = null;
+function closest(state: ReplayState, target: Target): { v: number; b: RunState } | null {
+  let best: { v: number; b: RunState } | null = null;
   for (const b of Object.values(state.branches)) {
     const v = b.parsed_metrics?.[target.metric];
     if (b.status !== "succeeded" || v === undefined || !Object.keys(b.knob_changes || {}).length) continue;
@@ -77,7 +57,7 @@ function closest(state, target) {
 
 // One claim's gauge, run by run: the paper's number, the code as released once the noise is measured, and the closest
 // run so far; when the verdict arrives, the answer's reading.
-function ClaimGauge({ target, state, compact }) {
+function ClaimGauge({ target, state, compact = false }: { target: Target; state: ReplayState; compact?: boolean }) {
   const nb = state.noise[target.metric];
   const best = closest(state, target);
   const verdict = state.attributions[target.claim_id];
@@ -89,7 +69,7 @@ function ClaimGauge({ target, state, compact }) {
       <Gauge compact={compact} caption={false} g={g} live={answer ?? best?.v ?? null}
              liveLabel={answer !== null ? "GapFinder’s answer" : "closest run so far"} label={`${claimName(target)}, run by run`} />
       {verdict ? (
-        <p className="live-verdict"><b>{plain(verdict.label || verdict.status)}</b>
+        <p className="live-verdict"><b>{plain(verdict.label || verdict.status || "")}</b>
           {verdict.changes && Object.keys(verdict.changes).length > 0 && <> with <code>{changesText(verdict.changes)}</code></>}
           {verdict.gap_before !== undefined && <>: the gap went from {signedPct(verdict.gap_before)} to {signedPct(verdict.gap_after)}</>}.</p>
       ) : best ? (
@@ -100,13 +80,13 @@ function ClaimGauge({ target, state, compact }) {
   );
 }
 
-function Timeline({ events, pos, setPos, segs, label }) {
+function Timeline({ events, pos, setPos, segs, label }: { events: GfEvent[]; pos: number; setPos: (p: number) => void; segs: Segment[]; label: string }) {
   const n = events.length || 1;
   return (
     <div className="timeline-bar">
       <input type="range" className="scrub" min={0} max={events.length} step={1} value={pos} aria-label="Position in the recorded investigation"
              aria-valuetext={label} onChange={(e) => setPos(Number(e.target.value))}
-             style={{ "--done": `${(pos / n) * 100}%` }} />
+             style={{ "--done": `${(pos / n) * 100}%` } as CSSProperties} />
       <div className="stage-band" aria-hidden="true">
         {segs.map((s, i) => (
           <button key={i} type="button" tabIndex={-1} className={`seg-stage ${s.round}${pos >= s.from && pos < s.to ? " now" : ""}`}
@@ -119,38 +99,39 @@ function Timeline({ events, pos, setPos, segs, label }) {
   );
 }
 
-export default function Replay({ run, intro = null }) {
-  const { events, error } = useEvents(run?.id);
+export default function Replay({ run }: { run: Run }) {
+  const { events, error } = useEvents(run.id);
   const [speed, setSpeed] = useState(16);
   const { pos, setPos, playing, toggle } = usePlayer(events, speed);
   const state = useFold(events, pos);
   const segs = useMemo(() => (events ? stages(events) : []), [events]);
-  const claims = (run?.report?.claims || []).slice(0, 4);
+  const all = run.report?.claims || [];
+  const claims = all.slice(0, 4);
   // the feed names claims as the page does, not by internal id
   const named = useMemo(() => {
-    const ids = (run?.report?.claims || []).map((c) => [c.target.claim_id, claimName(c.target)]).filter(([id]) => id);
-    return (line) => ids.reduce((s, [id, name]) => s.split(id).join(name), line);
-  }, [run]);
+    const ids = all.map((c): [string, string] => [c.target.claim_id, claimName(c.target)]).filter(([id]) => id);
+    return (line: string) => ids.reduce((s, [id, name]) => s.split(id).join(name), line);
+  }, [all]);
   const head = claims.find((c) => !c.target.held_out) || claims[0];
   const rest = claims.filter((c) => c !== head);
   const grouped = useMemo(() => {
-    const g = Object.fromEntries(ROUNDS.map((r) => [r, []]));
+    const g = Object.fromEntries(ROUNDS.map((r) => [r, [] as RunState[]])) as Record<Round, RunState[]>;
     for (const id of state.order) g[state.branches[id].round].push(state.branches[id]);
     return g;
   }, [state.order, state.branches]);
-  const total = run?.report?.runs;
+  const total = run.report?.runs;
   const n = events?.length || 0;
-  const now = state.order.length ? STAGE_NAME[state.branches[state.order[state.order.length - 1]].round] : null;
-  const mins = (s) => Math.max(1, Math.round(s / 60));
+  const last = state.order[state.order.length - 1];
+  const now = last ? STAGE_NAME[state.branches[last].round] : null;
+  const mins = (s: number) => Math.max(1, Math.round(s / 60));
   const elapsed = state.t0 != null && state.t != null ? state.t - state.t0 : 0;
   const status = !events ? (error ? "Couldn’t load this run’s events." : "Loading the recorded events…")
-    : pos === 0 ? `Recorded: ${total ?? "?"} runs in sandboxes over ${mins(run?.duration_s || 0)} minutes. Press play, or drag the timeline.`
+    : pos === 0 ? `Recorded: ${total ?? "?"} runs in sandboxes over ${mins(run.duration_s || 0)} minutes. Press play, or drag the timeline.`
     : pos >= n ? `Replayed: all ${state.order.length} runs.`
-    : `Run ${state.order.length} of ${total ?? "?"}, ${mins(elapsed)} of ${mins(run?.duration_s || 0)} minutes in${now ? `: ${now.toLowerCase()}` : ""}.`;
+    : `Run ${state.order.length} of ${total ?? "?"}, ${mins(elapsed)} of ${mins(run.duration_s || 0)} minutes in${now ? `: ${now.toLowerCase()}` : ""}.`;
 
   return (
     <section className="player" aria-label="The investigation, replayed">
-      {intro}
       <div className="replay-controls">
         <button type="button" className="btn play" onClick={toggle} disabled={!events} aria-pressed={playing}>
           {playing ? "Pause" : pos > 0 && pos < n ? "Resume" : pos >= n && n ? "Replay from the start" : "Play the investigation"}

@@ -109,3 +109,25 @@ A 12-column grid, 1200px max, 24px gutters, 16px side gutters on phones.
 
 Changed after review: the first idea was a blueprint grid (cyan on navy). It read as generic "technical", so it was
 replaced by the notebook sheet and highlighter, which come from what reviewers actually do with a paper.
+
+## Code
+
+TypeScript, strict, React 19 and Vite. `npm run check` type-checks and runs the tests; CI (`.github/workflows/web.yml`)
+also builds the static site with its data and runs Lighthouse on it, failing under 95 for accessibility or 90 for best
+practices.
+
+```
+src/types.ts        the JSON the site reads: manifest, run, report, events, scoreboard
+src/api.ts          one data layer: /api/... from the server, data/*.json on the static site
+src/data.ts         useShowcase (fetched once), useRun, gaugeOf
+src/nav.ts          hash routes: href, parseHash
+src/ui.tsx          formatting, verdict word and glyph, theme, tooltips
+src/words.tsx       the vocabulary: v-names and standing, plain labels, the glossary and <Term>
+src/replay.ts       the event fold, the stage timeline, the cached fold behind seeking
+src/components/     Gauge, Hero, Record (version strips, planted chart), Replay, Report, Scoreboard
+src/pages/          one file per page; every page but Home loads on first visit
+src/test/           fixtures and setup; *.test.ts(x) sit beside what they test
+```
+
+Styles live in `src/styles.css` as tokens and classes. Inline styles are kept for computed values only: a tooltip's
+position, a strip's count, the replay's progress.

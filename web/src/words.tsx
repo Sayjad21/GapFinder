@@ -1,20 +1,22 @@
-import { useId, useState } from "react";
-import { prettyKnob } from "./ui.jsx";
+import { useId, useState, type ReactNode } from "react";
+import type { Showcase, Target } from "./types.ts";
+import { prettyKnob, tipPlace } from "./ui.tsx";
 
 // The page's vocabulary: what the engine's internal names are called for a reader, and a definition for every word a
 // reader new to the project would have to guess at.
 
 // ------------------------------------------------------------------ engine versions
 // The repository calls the frozen engine versions c1, c2, ...; the page calls them v1, v2, ... and says where each stands.
-export const vName = (v) => (v ? String(v).replace(/^c/, "v") : "");
-const STATUS_WORDS = { current: "current", earlier: "earlier, adopted", "on trial": "on trial", "not adopted": "not adopted" };
-export function versionStatus(data, v) {
+export const vName = (v: string | null | undefined): string => (v ? String(v).replace(/^c/, "v") : "");
+const STATUS_WORDS: Record<string, string> = { current: "current", earlier: "earlier, adopted", "on trial": "on trial", "not adopted": "not adopted" };
+export function versionStatus(data: Showcase | null, v: string): string | null {
   const s = data?.versions?.[v]?.status;
   return s ? STATUS_WORDS[s] || s : v === data?.tally_version ? "current" : null;
 }
-export const currentVersion = (data) => data?.tally_version;
+export const currentVersion = (data: Showcase): string => data.tally_version;
 
 // ------------------------------------------------------------------ the glossary
+export type TermKey = keyof typeof GLOSSARY;
 export const GLOSSARY = {
   version: ["Engine version", "GapFinder’s search code is frozen into numbered versions (v1, v2, …; c1, c2, … in the repository). A new version is adopted only if it does no worse on a fresh batch of planted gaps made after it was frozen."],
   batch: ["Fresh batch", "Planted gaps generated from a new random seed after a version was frozen, so the engine has never seen them. Batch 8 is seed 8."],
@@ -29,36 +31,33 @@ export const GLOSSARY = {
   gapbench: ["GapBench", "Generated tasks with a known cause, a decoy, interacting causes or no cause at all, used to compare GapFinder with a general coding agent."],
   abstain: ["Abstaining", "Saying “nothing I can change explains this gap” instead of guessing. On a task with no cause it is the right answer."],
   sealed: ["Sealed blind papers", "Real papers whose causes were hidden from the people tuning the engine until after it ran. The only clean evidence here."],
-};
+} satisfies Record<string, [string, string]>;
 
 // A word with its definition on hover, focus or tap. The definition is in the page for screen readers either way.
-export function Term({ k, children }) {
-  const [at, setAt] = useState(null);
+export function Term({ k, children }: { k: TermKey; children?: ReactNode }) {
+  const [at, setAt] = useState<{ left: number; top: number } | null>(null);
   const id = useId();
-  const def = GLOSSARY[k];
-  if (!def) return children;
-  const show = (e) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    setAt({ x: Math.min(window.innerWidth - 316, Math.max(8, r.left + r.width / 2 - 150)), y: r.top - 8 });
-  };
+  const [word, text] = GLOSSARY[k];
+  const show = (el: Element) => setAt(tipPlace(el));
   const hide = () => setAt(null);
   return (
     <span className="term-wrap">
       <button type="button" className="term" aria-describedby={id}
-              onPointerEnter={(e) => e.pointerType === "mouse" && show(e)} onPointerLeave={(e) => e.pointerType === "mouse" && hide()}
-              onFocus={show} onBlur={hide} onClick={(e) => (at ? hide() : show(e))} onKeyDown={(e) => e.key === "Escape" && hide()}>
-        {children ?? def[0].toLowerCase()}
+              onPointerEnter={(e) => e.pointerType === "mouse" && show(e.currentTarget)}
+              onPointerLeave={(e) => e.pointerType === "mouse" && hide()}
+              onFocus={(e) => show(e.currentTarget)} onBlur={hide} onClick={(e) => (at ? hide() : show(e.currentTarget))}
+              onKeyDown={(e) => e.key === "Escape" && hide()}>
+        {children ?? word.toLowerCase()}
       </button>
-      <span id={id} role="tooltip" className={at ? "tooltip" : "visually-hidden"}
-            style={at ? { left: at.x, top: at.y, transform: "translateY(-100%)" } : undefined}>
-        <b>{def[0]}</b>{def[1]}
+      <span id={id} role="tooltip" className={at ? "tooltip" : "visually-hidden"} style={at ?? undefined}>
+        <b>{word}</b>{text}
       </span>
     </span>
   );
 }
 
 // ------------------------------------------------------------------ the engine's labels, in plain words
-export const LABEL_PLAIN = {
+export const LABEL_PLAIN: Record<string, string> = {
   Explained: "Explained, with evidence",
   "Paper-artifact inconsistency": "The paper and its code disagree",
   "Fits but unsupported": "A change fits, but nothing else confirms it",
@@ -70,10 +69,10 @@ export const LABEL_PLAIN = {
   Inconclusive: "Too noisy to tell",
   "Explains target, conflicts with held-out": "Fits this number but breaks another",
 };
-export const plain = (label) => LABEL_PLAIN[label] || label;
+export const plain = (label: string): string => LABEL_PLAIN[label] || label;
 
 // The plain words, with the engine's own label kept for anyone matching it against a report file.
-export function PlainLabel({ label, formal = false }) {
+export function PlainLabel({ label, formal = false }: { label?: string | null; formal?: boolean }) {
   const l = label || "Reproduced";
   return (
     <span className="plain-label" title={`GapFinder’s label: ${l}`}>
@@ -83,14 +82,14 @@ export function PlainLabel({ label, formal = false }) {
 }
 
 // prose with `backticked` identifiers, the identifiers set as code
-export function WithCode({ text }) {
-  return String(text).split(/`([^`]+)`/).map((s, i) => (i % 2 ? <code key={i}>{s}</code> : s));
+export function WithCode({ text }: { text: string }) {
+  return <>{String(text).split(/`([^`]+)`/).map((s, i) => (i % 2 ? <code key={i}>{s}</code> : s))}</>;
 }
 
 // ------------------------------------------------------------------ a planted change, as the scorer words it
 // "scale: lr: the paper's v is the code's 0.5 x v" reads "lr: a value the paper states as v is 0.5 × v in the code";
 // "setting: wd = 0.001" reads "wd = 0.001". The identifier is code, the description prose.
-export function PlantedChange({ text }) {
+export function PlantedChange({ text }: { text: string }) {
   const t = text.replace(/^\w+: /, "");
   const i = t.indexOf(": ");
   if (i > 0 && !t.slice(0, i).includes(" ")) {
@@ -103,9 +102,10 @@ export function PlantedChange({ text }) {
 
 // ------------------------------------------------------------------ names
 // A claim is named by where the paper prints it ("Table 2 (SDCN ACC, dataset=ACM)"); the internal id is the fallback.
-export const claimName = (t) => (t?.figure ? t.figure : String(t?.claim_id || "").replace(/^C_?/, "").replace(/_/g, " "));
+export const claimName = (t: Partial<Target> | null | undefined): string =>
+  (t?.figure ? t.figure : String(t?.claim_id || "").replace(/^C_?/, "").replace(/_/g, " "));
 
-export const KIND_WORDS = { setting: "A changed setting", scale: "A scale or unit convention", data: "A training-data cut",
+export const KIND_WORDS: Record<string, string> = { setting: "A changed setting", scale: "A scale or unit convention", data: "A training-data cut",
   code: "A code defect", reporting: "A reporting rule", control: "A control (nothing planted)" };
-export const GAPBENCH_WORDS = { known_cause: "A known cause", decoy: "A cause with a decoy", interaction: "Two interacting causes",
+export const GAPBENCH_WORDS: Record<string, string> = { known_cause: "A known cause", decoy: "A cause with a decoy", interaction: "Two interacting causes",
   no_cause: "No cause", noise_only: "Only noise", incomplete: "Not enough to tell", out_of_space: "A cause outside the settings" };

@@ -1,24 +1,27 @@
-import { useMemo } from "react";
-import { href } from "../nav.js";
-import { Loading, changesText, useShowcase } from "../ui.jsx";
-import { GAPBENCH_WORDS, KIND_WORDS, PlainLabel, PlantedChange, Term, vName } from "../words.jsx";
+import { useMemo, type ReactNode } from "react";
+import { useShowcase } from "../data.ts";
+import { href } from "../nav.ts";
+import type { GapBenchCase, PlantedCase } from "../types.ts";
+import { Loading, changesText } from "../ui.tsx";
+import { GAPBENCH_WORDS, KIND_WORDS, PlainLabel, PlantedChange, Term, vName } from "../words.tsx";
 
-const FAMILIES = [["", "All"], ["setting", "Settings"], ["scale", "Scale conventions"], ["data", "Data cuts"], ["code", "Code defects"],
-  ["reporting", "Reporting rules"], ["control", "Controls"]];
-const KIND_COUNT = { setting: ["setting", "settings"], scale: ["scale convention", "scale conventions"], data: ["data cut", "data cuts"],
-  code: ["code defect", "code defects"], reporting: ["reporting rule", "reporting rules"], control: ["control", "controls"] };
+const FAMILIES: [string, string][] = [["", "All"], ["setting", "Settings"], ["scale", "Scale conventions"], ["data", "Data cuts"],
+  ["code", "Code defects"], ["reporting", "Reporting rules"], ["control", "Controls"]];
+const KIND_COUNT: Record<string, [string, string]> = { setting: ["setting", "settings"], scale: ["scale convention", "scale conventions"],
+  data: ["data cut", "data cuts"], code: ["code defect", "code defects"], reporting: ["reporting rule", "reporting rules"], control: ["control", "controls"] };
 
 // cases grouped by a key, the largest group first
-function groupBy(rows, key) {
-  const m = new Map();
+function groupBy<T>(rows: T[], key: (r: T) => string): [string, T[]][] {
+  const m = new Map<string, T[]>();
   for (const r of rows) m.set(key(r), [...(m.get(key(r)) || []), r]);
   return [...m.entries()].sort((a, b) => b[1].length - a[1].length);
 }
 
-const breakdown = (rows, key) => groupBy(rows, key).map(([k, rs]) => `${rs.length} ${(KIND_COUNT[k] || [k, k])[rs.length === 1 ? 0 : 1]}`).join(", ");
+const breakdown = (rows: PlantedCase[]) => groupBy(rows, (p) => p.family)
+  .map(([k, rs]) => `${rs.length} ${(KIND_COUNT[k] || [k, k])[rs.length === 1 ? 0 : 1]}`).join(", ");
 
 // One group: a line that says what is inside (how many, of which kinds) and opens to the cases.
-function Group({ title, count, detail, open, children }) {
+function Group({ title, count, detail, open, children }: { title: string; count: string; detail: string; open: boolean; children: ReactNode }) {
   return (
     <details className="group" open={open}>
       <summary>
@@ -31,12 +34,11 @@ function Group({ title, count, detail, open, children }) {
   );
 }
 
-function PlantedGroups({ rows }) {
+function PlantedGroups({ rows }: { rows: PlantedCase[] }) {
   const groups = groupBy(rows, (p) => p.paper);
   if (!groups.length) return <p className="muted">No planted cases of this kind were solved.</p>;
-  return groups.map(([paper, ps], i) => (
-    <Group key={paper} title={paper} count={`${ps.length} solved`} open={i === 0 && groups.length < 4}
-           detail={breakdown(ps, (p) => p.family)}>
+  return <>{groups.map(([paper, ps], i) => (
+    <Group key={paper} title={paper} count={`${ps.length} solved`} open={i === 0 && groups.length < 4} detail={breakdown(ps)}>
       <table>
         <thead><tr><th scope="col">Kind</th><th scope="col">What was planted</th><th scope="col">What GapFinder found</th>
           <th scope="col">Verdict</th><th scope="col">Searched by</th></tr></thead>
@@ -53,16 +55,15 @@ function PlantedGroups({ rows }) {
         </tbody>
       </table>
     </Group>
-  ));
+  ))}</>;
 }
 
-function GapBenchGroups({ rows }) {
-  const groups = groupBy(rows, (p) => p.category);
-  const detail = (ps) => {
+function GapBenchGroups({ rows }: { rows: GapBenchCase[] }) {
+  const detail = (ps: GapBenchCase[]) => {
     const found = ps.filter((p) => p.outcome === "correct").length;
     return [found && `${found} found the cause`, ps.length - found && `${ps.length - found} correctly abstained`].filter(Boolean).join(", ");
   };
-  return groups.map(([cat, ps], i) => (
+  return <>{groupBy(rows, (p) => p.category).map(([cat, ps], i) => (
     <Group key={cat} title={GAPBENCH_WORDS[cat] || cat} count={`${ps.length} solved`} open={i === 0} detail={detail(ps)}>
       <table>
         <thead><tr><th scope="col">Task</th><th scope="col">Outcome</th><th scope="col">What GapFinder found</th></tr></thead>
@@ -77,24 +78,27 @@ function GapBenchGroups({ rows }) {
         </tbody>
       </table>
     </Group>
-  ));
+  ))}</>;
 }
 
-export default function Synthetic({ query, navigate }) {
+export default function Synthetic({ query, navigate }: { query: URLSearchParams; navigate: (path: string, q: Record<string, string>) => void }) {
   const { data, error } = useShowcase();
   const tab = query.get("tab") === "gapbench" ? "gapbench" : "planted";
   const fam = query.get("family") || "";
-  const set = (q) => navigate("/synthetic", { tab, family: fam, ...q });
+  const set = (q: Record<string, string>) => navigate("/synthetic", { tab, family: fam, ...q });
   const planted = useMemo(() => (data?.planted || []).filter((p) => !fam || p.family === fam), [data, fam]);
-  if (!data) return <div className="shell"><Loading error={error} /></div>;
+  const head = (
+    <section className="hero page-head">
+      <h1>Synthetic cases</h1>
+      <p className="lede">Gaps with known answers: changes <Term k="planted">planted</Term> into papers whose code reproduces, and
+        the <Term k="gapbench">GapBench</Term> tasks. These are the ones it got right; the evidence page has the full rates, misses included.</p>
+    </section>
+  );
+  if (!data) return <div className="shell">{head}<Loading error={error} /></div>;
   const counts = Object.fromEntries(groupBy(data.planted, (p) => p.family).map(([k, rs]) => [k, rs.length]));
   return (
     <div className="shell">
-      <section className="hero page-head">
-        <h1>Synthetic cases</h1>
-        <p className="lede">Gaps with known answers: changes <Term k="planted">planted</Term> into papers whose code reproduces, and
-          the <Term k="gapbench">GapBench</Term> tasks. These are the ones it got right; the evidence page has the full rates, misses included.</p>
-      </section>
+      {head}
       <div className="toggle tabs" role="group" aria-label="Which set">
         <button type="button" aria-pressed={tab === "planted"} onClick={() => set({ tab: "planted" })}>Planted gaps ({data.planted.length})</button>
         <button type="button" aria-pressed={tab === "gapbench"} onClick={() => set({ tab: "gapbench", family: "" })}>GapBench tasks ({data.gapbench.length})</button>
@@ -102,7 +106,7 @@ export default function Synthetic({ query, navigate }) {
       {tab === "planted" ? (
         <>
           <p className="muted group-lede">{data.planted.length} solved across {groupBy(data.planted, (p) => p.paper).length} papers:
-            {" "}{breakdown(data.planted, (p) => p.family)}. Open a paper to see each case; open a case for its replay and report.</p>
+            {" "}{breakdown(data.planted)}. Open a paper to see each case; open a case for its replay and report.</p>
           <div className="filters" role="group" aria-label="Filter by kind of gap">
             {FAMILIES.filter(([k]) => !k || counts[k]).map(([k, t]) => (
               <button key={k || "all"} type="button" className="seg" aria-pressed={fam === k} onClick={() => set({ family: k })}>
