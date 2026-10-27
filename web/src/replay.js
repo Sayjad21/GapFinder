@@ -1,27 +1,36 @@
-// Folds the recorded event stream into what the replay screen draws.
+// Folds the recorded event stream into what the replay screen draws, and lays it out as a timeline.
+import { changesText } from "./ui.jsx";
 
 // Same timing rule as the server's SSE replay (gapfinder/api/server.py): original spacing / speed,
 // with idle gaps capped at MAX_IDLE_S.
 export const MAX_IDLE_S = 2.0;
 
-// Plays recorded events in the browser (static site). Returns a function that stops playback.
-export function play(events, speed, onEvent, onDone) {
-  let i = 0, timer = null, stopped = false;
-  const step = () => {
-    while (!stopped && i < events.length) {
-      onEvent(events[i]);
-      const t = events[i].t, next = events[i + 1]?.t;
-      i += 1;
-      const wait = t != null && next != null ? Math.min((next - t) / speed, MAX_IDLE_S) : 0;
-      if (wait > 0.005) { timer = setTimeout(step, wait * 1000); return; }
-    }
-    if (!stopped) onDone();
-  };
-  timer = setTimeout(step, 0);
-  return () => { stopped = true; clearTimeout(timer); };
+// seconds to wait between event a and event b at this speed
+export function gap(events, a, b, speed) {
+  const t = events[a]?.t, next = events[b]?.t;
+  return a >= 0 && t != null && next != null ? Math.min((next - t) / speed, MAX_IDLE_S) : 0;
 }
 
 export const ROUNDS = ["noise", "screen", "confirm", "combine", "bisect", "counterfactual", "other"];
+export const STAGE_NAME = { noise: "Measuring the noise", screen: "Screening settings", confirm: "Confirming with repeats",
+  combine: "Combining what survived", bisect: "Cutting to the smallest answer", counterfactual: "Reverting each change",
+  other: "Code rounds, probes and checks" };
+export const STAGE_SHORT = { noise: "Noise", screen: "Screen", confirm: "Confirm", combine: "Combine", bisect: "Cut",
+  counterfactual: "Revert", other: "Checks" };
+
+// The stages along the event stream: each run a branch starts belongs to a stage; consecutive runs of one stage make a
+// segment, which lasts until the next stage begins. [{round, from, to}] in event indexes.
+export function stages(events) {
+  const out = [];
+  events.forEach((ev, i) => {
+    if (ev.type !== "branch_created") return;
+    const r = roundOf(ev.branch?.note);
+    if (out.length && out[out.length - 1].round === r) return;
+    if (out.length) out[out.length - 1].to = i;
+    out.push({ round: r, from: out.length ? i : 0, to: events.length });
+  });
+  return out;
+}
 
 export function roundOf(note) {
   const n = (note || "").toLowerCase();
@@ -39,23 +48,24 @@ export function initialState() {
            cost: null, feed: [], done: false, t0: null, t: null };
 }
 
-const knobText = (k) => Object.entries(k || {}).map(([a, b]) => `${a}=${b}`).join(", ") || "defaults";
+const knobText = (k) => changesText(k) || "the code as released";
+const one = (k, v) => changesText({ [k]: v });
 
 export function describe(ev) {
   switch (ev.type) {
-    case "checkpoint": return ev.node.stage === "branch" ? null : `checkpoint ${ev.node.stage}${ev.node.tag ? ` (${ev.node.tag})` : ""}`;
-    case "branch_created": return `fork ${ev.branch.id}: ${knobText(ev.branch.knob_changes)} [${roundOf(ev.branch.note)}]`;
+    case "checkpoint": return ev.node.stage === "branch" ? null : `checkpoint: ${ev.node.stage}${ev.node.tag ? ` (${ev.node.tag})` : ""}`;
+    case "branch_created": return `run ${ev.branch.id}: ${knobText(ev.branch.knob_changes)}`;
     case "branch_finished": {
       const b = ev.branch;
-      const m = Object.entries(b.parsed_metrics || {}).slice(0, 2).map(([k, v]) => `${k}=${v}`).join(" ");
-      return `${b.id} ${b.status}${m ? `: ${m}` : ""}`;
+      const m = Object.entries(b.parsed_metrics || {}).slice(0, 2).map(([k, v]) => `${k} ${v}`).join(", ");
+      return `run ${b.id} ${b.status === "succeeded" ? "finished" : b.status}${m ? `: ${m}` : ""}`;
     }
-    case "noise_band": return `noise band ${ev.metric}: median ${ev.median.toFixed(3)} ± ${ev.band.toFixed(3)}`;
-    case "survivor": return `survives screen: ${ev.knob}=${ev.value} (${ev.units} noise units)`;
-    case "pruned": return `pruned: ${ev.knob}=${ev.value} (${ev.units} noise units)`;
-    case "round": return `round ${ev.name} done`;
-    case "verified": return `verified ${knobText(ev.changes)} → ${ev.label}`;
-    case "attribution": return `${ev.claim}: ${ev.label || ev.status}`;
+    case "noise_band": return `noise measured on ${ev.metric}: ${ev.median.toFixed(3)} ± ${ev.band.toFixed(3)}`;
+    case "survivor": return `kept after the screen: ${one(ev.knob, ev.value)} (moved the number ${Math.abs(ev.units).toFixed(1)}× the noise)`;
+    case "pruned": return `dropped: ${one(ev.knob, ev.value)} (moved it only ${Math.abs(ev.units).toFixed(1)}× the noise)`;
+    case "round": return `${(STAGE_NAME[ev.name] || ev.name).toLowerCase()}: done`;
+    case "verified": return `checked ${knobText(ev.changes)}: ${ev.label}`;
+    case "attribution": return `verdict on ${ev.claim}: ${ev.label || ev.status}`;
     case "note": return ev.msg;
     default: return null;
   }

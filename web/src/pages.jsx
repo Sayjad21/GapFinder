@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import Gauge from "./Gauge.jsx";
 import HeroInstrument from "./Hero.jsx";
@@ -6,7 +6,7 @@ import { href } from "./nav.js";
 import { PlantedChart, VersionStrips } from "./Record.jsx";
 import Replay from "./Replay.jsx";
 import Report from "./Report.jsx";
-import { Loading, Verdict, changesText, signedPct, useShowcase } from "./ui.jsx";
+import { Loading, Verdict, changesText, digits, num, prefersReducedMotion, signedPct, useShowcase } from "./ui.jsx";
 import { GLOSSARY, PlainLabel, PlantedChange, Term, currentVersion, vName, versionStatus } from "./words.jsx";
 
 const HERO_CASES = ["fastgcn-v15", "sdcn", "gcn-attack", "fair-clustering"];
@@ -34,14 +34,42 @@ function gaugeOf(report) {
 }
 
 // ------------------------------------------------------------------ home
+// the investigation the home page plays: the longest of the hero cases, so the replay has a search to show
+const WATCH_CASE = "fastgcn-v15";
+
+function Watch({ c }) {
+  const sel = c.versions[c.current];
+  const { run, error } = useRun(sel.id);
+  const g = sel.gauge;
+  return (
+    <>
+      <header>
+        <h2 id="watch-title">Watch one investigation</h2>
+        <p>{c.title}’s released code gives {num(g.code, digits([g.paper, g.code]))} where the paper reports {num(g.paper, digits([g.paper, g.code]))}. This is the recorded search, all {g.runs} runs:
+          it measures the noise first, screens each setting from one saved checkpoint, then repeats and combines what moved the
+          number. The gauge follows the closest run, and ends on the answer.</p>
+      </header>
+      <div className="document">
+        {run ? <Replay run={run} key={run.id} /> : <Loading error={error} what="Loading the recorded run…" />}
+      </div>
+    </>
+  );
+}
+
 export function Home() {
   const { data, error } = useShowcase();
+  const watch = useRef(null);
   if (!data) return <div className="shell"><Loading error={error} /></div>;
   const cases = HERO_CASES.map((s) => data.real.find((r) => r.slug === s)).filter(Boolean);
+  const watchCase = data.real.find((r) => r.slug === WATCH_CASE);
   const tally = data.real_tally || {};
   const cur = currentVersion(data);
   const p7 = data.planted_totals.filter((t) => t.adopted).sort((a, b) => b.seed - a.seed || +b.version.slice(1) - +a.version.slice(1))[0];
   const dev = [...data.dev_suite].reverse().find((d) => d.adopted !== false) || data.dev_suite[data.dev_suite.length - 1];
+  const toWatch = () => {
+    watch.current?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+    watch.current?.querySelector(".btn.play")?.focus({ preventScroll: true });
+  };
   return (
     <div className="shell">
       <section className="hero" aria-labelledby="hero-title">
@@ -49,7 +77,19 @@ export function Home() {
         <p className="lede">It runs the released code in cloud sandboxes, changes one condition at a time, and ends each claim with a
           verdict: the cause, part of it, or a plain statement that nothing it could change explains the gap.</p>
         {cases.length > 0 && <HeroInstrument cases={cases} short={SHORT} />}
+        <nav className="start-here" aria-label="Start here">
+          {watchCase && <button type="button" className="start" onClick={toWatch}><b>Watch an investigation</b>
+            <span>{watchCase.versions[watchCase.current].gauge?.runs} runs, replayed in under a minute</span></button>}
+          <a className="start" href={href("/cases")}><b>Browse the 16 real papers</b><span>finds and misses, case by case</span></a>
+          <a className="start" href={href("/evidence")}><b>Check the evidence</b><span>what each measurement can and can’t show</span></a>
+        </nav>
       </section>
+
+      {watchCase && (
+        <section className="section" aria-labelledby="watch-title" ref={watch}>
+          <Watch c={watchCase} />
+        </section>
+      )}
 
       <section className="section" aria-labelledby="record-title">
         <header>

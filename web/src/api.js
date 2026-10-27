@@ -5,7 +5,7 @@ export async function getJSON(path) {
 }
 
 // VITE_STATIC=1 builds the server-free site (GitHub Pages): data comes from files written by
-// scripts/export_static.py, and replay runs in the browser instead of over SSE.
+// scripts/export_static.py. Either way the replay loads a run's events once and plays them in the browser.
 export const STATIC = import.meta.env.VITE_STATIC === "1";
 const enc = encodeURIComponent;
 
@@ -23,7 +23,7 @@ export const api = STATIC ? {
   run: (id) => getJSON(`/api/runs/${enc(id)}`),
   scoreboard: () => getJSON("/api/scoreboard"),
   showcase: () => getJSON("/api/showcase"),
-  replayUrl: (id, speed) => `/api/runs/${enc(id)}/replay?speed=${speed}`,
+  events: (id) => getJSON(`/api/runs/${enc(id)}/events`),
   reportMdUrl: (id) => `/api/runs/${enc(id)}/report.md`,
   issueDraftUrl: (id) => `/api/runs/${enc(id)}/issue_draft.md`,
   runJsonUrl: (id) => `/api/runs/${enc(id)}`,
