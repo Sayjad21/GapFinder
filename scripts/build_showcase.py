@@ -74,8 +74,8 @@ REAL = {
     "gmixup": ("G-Mixup", "ICML 2022", "The gain over plain GNNs is within the run-to-run noise."),
     "pyg": ("GAT vs GCN in PyTorch Geometric", "benchmark", "The ranking of GAT and GCN depends on the data split."),
 }
-VERSION_DIRS = {"c5": "real", "c7": "real-c7", "c8": "real-c8", "c9": "real-c9"}
-TALLY_VERSION = "c7"  # every paper was re-run on it; c8 and c9 re-ran a few
+VERSION_DIRS = {"c5": "real", "c7": "real-c7", "c8": "real-c8", "c9": "real-c9", "c10": "real-c10"}
+TALLY_VERSION = "c7"  # every paper was re-run on it; c8, c9 and c10 re-ran a few
 PENDING = {"c10"}  # frozen, its fresh batch (seed 9) not yet scored
 RUN_DIR = {("c7", "bond"): "bond.cut2"}  # BOND on c7: three searches (48, 60, 80 runs); the 60-run one is shown
 
@@ -91,26 +91,36 @@ READING = {
     "ripplenet": {"c5": ("partial", "lr=0.002 closes half the gap; the documented lr=0.001 tied and lost."),
                   "c7": ("partial", "lr=0.001, the documented value; the L2 weight is still missing."),
                   "c9": ("missed", "Unexplained: the documented lr 1e-3 and L2 1e-5 block fit closest, one run short of "
-                                   "its confirmation, while 30 runs sat held for a patch round that needed none.")},
+                                   "its confirmation, while 30 runs sat held for a patch round that needed none."),
+                  "c10": ("partial", "lr=0.001, the documented value, now labelled partially explained (-12.5% to "
+                                     "-4.9%); the L2 weight is still missing.")},
     "mc-dropout": {"c5": ("missed", "The search crashed three times before a report."),
                    "c7": ("partial", "epochx=10 and hidden=1, the documented pair: it fits Energy, breaks held-out Yacht."),
-                   "c8": ("partial", "epochx=10 and hidden=1 again: Energy fits, held-out Yacht breaks.")},
+                   "c8": ("partial", "epochx=10 and hidden=1 again: Energy fits, held-out Yacht breaks."),
+                   "c10": ("partial", "epochx=10 and hidden=1 a third time: Energy fits, held-out Yacht breaks.")},
     "bond": {"c5": ("missed", "Unexplained; the library probe never ran on the old harness."),
              "c7": ("partial", "The balance weight, patched 0.5 to 0.95; the key accepts 0.75-0.9. An 80-run search "
                                "missed it."),
              "c8": ("missed", "Unexplained: the balance weight at 0.95 fit the target on one run and was never repeated, "
-                              "with 13 of 60 runs left.")},
+                              "with 13 of 60 runs left."),
+             "c10": ("partial", "The balance weight, patched 0.5 to 0.75 inside the library: -8.0% to -3.4%, labelled "
+                                "unsupported; the library update behind it was not named.")},
     "vgae": {"c5": ("missed", "The split pair fits, but a cut made on one run demoted it."),
              "c7": ("missed", "The split constants are written `30.`, a form the value ladder couldn't read."),
              "c9": ("found", "A paper-code inconsistency: the split constants at the paper's 10% and 5% close the gap "
-                             "(-5.4% to +0.3%).")},
+                             "(-5.4% to +0.3%)."),
+             "c10": ("missed", "dropout=0.5 and weight_decay=1e-3, unsupported. The split constants at 10% and 5% fit "
+                               "every claim as well, and the report says the claims can't tell the two apart.")},
     "pygcn": {"c5": ("missed", "weight_decay=0, unsupported."),
               "c7": ("partial", "Lists the validation split (500 vs 300) and the missing early stopping."),
-              "c9": ("missed", "weight_decay=1e-5, unsupported; this time the paper-code contrast named no difference.")},
+              "c9": ("missed", "weight_decay=1e-5, unsupported; this time the paper-code contrast named no difference."),
+              "c10": ("partial", "Lists the validation split (500 vs 300), the missing early stopping, dropout on one "
+                                 "layer and weight decay on all; the fit itself is an unsupported weight_decay=0.")},
     "patchtst": {"c5": ("missed", "Unexplained."),
                  "c7": ("missed", "drop_last tested on the live line: no effect here. The target is the 512-step "
                                   "PatchTST/64; the harness runs /42."),
-                 "c8": ("missed", "Unexplained, as on c7: the 512-step variant the paper reports isn't in the harness.")},
+                 "c8": ("missed", "Unexplained, as on c7: the 512-step variant the paper reports isn't in the harness."),
+                 "c10": ("missed", "Unexplained, as on c7 and c8.")},
     "gat": {"c5": ("missed", "Inconclusive: the gap is under the minimum detectable effect."),
             "c7": ("no_gap", "Reproduced: this run's naive spread covers the -2.2% gap.")},
     "sparsetsf": {"c5": ("no_gap", "Reproduced within noise (-0.4%)."), "c7": ("no_gap", "Reproduced within noise.")},

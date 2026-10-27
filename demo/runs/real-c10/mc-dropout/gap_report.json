@@ -1,0 +1,929 @@
+{
+  "paper": "MC Dropout (Gal & Ghahramani 2016)",
+  "artifact": "mcd",
+  "generated": "2026-10-27 09:21",
+  "partial": false,
+  "runs": 200,
+  "setup_runs": 1,
+  "cost": {
+    "sandbox_usd": 2610.414613,
+    "sandbox_runs": 202,
+    "setup_runs": 1,
+    "tokens": {},
+    "total_usd": 2610.414613,
+    "cap_usd": null
+  },
+  "naive": {
+    "energy_rmse": 0.359386,
+    "yacht_rmse": 0.974623
+  },
+  "noise": {
+    "energy_rmse": {
+      "metric": "energy_rmse",
+      "n": 5,
+      "median": 0.359386,
+      "band": 0.051980000000000026,
+      "cv": 0.07601239707430861
+    },
+    "yacht_rmse": {
+      "metric": "yacht_rmse",
+      "n": 5,
+      "median": 0.974623,
+      "band": 0.149602,
+      "cv": 0.11355846323708439
+    }
+  },
+  "unmapped_assumptions": [
+    "tau_values.txt",
+    "n_hidden.txt",
+    "weight_decay_lambda",
+    "length_scale_l",
+    "dropout_placement",
+    "normalization",
+    "dropout_variant",
+    "RL_exploration_method",
+    "precision_tau"
+  ],
+  "renamed_assumptions": {},
+  "spec_only_knobs": [
+    "n_splits"
+  ],
+  "corrected_defaults": [],
+  "unverified_defaults": [],
+  "trace": null,
+  "untestable": [
+    {
+      "knob": "n_splits",
+      "value": "30"
+    },
+    {
+      "knob": "n_splits",
+      "value": "150"
+    },
+    {
+      "knob": "n_splits",
+      "value": "300"
+    }
+  ],
+  "closest_overall": [
+    {
+      "changes": {
+        "epochx": "10",
+        "hidden": "4"
+      },
+      "runs": 2,
+      "gaps": {
+        "C_energy_rmse": -0.6396286144578314,
+        "C_yacht_rmse": 0.06423333333333332
+      },
+      "mean_abs_gap": 0.35193097389558237
+    },
+    {
+      "changes": {
+        "hidden": "5",
+        "epochx": "50"
+      },
+      "runs": 2,
+      "gaps": {
+        "C_energy_rmse": -0.6559222891566264,
+        "C_yacht_rmse": 0.1111504504504503
+      },
+      "mean_abs_gap": 0.38353636980353834
+    },
+    {
+      "changes": {
+        "epochx": "100",
+        "hidden": "4"
+      },
+      "runs": 2,
+      "gaps": {
+        "C_energy_rmse": -0.7157909638554217,
+        "C_yacht_rmse": 0.053787387387387364
+      },
+      "mean_abs_gap": 0.3847891756214046
+    },
+    {
+      "changes": {
+        "epochx": "50"
+      },
+      "runs": 6,
+      "gaps": {
+        "C_energy_rmse": -0.7170421686746987,
+        "C_yacht_rmse": 0.11696936936936922
+      },
+      "mean_abs_gap": 0.41700576902203396
+    },
+    {
+      "changes": {
+        "epochx": "10"
+      },
+      "runs": 6,
+      "gaps": {
+        "C_energy_rmse": -0.6492409638554216,
+        "C_yacht_rmse": 0.19940855855855846
+      },
+      "mean_abs_gap": 0.42432476120699003
+    }
+  ],
+  "audit": {
+    "held_out": [],
+    "comparisons": [
+      {
+        "paper_says": "energy_rmse 1.66 > yacht_rmse 1.11",
+        "measured": "energy_rmse 0.3594 < yacht_rmse 0.9746",
+        "margin": -0.615237,
+        "noise": 0.15837512053349795,
+        "claims": [
+          "C_energy_rmse",
+          "C_yacht_rmse"
+        ]
+      }
+    ],
+    "leakage": [],
+    "stated_untestable": [
+      {
+        "setting": "n_hidden.txt",
+        "paper_value": "1024",
+        "quote": "1024 hidden units",
+        "ref": "p.5"
+      },
+      {
+        "setting": "dropout_placement",
+        "paper_value": "before every weight layer (theory), before last FC layer (MNIST)",
+        "quote": "dropout applied before every weight layer",
+        "ref": "p.2"
+      },
+      {
+        "setting": "normalization",
+        "paper_value": "centred and normalised",
+        "quote": "We centred and normalised both datasets",
+        "ref": "p.4"
+      },
+      {
+        "setting": "dropout_variant",
+        "paper_value": "standard dropout, MC dropout, drop-connect, multiplicative Gaussian noise",
+        "quote": "our results carry to other variants of dropout as well (such as drop-connect (Wan et al., 2013), multiplicative Gaussian noise (Srivastava et al., 2014), etc.)",
+        "ref": "p.2"
+      },
+      {
+        "setting": "RL_exploration_method",
+        "paper_value": "Thompson sampling vs epsilon greedy",
+        "quote": "Thompson sampling (Thompson, 1933) can be used to learn much faster",
+        "ref": "p.1"
+      }
+    ],
+    "paper_comparisons": [],
+    "protocol_tests": []
+  },
+  "triaged_failures": [
+    {
+      "knob": "epochx",
+      "value": "5000",
+      "kind": "other",
+      "why": "The value 5000 exceeds the allowed range for epochx (likely a maximum like 1000 or 2000), causing the program to reject it as invalid. [not taken as invalid_value: the log shows no rejection]",
+      "suggestion": null
+    },
+    {
+      "knob": "hidden",
+      "value": "20",
+      "kind": "other",
+      "why": "The program rejected hidden=20, likely because hidden must be a power of two or within a specific range; 16 is the closest valid value to 20 that is not the default 2. [not taken as invalid_value: the log shows no rejection]",
+      "suggestion": null
+    },
+    {
+      "knob": "hidden",
+      "value": "10",
+      "kind": "other",
+      "why": "The program likely expects the hidden layer size to be a power of two (or within a specific set) and rejected the value 10. The nearest valid setting preserving the intent of a larger hidden layer is 8. [not taken as invalid_value: the log shows no rejection]",
+      "suggestion": null
+    },
+    {
+      "knob": "hidden",
+      "value": "100",
+      "kind": "other",
+      "why": "Setting hidden to 100 caused a RecursionError in Theano's gradient computation, indicating the value is too large for the model's recursion depth; a smaller hidden size like 64 retains the intent of a larger hidden layer while avoiding the recursion limit. [not taken as invalid_value: the log shows no rejection]",
+      "suggestion": null
+    },
+    {
+      "knob": "hidden",
+      "value": "200",
+      "kind": "crash",
+      "why": "Setting hidden=200 created a neural network with a large hidden layer, causing Theano's gradient computation to recurse deeply and exceed Python's recursion limit, resulting in a RecursionError and crash.",
+      "suggestion": null
+    }
+  ],
+  "setup_check": null,
+  "effect_threshold": 1.0,
+  "provenance": {
+    "gapfinder": {
+      "commit": "7e3568335cda944b166665fca73315f0b4a5e13a",
+      "dirty": true
+    },
+    "models": {
+      "ultra": "nvidia/Nemotron-3-Ultra-550b-a55b",
+      "super": "nvidia/nemotron-3-super-120b-a12b",
+      "nano": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+      "omni": "nvidia/Nemotron-3-Nano-Omni"
+    },
+    "prompt_sha256": {
+      "CLAIM_PROMPT": "79757ce60aaaf5377dde8465230665347bfca143f0f05b752c9efa3b5bde5e34",
+      "FILTER_PROMPT": "439a83d5b510aa71fcfc50c1fdf62816af0a26cce0a8403ac89618d16cabbe32",
+      "ASSUMPTION_PROMPT": "c3eb66989927b367ea581a7b15e2a10cce28685eb22df703c39223b64c3dacea",
+      "TRIAGE_PROMPT": "26293319ecd0ace0815fb8293cf05b4cbb11142f0c2e3e05e580faa74e1e9d5e",
+      "MISSING_SENTENCE_PROMPT": "b935383290f13c0a18521b2e0db1b556e66f5e5e61de1318671d8ad09dcb72e0"
+    },
+    "harness_spec_sha256": "03cc5e006f242382f56af9ae32ddfb1e1ff0fcbbb9bf40c5b17ca7de3e0e2cb6",
+    "cost": {
+      "nemotron_billed_usd": 0.004389,
+      "sandbox_reported_usd": 2610.414613,
+      "total_usd": 2610.419002,
+      "scope": "this search; ledger extraction is included only if it shared the search's router"
+    }
+  },
+  "claims": [
+    {
+      "status": "searched",
+      "gap_before": -0.7835024096385542,
+      "band": 0.03131325301204821,
+      "changes": {
+        "epochx": "10",
+        "hidden": "1"
+      },
+      "gap_after": 0.02083614457831329,
+      "held_out": {},
+      "counterfactual": {},
+      "screen": [
+        {
+          "knob": "epochx",
+          "value": "1000",
+          "assumption": "A2",
+          "units": -0.55,
+          "gap": -0.8006144578313252
+        },
+        {
+          "knob": "epochx",
+          "value": "2000",
+          "assumption": "A2",
+          "units": 0.21,
+          "gap": -0.7770325301204819
+        },
+        {
+          "knob": "epochx",
+          "value": "1",
+          "assumption": "A2",
+          "units": 2.98,
+          "gap": 0.6902855421686749
+        },
+        {
+          "knob": "epochx",
+          "value": "2",
+          "assumption": "A2",
+          "units": 21.94,
+          "gap": 0.09639216867469888
+        },
+        {
+          "knob": "epochx",
+          "value": "5",
+          "assumption": "A2",
+          "units": 8.09,
+          "gap": -0.5302873493975903
+        },
+        {
+          "knob": "epochx",
+          "value": "10",
+          "assumption": "A2",
+          "units": 4.51,
+          "gap": -0.642421686746988
+        },
+        {
+          "knob": "epochx",
+          "value": "100",
+          "assumption": "A2",
+          "units": 1.19,
+          "gap": -0.7463939759036144
+        },
+        {
+          "knob": "epochx",
+          "value": "50",
+          "assumption": "A2",
+          "units": 2.17,
+          "gap": -0.7156909638554216
+        },
+        {
+          "knob": "epochx",
+          "value": "5000",
+          "assumption": "A2",
+          "units": -Infinity,
+          "gap": null
+        },
+        {
+          "knob": "epochx",
+          "value": "250",
+          "assumption": "A2",
+          "units": -0.56,
+          "gap": -0.8009740963855421
+        },
+        {
+          "knob": "hidden",
+          "value": "4",
+          "assumption": "A3",
+          "units": 0.43,
+          "gap": -0.7700638554216868
+        },
+        {
+          "knob": "hidden",
+          "value": "5",
+          "assumption": "A3",
+          "units": 0.02,
+          "gap": -0.7827301204819277
+        },
+        {
+          "knob": "hidden",
+          "value": "20",
+          "assumption": "A3",
+          "units": -Infinity,
+          "gap": null
+        },
+        {
+          "knob": "hidden",
+          "value": "1",
+          "assumption": "A3",
+          "units": 2.24,
+          "gap": -0.7133144578313253
+        },
+        {
+          "knob": "hidden",
+          "value": "10",
+          "assumption": "A3",
+          "units": -Infinity,
+          "gap": null
+        },
+        {
+          "knob": "hidden",
+          "value": "100",
+          "assumption": "A3",
+          "units": -Infinity,
+          "gap": null
+        },
+        {
+          "knob": "hidden",
+          "value": "200",
+          "assumption": "A3",
+          "units": -Infinity,
+          "gap": null
+        }
+      ],
+      "hypotheses_tested": 55,
+      "replay": [],
+      "notes": [
+        "{'epochx': '10', 'hidden': '1'} closes this claim but makes held-out claims worse; rejected",
+        "closest configuration tried: {'epochx': '10', 'hidden': '1'} (gap +2.1%); it did not pass verification",
+        "spec knobs no ledger assumption names (n_splits) were screened too; no better answer",
+        "history matching: out-of-space suspected: 5 tested configuration(s) fit C_energy_rmse, and every other claim (C_yacht_rmse) fits some tested configuration, but none of the 42 tested configurations fits them all. The claims are mutually inconsistent under every tested condition, which points to a cause outside the exposed settings (code, data or evaluation)",
+        "{'epochx': '10', 'hidden': '1'} matches C_energy_rmse (I=0.37) but breaks C_yacht_rmse (I=9.89); no tested condition matches all claims, so the rest of the gap probably lies in code, data or evaluation, which GapFinder doesn't change",
+        "value interval stopped early: run budget of 200 reached (wanted 1 more run(s) of {'epochx': '9', 'hidden': '1'} for 'interval epochx=9')"
+      ],
+      "value_sets": {
+        "epochx": [
+          "10"
+        ],
+        "hidden": [
+          "1"
+        ]
+      },
+      "value_intervals": {},
+      "identifiable": true,
+      "pre_proposer": null,
+      "diagnosis": {
+        "kind": "out_of_space_suspected",
+        "text": "out-of-space suspected: 5 tested configuration(s) fit C_energy_rmse, and every other claim (C_yacht_rmse) fits some tested configuration, but none of the 42 tested configurations fits them all. The claims are mutually inconsistent under every tested condition, which points to a cause outside the exposed settings (code, data or evaluation)",
+        "joint": [],
+        "islands": [],
+        "per_claim": {
+          "C_energy_rmse": [
+            {
+              "config": {
+                "epochx": "1",
+                "hidden": "5"
+              },
+              "I": {
+                "C_energy_rmse": 0.34,
+                "C_yacht_rmse": 20.38
+              }
+            },
+            {
+              "config": {
+                "epochx": "10",
+                "hidden": "1"
+              },
+              "I": {
+                "C_energy_rmse": 0.37,
+                "C_yacht_rmse": 9.89
+              }
+            },
+            {
+              "config": {
+                "epochx": "1",
+                "hidden": "10"
+              },
+              "I": {
+                "C_energy_rmse": 0.69,
+                "C_yacht_rmse": 14.98
+              }
+            },
+            {
+              "config": {
+                "epochx": "1",
+                "hidden": "20"
+              },
+              "I": {
+                "C_energy_rmse": 1.06,
+                "C_yacht_rmse": 21.76
+              }
+            },
+            {
+              "config": {
+                "epochx": "2"
+              },
+              "I": {
+                "C_energy_rmse": 2.88,
+                "C_yacht_rmse": 29.05
+              }
+            }
+          ],
+          "C_yacht_rmse": [
+            {
+              "config": {
+                "epochx": "100",
+                "hidden": "4"
+              },
+              "I": {
+                "C_energy_rmse": 13.28,
+                "C_yacht_rmse": 0.42
+              }
+            },
+            {
+              "config": {
+                "epochx": "10",
+                "hidden": "4"
+              },
+              "I": {
+                "C_energy_rmse": 11.86,
+                "C_yacht_rmse": 0.5
+              }
+            },
+            {
+              "config": {
+                "epochx": "100"
+              },
+              "I": {
+                "C_energy_rmse": 13.84,
+                "C_yacht_rmse": 0.53
+              }
+            },
+            {
+              "config": {
+                "epochx": "100",
+                "hidden": "20"
+              },
+              "I": {
+                "C_energy_rmse": 13.84,
+                "C_yacht_rmse": 0.83
+              }
+            },
+            {
+              "config": {
+                "epochx": "50",
+                "hidden": "5"
+              },
+              "I": {
+                "C_energy_rmse": 12.17,
+                "C_yacht_rmse": 0.86
+              }
+            },
+            {
+              "config": {},
+              "I": {
+                "C_energy_rmse": 14.74,
+                "C_yacht_rmse": 1.2
+              }
+            },
+            {
+              "config": {
+                "epochx": "250"
+              },
+              "I": {
+                "C_energy_rmse": 14.36,
+                "C_yacht_rmse": 1.48
+              }
+            },
+            {
+              "config": {
+                "epochx": "50",
+                "hidden": "10"
+              },
+              "I": {
+                "C_energy_rmse": 12.94,
+                "C_yacht_rmse": 1.56
+              }
+            },
+            {
+              "config": {
+                "epochx": "50"
+              },
+              "I": {
+                "C_energy_rmse": 13.55,
+                "C_yacht_rmse": 1.59
+              }
+            },
+            {
+              "config": {
+                "epochx": "100",
+                "hidden": "5"
+              },
+              "I": {
+                "C_energy_rmse": 13.43,
+                "C_yacht_rmse": 1.6
+              }
+            }
+          ]
+        },
+        "params": {
+          "paper_n": 1.0,
+          "disc": 0.05,
+          "cutoff": 3.0
+        },
+        "leads": [],
+        "matcher_leads": []
+      },
+      "closes": false,
+      "equivalent": [],
+      "relations": {},
+      "differential": {
+        "claims": {
+          "C_energy_rmse": {
+            "paper": 1.66,
+            "naive": 0.3593934,
+            "sd": 0.02731835382668582,
+            "target": true
+          },
+          "C_yacht_rmse": {
+            "paper": 1.11,
+            "naive": 0.9526894,
+            "sd": 0.10818594420625999,
+            "target": false
+          }
+        },
+        "ranked": [
+          {
+            "id": "settings:epochx=10, hidden=1",
+            "class": "settings",
+            "title": "the setting epochx=10, hidden=1",
+            "prior": 0.15,
+            "posterior": 0.5553,
+            "loglik": -1.806,
+            "fits_all": true,
+            "max_I": 2.42,
+            "per_claim": {
+              "C_energy_rmse": {
+                "paper": 1.66,
+                "pred": 1.693,
+                "sd": 0.0354,
+                "n": 6,
+                "I": 0.3608
+              },
+              "C_yacht_rmse": {
+                "paper": 1.11,
+                "pred": 2.3896,
+                "sd": 0.4864,
+                "n": 6,
+                "I": 2.4222
+              }
+            },
+            "detail": {
+              "changes": {
+                "epochx": "10",
+                "hidden": "1"
+              }
+            },
+            "evidence": [],
+            "check": "run with epochx=10, hidden=1",
+            "runs": 6
+          },
+          {
+            "id": "outside",
+            "class": "outside",
+            "title": "a cause outside every class tested",
+            "prior": 0.2,
+            "posterior": 0.4447,
+            "loglik": -2.316,
+            "fits_all": false,
+            "max_I": null,
+            "per_claim": {},
+            "detail": {},
+            "evidence": [],
+            "check": "look for code, data or evaluation differences the classes don't cover",
+            "runs": 0
+          },
+          {
+            "id": "as-run",
+            "class": "settings",
+            "title": "no difference in reporting: the numbers as printed at the end of the run",
+            "prior": 0.3,
+            "posterior": 0.0,
+            "loglik": -106.749,
+            "fits_all": false,
+            "max_I": 14.74,
+            "per_claim": {
+              "C_energy_rmse": {
+                "paper": 1.66,
+                "pred": 0.3594,
+                "sd": 0.0273,
+                "n": 5,
+                "I": 14.7411
+              },
+              "C_yacht_rmse": {
+                "paper": 1.11,
+                "pred": 0.9527,
+                "sd": 0.1082,
+                "n": 5,
+                "I": 1.2021
+              }
+            },
+            "detail": {},
+            "evidence": [],
+            "check": "the settings search and the other classes",
+            "runs": 0
+          }
+        ],
+        "paper_n": 1.0,
+        "disc": 0.05
+      },
+      "reporting": null,
+      "library": null,
+      "discrimination": null,
+      "target": {
+        "claim_id": "C_energy_rmse",
+        "metric": "energy_rmse",
+        "paper_value": 1.66,
+        "held_out": false,
+        "tuned_separately": false,
+        "figure": "Table 1",
+        "relation": null,
+        "quote": null,
+        "at": null
+      },
+      "attribution": {
+        "claim_id": "C_energy_rmse",
+        "assumption_set": [
+          "A2:epochx=10",
+          "A3:hidden=1"
+        ],
+        "gap_before": -0.7835024096385542,
+        "gap_after": 0.02083614457831329,
+        "noise_band": 0.03131325301204821,
+        "held_out_result": null,
+        "counterfactual_ok": null,
+        "hypotheses_tested": 55,
+        "checkpoint_ids": [
+          "e7344757-d706-4fca-a697-b73b5c8e3a87",
+          "6f2998a6-472a-40fe-b350-1a4ba854c470",
+          "681fd1b6-bdb0-4a05-9a89-8c50fd471af9",
+          "2d9bf45a-6d59-4a0b-acff-a12b13a97007",
+          "ba051b9d-664a-4353-ad17-70130de0540d",
+          "2591e0e7-36db-4345-a2e9-b29397e8c7de"
+        ],
+        "confidence_label": "Explains target, conflicts with held-out"
+      },
+      "plausibility": {},
+      "paper_claim": {
+        "quote": null,
+        "page": null,
+        "figure": "Table 1",
+        "unit": null,
+        "headline": null,
+        "metric": "energy_rmse",
+        "paper_value": 1.66,
+        "recorded": false
+      },
+      "measured": {
+        "metric": "energy_rmse",
+        "median": 0.359386,
+        "repeats": [
+          0.335799,
+          0.359386,
+          0.385376,
+          0.387788,
+          0.328618
+        ],
+        "n": 5,
+        "min": 0.328618,
+        "max": 0.387788,
+        "band": 0.051980000000000026,
+        "cv": 0.07601239707430861,
+        "gap": -0.7835024096385542,
+        "band_rel": 0.03131325301204821,
+        "status": "searched",
+        "setup_check": null
+      },
+      "experiment": {
+        "found": true,
+        "changes": {
+          "epochx": "10",
+          "hidden": "1"
+        },
+        "config": [
+          {
+            "knob": "epochx",
+            "naive": "500",
+            "candidate": "10"
+          },
+          {
+            "knob": "hidden",
+            "naive": "2",
+            "candidate": "1"
+          }
+        ],
+        "branches": [
+          {
+            "id": "B0089",
+            "run_tag": "8029b2bdf385",
+            "result_checkpoint": "e7344757-d706-4fca-a697-b73b5c8e3a87",
+            "value": 1.69639
+          },
+          {
+            "id": "B0093",
+            "run_tag": "43dd4c5fc6ed",
+            "result_checkpoint": "6f2998a6-472a-40fe-b350-1a4ba854c470",
+            "value": 1.717368
+          },
+          {
+            "id": "B0094",
+            "run_tag": "dba35ef90bf8",
+            "result_checkpoint": "681fd1b6-bdb0-4a05-9a89-8c50fd471af9",
+            "value": 1.692786
+          },
+          {
+            "id": "B0095",
+            "run_tag": "e062b910864d",
+            "result_checkpoint": "2d9bf45a-6d59-4a0b-acff-a12b13a97007",
+            "value": 1.632765
+          },
+          {
+            "id": "B0096",
+            "run_tag": "8f874518dce3",
+            "result_checkpoint": "ba051b9d-664a-4353-ad17-70130de0540d",
+            "value": 1.736709
+          },
+          {
+            "id": "B0097",
+            "run_tag": "1e14f9344b93",
+            "result_checkpoint": "2591e0e7-36db-4345-a2e9-b29397e8c7de",
+            "value": 1.681834
+          }
+        ],
+        "command": null,
+        "env": null,
+        "parent_checkpoint": null,
+        "result_checkpoint": null,
+        "repeats": 6,
+        "metric": "energy_rmse",
+        "gap_after": 0.02083614457831329
+      },
+      "belief": {
+        "checks": [
+          {
+            "kind": "reversal",
+            "ok": null,
+            "text": "no reversal test recorded"
+          },
+          {
+            "kind": "held_out",
+            "ok": null,
+            "text": "no held-out claims were checked"
+          },
+          {
+            "kind": "evidence",
+            "ok": null,
+            "text": "no evidence check recorded"
+          },
+          {
+            "kind": "effect",
+            "ok": true,
+            "text": "candidate minus naive is +1.335 with a 95% bootstrap interval that excludes 0"
+          }
+        ],
+        "note": null
+      },
+      "unknown": {
+        "untestable": [
+          {
+            "knob": "n_splits",
+            "value": "30"
+          },
+          {
+            "knob": "n_splits",
+            "value": "150"
+          },
+          {
+            "knob": "n_splits",
+            "value": "300"
+          }
+        ],
+        "unmapped": [
+          "tau_values.txt",
+          "n_hidden.txt",
+          "weight_decay_lambda",
+          "length_scale_l",
+          "dropout_placement",
+          "normalization",
+          "dropout_variant",
+          "RL_exploration_method",
+          "precision_tau"
+        ],
+        "setup": null,
+        "leads": [
+          {
+            "knob": "epochx",
+            "value": "1",
+            "units": 2.98,
+            "gap": 0.6902855421686749
+          },
+          {
+            "knob": "epochx",
+            "value": "2",
+            "units": 21.94,
+            "gap": 0.09639216867469888
+          },
+          {
+            "knob": "epochx",
+            "value": "5",
+            "units": 8.09,
+            "gap": -0.5302873493975903
+          },
+          {
+            "knob": "epochx",
+            "value": "100",
+            "units": 1.19,
+            "gap": -0.7463939759036144
+          },
+          {
+            "knob": "epochx",
+            "value": "50",
+            "units": 2.17,
+            "gap": -0.7156909638554216
+          }
+        ],
+        "alternatives": [
+          {
+            "changes": {
+              "epochx": "10",
+              "hidden": "4"
+            },
+            "runs": 2,
+            "gap": -0.6396286144578314,
+            "mean_abs_gap": 0.35193097389558237
+          },
+          {
+            "changes": {
+              "hidden": "5",
+              "epochx": "50"
+            },
+            "runs": 2,
+            "gap": -0.6559222891566264,
+            "mean_abs_gap": 0.38353636980353834
+          },
+          {
+            "changes": {
+              "epochx": "100",
+              "hidden": "4"
+            },
+            "runs": 2,
+            "gap": -0.7157909638554217,
+            "mean_abs_gap": 0.3847891756214046
+          }
+        ]
+      },
+      "cause": {
+        "kind": "interacting_factors",
+        "confirmed": false,
+        "text": "Interacting factors: these changes close the gap only together, and not every check passes"
+      },
+      "effect": {
+        "metric": "energy_rmse",
+        "naive": 0.359386,
+        "candidate": 1.694588,
+        "diff": 1.335202,
+        "ci": [
+          1.2841477000000001,
+          1.3782741666666665
+        ],
+        "alpha": 0.05,
+        "n_naive": 5,
+        "n_candidate": 6,
+        "excludes_zero": true,
+        "diff_of_paper": 0.8043385542168675
+      }
+    }
+  ]
+}
