@@ -1,36 +1,51 @@
 import { useState } from "react";
 import { api, pct, LABEL_CLASS } from "./api.js";
+import { changeText, changesText, prettyKnob } from "./ui.jsx";
+import { PlainLabel, WithCode, claimName, plain } from "./words.jsx";
+
+// The Gap Report, readable at three depths: the claims at a glance; each claim's verdict, cause and gap; and, one click
+// further, the five questions a reviewer asks, each with a one-line answer on its heading.
 
 const NR = "not recorded";
 const num = (x) => (x === null || x === undefined ? NR : String(Number(Number(x).toPrecision(4))));
 const signed = (x) => (x === null || x === undefined ? NR : `${x >= 0 ? "+" : ""}${Number(Number(x).toPrecision(4))}`);
-const knobs = (d) => Object.entries(d || {}).map(([k, v]) => `${k}=${v}`).join(", ") || "naive";
+const knobs = (d) => changesText(d) || "the code as released";
 const LEADS_SHOWN = 5;
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 function Copy({ text }) {
   const [done, setDone] = useState(false);
   return (
-    <button className="copy" onClick={() => { navigator.clipboard?.writeText(text); setDone(true); setTimeout(() => setDone(false), 1200); }}>
+    <button type="button" className="copy" onClick={() => { navigator.clipboard?.writeText(text); setDone(true); setTimeout(() => setDone(false), 1200); }}>
       {done ? "copied" : "copy"}
     </button>
   );
 }
 
-function Q({ q, children }) {
-  return <div className="sub q"><h5>{q}</h5>{children}</div>;
+// a question with its one-line answer on the heading; the detail opens below
+function Q({ q, gist, open = false, children }) {
+  return (
+    <details className="q" open={open}>
+      <summary><span className="q-q">{q}</span>{gist && <span className="q-gist">{gist}</span>}</summary>
+      <div className="q-body">{children}</div>
+    </details>
+  );
 }
 
 function Effect({ e }) {
   const ci = e.ci;
   return (
     <p className="effect">
-      Effect: candidate <b>{num(e.candidate)}</b> minus naive <b>{num(e.naive)}</b> = <b>{signed(e.diff)}</b>
+      Effect: candidate <b>{num(e.candidate)}</b> minus as released <b>{num(e.naive)}</b> = <b>{signed(e.diff)}</b>
       {ci ? <>, {Math.round((1 - e.alpha) * 100)}% bootstrap interval [{signed(ci[0])}, {signed(ci[1])}]
         {e.excludes_zero === false && <b className="warn"> (includes 0)</b>}</> : <>, bootstrap interval {NR}</>}
-      {" "}({e.n_candidate ?? NR} candidate runs vs {e.n_naive ?? NR} naive runs)
+      {" "}({e.n_candidate ?? NR} candidate runs vs {e.n_naive ?? NR} as released)
     </p>
   );
 }
+
+const experimentGist = (x) => (!x ? NR : !x.found ? "none: no experiment closed it"
+  : x.config.map((k) => `${prettyKnob(k.knob)} ${k.naive ?? "?"} → ${k.candidate}`).join(", "));
 
 function Experiment({ x, effect }) {
   if (!x) return <p className="small">{NR}</p>;
@@ -39,30 +54,29 @@ function Experiment({ x, effect }) {
   const vals = (x.branches || []).map((b) => b.value).filter((v) => v !== null && v !== undefined);
   return (
     <>
-      <p>
-        Branch: {x.branches?.length
-          ? x.branches.map((b) => <code key={b.id}>{b.id}</code>)
-          : <span className="small">id {NR}{x.repeats ? ` (${x.repeats} runs)` : ""}</span>}
-      </p>
       <div className="scroll"><table className="cfg">
-        <thead><tr><th>Config</th><th>Naive</th><th>Changed to</th></tr></thead>
+        <thead><tr><th scope="col">Setting</th><th scope="col">As released</th><th scope="col">Changed to</th></tr></thead>
         <tbody>{x.config.map((k) => (
-          <tr key={k.knob}><td><code>{k.knob}</code></td><td>{k.naive === null || k.naive === undefined ? NR : <code>{k.naive}</code>}</td><td><code>{k.candidate}</code></td></tr>
+          <tr key={k.knob}><td><code>{prettyKnob(k.knob)}</code></td><td>{k.naive === null || k.naive === undefined ? NR : <code>{k.naive}</code>}</td><td><code>{k.candidate}</code></td></tr>
         ))}</tbody>
       </table></div>
-      {cmd ? (
-        <>
-          <p className="small">Command: fork checkpoint <code>{x.parent_checkpoint}</code> and run</p>
-          <pre>{cmd}<Copy text={cmd} /></pre>
-        </>
-      ) : <p className="small">Command: {NR}</p>}
-      <p>Output: <code>{x.metric}</code> {vals.length ? vals.map(num).join(", ") : `values ${NR}`}
-        {" "}· gap after <b>{pct(x.gap_after)}</b>
-        {x.result_checkpoint && <> · result checkpoint <code>{x.result_checkpoint}</code></>}</p>
+      <p>Output: <code>{x.metric}</code> {vals.length ? vals.map(num).join(", ") : `values ${NR}`} · gap after <b>{pct(x.gap_after)}</b>
+        {x.branches?.length ? <> · runs {x.branches.map((b) => <code key={b.id}>{b.id}</code>)}</> : null}</p>
       {effect && <Effect e={effect} />}
+      {cmd ? (
+        <details className="more">
+          <summary>The command, to run it yourself</summary>
+          <p className="small">Fork checkpoint <code>{x.parent_checkpoint}</code> and run:</p>
+          <pre>{cmd}<Copy text={cmd} /></pre>
+          {x.result_checkpoint && <p className="small">Result checkpoint <code>{x.result_checkpoint}</code></p>}
+        </details>
+      ) : <p className="small">Command: {NR}</p>}
     </>
   );
 }
+
+const paperGist = (p) => (!p ? NR : p.recorded ? `quoted${p.page ? `, p. ${p.page}` : ""}${p.figure ? `, ${p.figure}` : ""}: ${num(p.paper_value)}`
+  : `${num(p.paper_value)}, no quote linked`);
 
 function Paper({ p }) {
   if (!p) return <p className="small">{NR}</p>;
@@ -78,55 +92,90 @@ function Paper({ p }) {
   );
 }
 
+const measuredGist = (m) => (!m ? NR : `${num(m.median)} over ${m.n ?? "?"} runs as released, noise ±${(m.band_rel * 100).toFixed(1)}%, gap ${pct(m.gap)}`);
+
 function Measured({ m }) {
   if (!m) return <p className="small">{NR}</p>;
   const sc = m.setup_check;
   return (
     <ul>
-      <li>Naive median <b>{num(m.median)}</b> over {m.n ?? NR} runs; repeats: {m.repeats?.length ? m.repeats.map(num).join(", ") : NR}</li>
-      <li>Spread: {m.min !== null && m.min !== undefined ? `range ${num(m.min)} to ${num(m.max)}, ` : ""}noise band ±{num(m.band)} (2 x MAD)
+      <li>Median <b>{num(m.median)}</b> over {m.n ?? NR} runs of the code as released; the runs: {m.repeats?.length ? m.repeats.map(num).join(", ") : NR}</li>
+      <li>Spread: {m.min !== null && m.min !== undefined ? `${num(m.min)} to ${num(m.max)}, ` : ""}noise band ±{num(m.band)} (2 × MAD)
         {m.cv !== null && m.cv !== undefined ? `, CV ${(m.cv * 100).toFixed(1)}%` : ""}</li>
       <li className={sc?.reproducible === false ? "warn" : ""}>Setup check: {sc ? sc.note : "none in this report (the band comes from forks of one setup)"}</li>
-      <li>Discrepancy from the paper: <b>{pct(m.gap)}</b> (noise band ±{(m.band_rel * 100).toFixed(1)}% of the paper value)</li>
+      <li>Gap from the paper: <b>{pct(m.gap)}</b>, against a noise band of ±{(m.band_rel * 100).toFixed(1)}% of the paper’s number</li>
     </ul>
   );
 }
 
-const KIND = { reversal: "Counterfactual (reversal test)", held_out: "Held-out claim", evidence: "Evidence", effect: "Effect vs noise", held_out_separate: "Held-out claim, tuned separately", relation: "Paper's stated relation" };
+const KIND = { reversal: "Reverse test", held_out: "Held-out number", evidence: "Evidence", effect: "Effect against the noise",
+  held_out_separate: "Held-out number, tuned separately", relation: "The paper’s stated relation" };
+const CHECK_WORD = (x) => (x.kind === "held_out_separate" ? ["Note", "na"] : x.ok === true ? ["Pass", "pass"] : x.ok === false ? ["Fail", "fail"] : ["Not checked", "na"]);
+
+function beliefGist(b) {
+  if (!b) return NR;
+  if (!b.checks.length) return b.note;
+  const n = (f) => b.checks.filter(f).length;
+  return [n((x) => x.ok === true) && `${n((x) => x.ok === true)} passed`, n((x) => x.ok === false) && `${n((x) => x.ok === false)} failed`,
+    n((x) => x.ok == null) && `${n((x) => x.ok == null)} not checked`].filter(Boolean).join(", ");
+}
 
 function Belief({ b }) {
   if (!b) return <p className="small">{NR}</p>;
   if (!b.checks.length) return <p>{b.note}</p>;
   return (
     <ul className="checks">
-      {b.checks.map((x, i) => (
-        <li key={i}>
-          <span className={`chk ${x.ok === true ? "pass" : x.ok === false ? "fail" : "na"}`}>{x.kind === "held_out_separate" ? "NOTE" : x.ok === true ? "PASS" : x.ok === false ? "FAIL" : "NOT CHECKED"}</span>
-          {" "}{KIND[x.kind] || x.kind}: {x.text.replace(/`/g, "")}
-        </li>
-      ))}
+      {b.checks.map((x, i) => {
+        const [w, cls] = CHECK_WORD(x);
+        return <li key={i}><span className={`chk ${cls}`}>{w}</span> {KIND[x.kind] || x.kind}: <WithCode text={x.text} /></li>;
+      })}
     </ul>
   );
+}
+
+// "Not settable with this harness" mixes setting names and sentences the paper-code contrast wrote; names read as chips,
+// sentences as a list
+const isName = (s) => !/\s/.test(s);
+
+function unknownGist(u) {
+  if (!u) return NR;
+  const parts = [u.unmapped.length && plural(u.unmapped.length, "difference the harness can’t set", "differences the harness can’t set"),
+    u.leads.length && plural(u.leads.length, "unconfirmed lead", "unconfirmed leads"),
+    u.untestable.length && `${u.untestable.length} untestable within the budget`];
+  return parts.filter(Boolean).join(", ") || "nothing left open";
 }
 
 function Unknown({ u }) {
   if (!u) return <p className="small">{NR}</p>;
   const leads = [...u.leads].sort((a, b) => (b.units || 0) - (a.units || 0));
+  const names = u.unmapped.filter(isName), sentences = u.unmapped.filter((s) => !isName(s));
   return (
-    <ul>
-      <li>Untestable within the budget: {u.untestable.length ? u.untestable.map((x) => <code key={`${x.knob}=${x.value}`}>{x.knob}={x.value}</code>) : "none"}</li>
-      <li>Not settable with this harness: {u.unmapped.length ? u.unmapped.map((k) => <code key={k}>{k}</code>) : "none"}</li>
-      <li className={u.setup?.reproducible === false ? "warn" : ""}>Setup reproducibility: {u.setup ? u.setup.note : "not checked"}</li>
-      <li>Unconfirmed leads (moved the gap in the screen, not part of the explanation): {leads.length
-        ? <>{leads.slice(0, LEADS_SHOWN).map((x) => <span key={`${x.knob}=${x.value}`}><code>{x.knob}={x.value}</code> ({num(x.units)} noise units, gap {pct(x.gap)}) </span>)}
-          {leads.length > LEADS_SHOWN && <span className="small">and {leads.length - LEADS_SHOWN} more in the JSON</span>}</>
-        : "none"}</li>
-      <li>Near alternatives (closest across all claims): {u.alternatives.length ? (
+    <div className="unknown">
+      {sentences.length > 0 && <>
+        <p className="sub-head">Differences between the paper and the code it noticed, but couldn’t test</p>
+        <ul>{sentences.map((s) => <li key={s}><WithCode text={s} /></li>)}</ul>
+      </>}
+      {names.length > 0 && <>
+        <p className="sub-head">Settings the paper names that this harness can’t change</p>
+        <p className="chips-text">{names.map((k) => <code key={k}>{k}</code>)}</p>
+      </>}
+      {leads.length > 0 && <>
+        <p className="sub-head">Unconfirmed leads: they moved the number in the screen but aren’t part of the answer</p>
+        <ul>{leads.slice(0, LEADS_SHOWN).map((x) => <li key={`${x.knob}=${x.value}`}><code>{changeText(x.knob, x.value)}</code>: {num(x.units)}× the noise, gap {pct(x.gap)}</li>)}
+          {leads.length > LEADS_SHOWN && <li className="small">and {leads.length - LEADS_SHOWN} more in the JSON</li>}</ul>
+      </>}
+      {u.untestable.length > 0 && <>
+        <p className="sub-head">Not testable within the budget</p>
+        <p className="chips-text">{u.untestable.map((x) => <code key={`${x.knob}=${x.value}`}>{changeText(x.knob, x.value)}</code>)}</p>
+      </>}
+      {u.alternatives.length > 0 && <>
+        <p className="sub-head">Near alternatives, closest across all claims</p>
         <ul>{u.alternatives.map((a, i) => (
           <li key={i}><code>{knobs(a.changes)}</code>: this claim {pct(a.gap)}, mean |gap| {(a.mean_abs_gap * 100).toFixed(1)}% ({a.runs} runs)</li>
         ))}</ul>
-      ) : "none recorded"}</li>
-    </ul>
+      </>}
+      <p className={`small ${u.setup?.reproducible === false ? "warn" : ""}`}>Setup reproducibility: {u.setup ? u.setup.note : "not checked"}.</p>
+    </div>
   );
 }
 
@@ -143,8 +192,7 @@ function MissingSentence({ ms }) {
   const sents = splitSentences(ms.paragraph);
   const k = Math.max(0, Math.min(ms.insert_after, sents.length));
   return (
-    <div className="sub missing-sentence">
-      <h5>The sentence the paper was missing (p.{ms.page})</h5>
+    <Q q={`The sentence the paper was missing (p. ${ms.page})`} gist="drafted by GapFinder, for the authors to check" open>
       <p className="small">Setup paragraph from the paper with a sentence drafted by GapFinder (a language model),
         not written by the authors. Check it before use.</p>
       <blockquote>
@@ -152,15 +200,15 @@ function MissingSentence({ ms }) {
         <ins className="drafted"><span className="draft-tag">drafted by GapFinder</span>{ms.sentence}</ins>
         {k < sents.length && <> {sents.slice(k).join(" ")}</>}
       </blockquote>
-    </div>
+    </Q>
   );
 }
 
 const KIND_TEXT = {
   reproduced: "reproduced within noise",
   in_space: "an explanation within the settings is possible",
-  out_of_space_suspected: "out of space suspected",
-  out_of_space_likely: "out of space likely",
+  out_of_space_suspected: "the cause may be outside the settings",
+  out_of_space_likely: "the cause is likely outside the settings",
   insufficient: "not enough measurements",
 };
 
@@ -174,91 +222,121 @@ function Diagnosis({ c }) {
   const oos = (d?.kind || "").startsWith("out_of_space");
   const islands = (d?.islands || []).filter((i) => i.length);
   return (
-    <div className="sub diagnosis">
+    <Q q="Could anything else fit as well?" gist={[eq.length > 1 && `${eq.length} equally good configurations`, d && KIND_TEXT[d.kind]].filter(Boolean).join("; ")}>
       {eq.length > 1 && <>
-        <h5>Equally good configurations</h5>
-        <p className="small">The target claim can't tell these apart (likelihood within 2 log units, held-out claims no worse);
+        <p className="sub-head">Equally good configurations</p>
+        <p className="small">This number can’t tell these apart (likelihood within 2 log units, held-out numbers no worse);
           the first is the reported answer.</p>
         <ul>{eq.map((e, i) => <li key={i}><code>{knobs(e.config)}</code>{i === 0 && " (reported)"}</li>)}</ul>
       </>}
       {d && <>
-        <h5>History matching: {KIND_TEXT[d.kind] || d.kind}</h5>
-        <p>{d.text}</p>
-        {oos && fits.length > 1 && <p className="small">Fit {tid} alone (worst claim's implausibility; lowest is least
+        <p className="sub-head">History matching: {KIND_TEXT[d.kind] || d.kind}</p>
+        <p><WithCode text={d.text} /></p>
+        {oos && fits.length > 1 && <p className="small">Fit to this number alone (worst claim’s implausibility; lowest is least
           inconsistent): {fits.slice().sort((a, b) => worst(a) - worst(b)).slice(0, 6).map((r, i) =>
             <span key={i}><code>{knobs(r.config)}</code> ({num(worst(r))}) </span>)}</p>}
-        {islands.length > 1 && <p className="small">{islands.length} separate islands (no single-knob move joins them)</p>}
+        {islands.length > 1 && <p className="small">{islands.length} separate islands (no single-setting move joins them)</p>}
         {(d.leads || []).length > 0 && <>
-          <p><b>Leads outside the settings</b> (static code checks, nothing run unless a patch round tested them):</p>
+          <p className="sub-head">Leads outside the settings (static code checks; nothing ran unless a patch round tested them)</p>
           <ul>{d.leads.slice(0, 8).map((x, i) => (
-            <li key={i}>{x.family.replace(/_/g, " ")}: {x.detail} <code>{x.file}:{x.line}</code></li>))}</ul>
+            <li key={i}>{x.family.replace(/_/g, " ")}: <WithCode text={x.detail} /> <code>{x.file}:{x.line}</code></li>))}</ul>
         </>}
       </>}
-    </div>
+    </Q>
   );
 }
 
-function Card({ c }) {
+const gapLine = (c) => (c.status === "reproduced" ? `reproduces: ${pct(c.gap_before)} is inside the noise`
+  : c.status === "inconclusive" ? `too noisy to tell: ${pct(c.gap_before)} inside a wide band`
+  : `${pct(c.gap_before)} → ${pct(c.gap_after)}`);
+
+function Card({ c, open }) {
   const a = c.attribution;
   const label = a?.confidence_label || "Reproduced";
   const kind = c.cause?.kind;
   return (
-    <article className={`card ${kind ? `cause-${kind}` : ""}`}>
-      <header>
-        <span className={`label ${LABEL_CLASS[label] || "muted"}`}>{label}</span>
-        <h3>{c.target.claim_id} <span className="muted">{c.target.metric}</span></h3>
-        <span className="paperval">paper {c.target.paper_value}</span>
-      </header>
-      {kind && <p className={`cause ${kind}`}><b>{CAUSE_NAME[kind] || "Explanation"}.</b> {c.cause.text.replace(/^[^:]*: /, "").replace(/^./, (m) => m.toUpperCase())}</p>}
-      {c.status === "reproduced" ? (
-        <p>Reproduces: the naive gap {pct(c.gap_before)} is inside the noise band ±{(c.band * 100).toFixed(1)}%.</p>
-      ) : c.status === "inconclusive" ? (
-        <p>Inconclusive: the naive gap {pct(c.gap_before)} is inside the noise band ±{(c.band * 100).toFixed(1)}%,
-          but the band is too wide to call it a reproduction or to test explanations.</p>
-      ) : (
-        <p className="gap">The gap went from <b>{pct(c.gap_before)}</b> to <b>{pct(c.gap_after)}</b>, against run-to-run noise of ±{(c.band * 100).toFixed(1)}%, with {c.hypotheses_tested} hypotheses tested.</p>
-      )}
-      <Q q="Which experiment changed it?"><Experiment x={c.experiment} effect={c.effect} /></Q>
-      <Q q="What did the paper report?"><Paper p={c.paper_claim} /></Q>
-      <Q q="What did we measure?"><Measured m={c.measured} /></Q>
-      <Q q="Why do we believe it?"><Belief b={c.belief} /></Q>
-      <Q q="What remains unknown?"><Unknown u={c.unknown} /></Q>
-      <Diagnosis c={c} />
-      {c.missing_sentence && <MissingSentence ms={c.missing_sentence} />}
-      {c.notes?.length > 0 && <div className="sub"><h5>Notes</h5><ul>{c.notes.map((n, i) => <li key={i}>{n}</li>)}</ul></div>}
-    </article>
+    <details className={`card ${kind ? `cause-${kind}` : ""}`} open={open} id={`claim-${c.target.claim_id}`}>
+      <summary>
+        <span className={`label ${LABEL_CLASS[label] || "muted"}`}>{plain(label)}</span>
+        <span className="card-title">{claimName(c.target)}{c.target.held_out && <span className="tag">held out</span>}</span>
+        <span className="paperval num">paper {c.target.paper_value} · gap {gapLine(c)}</span>
+      </summary>
+      <div className="card-body">
+        {kind && <p className={`cause ${kind}`}><b>{CAUSE_NAME[kind] || "Explanation"}.</b> <WithCode text={c.cause.text.replace(/^[^:]*: /, "").replace(/^./, (m) => m.toUpperCase())} /></p>}
+        {c.status === "reproduced" ? (
+          <p>Reproduces: the gap as released, {pct(c.gap_before)}, is inside the noise band of ±{(c.band * 100).toFixed(1)}%.</p>
+        ) : c.status === "inconclusive" ? (
+          <p>Inconclusive: the gap as released, {pct(c.gap_before)}, is inside the noise band of ±{(c.band * 100).toFixed(1)}%,
+            but the band is too wide to call it a reproduction or to test explanations.</p>
+        ) : (
+          <p className="gap">The gap went from <b>{pct(c.gap_before)}</b> to <b>{pct(c.gap_after)}</b>, against run-to-run noise of
+            ±{(c.band * 100).toFixed(1)}%, with {plural(c.hypotheses_tested, "hypothesis", "hypotheses")} tested.
+            {" "}<span className="small">GapFinder’s label: {label}.</span></p>
+        )}
+        <Q q="Which experiment changed it?" gist={experimentGist(c.experiment)}><Experiment x={c.experiment} effect={c.effect} /></Q>
+        <Q q="Why do we believe it?" gist={beliefGist(c.belief)} open={open && c.belief?.checks?.length > 0}><Belief b={c.belief} /></Q>
+        <Q q="What did the paper report?" gist={paperGist(c.paper_claim)}><Paper p={c.paper_claim} /></Q>
+        <Q q="What did we measure?" gist={measuredGist(c.measured)}><Measured m={c.measured} /></Q>
+        <Q q="What remains unknown?" gist={unknownGist(c.unknown)}><Unknown u={c.unknown} /></Q>
+        <Diagnosis c={c} />
+        {c.missing_sentence && <MissingSentence ms={c.missing_sentence} />}
+        {c.notes?.length > 0 && <Q q="Notes" gist={plural(c.notes.length, "note from the search", "notes from the search")}>
+          <ul>{c.notes.map((n, i) => <li key={i}><WithCode text={n} /></li>)}</ul></Q>}
+      </div>
+    </details>
+  );
+}
+
+// every claim on one line: where to start reading a report with many
+function AtAGlance({ claims, onOpen }) {
+  return (
+    <div className="ledger-wrap glance">
+      <table>
+        <thead><tr><th scope="col">Number</th><th scope="col">Verdict</th><th scope="col">Gap, as released → after</th><th scope="col">Change</th></tr></thead>
+        <tbody>
+          {claims.map((c) => (
+            <tr key={c.target.claim_id} className="link">
+              <td className="paper-cell"><a href={`#claim-${c.target.claim_id}`} onClick={(e) => { e.preventDefault(); onOpen(c.target.claim_id); }}>
+                {claimName(c.target)}</a>{c.target.held_out && <span className="tag">held out</span>}</td>
+              <td><PlainLabel label={c.attribution?.confidence_label} /></td>
+              <td className="num nowrap">{gapLine(c)}</td>
+              <td>{Object.keys(c.changes || {}).length ? <code>{changesText(c.changes)}</code> : <span className="muted">none</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
 function Closest({ r }) {
   const ids = r.claims.map((c) => c.target.claim_id).concat(
     Object.keys(r.closest_overall[0].gaps || {}).filter((k) => !r.claims.some((c) => c.target.claim_id === k)));
+  const name = (k) => claimName(r.claims.find((c) => c.target.claim_id === k)?.target || { claim_id: k });
   return (
-    <div className="sub closest">
-      <h5>Closest configurations across all claims</h5>
-      <p className="small">Not an attribution: labels judge one claim at a time. This shows which measured changes move
-        several claims toward the paper together.</p>
+    <Q q="Closest configurations across all claims" gist={`${plural(r.closest_overall.length, "configuration", "configurations")}; not an attribution`}>
+      <p className="small">Labels judge one claim at a time. This shows which measured changes move several claims toward the
+        paper together.</p>
       <div className="scroll"><table>
-        <thead><tr><th>Configuration</th><th>Runs</th>{ids.map((k) => <th key={k}>{k}</th>)}<th>Mean |gap|</th></tr></thead>
+        <thead><tr><th scope="col">Configuration</th><th scope="col">Runs</th>{ids.map((k) => <th scope="col" key={k}>{name(k)}</th>)}<th scope="col">Mean |gap|</th></tr></thead>
         <tbody>{r.closest_overall.map((row, i) => (
           <tr key={i}>
-            <td><code>{Object.entries(row.changes || {}).map(([k, v]) => `${k}=${v}`).join(", ") || "naive"}</code></td>
+            <td><code>{knobs(row.changes)}</code></td>
             <td>{row.runs}</td>{ids.map((k) => <td key={k}>{pct(row.gaps?.[k])}</td>)}<td>{(row.mean_abs_gap * 100).toFixed(1)}%</td>
           </tr>
         ))}</tbody>
       </table></div>
-    </div>
+    </Q>
   );
 }
 
 function Provenance({ p }) {
-  if (!p) return <div className="sub provenance"><h5>Provenance</h5><p className="small">Not recorded: this report was written before provenance was kept.</p></div>;
+  if (!p) return <Q q="Provenance" gist="not recorded: this report predates it"><p className="small">This report was written before provenance was kept.</p></Q>;
   const g = p.gapfinder || {};
   const c = p.cost;
   return (
-    <div className="sub provenance">
-      <h5>Provenance</h5>
-      <ul>
+    <Q q="Provenance" gist={`GapFinder commit ${g.commit ? g.commit.slice(0, 8) : NR}, models, prompt and harness hashes`}>
+      <ul className="provenance">
         <li>GapFinder commit: {g.commit ? <><code>{g.commit}</code>{g.dirty && " (working tree had uncommitted changes)"}</> : `${NR} (no git checkout)`}</li>
         <li>Models: {p.models ? Object.entries(p.models).map(([k, v]) => <span key={k}>{k} <code>{v}</code> </span>) : NR}</li>
         <li>Prompt sha256: {p.prompt_sha256 && Object.keys(p.prompt_sha256).length
@@ -266,13 +344,19 @@ function Provenance({ p }) {
         <li>Harness spec sha256: {p.harness_spec_sha256 ? <code>{p.harness_spec_sha256}</code> : NR}</li>
         <li>Cost: {c ? `Nemotron billed $${c.nemotron_billed_usd.toFixed(4)}, sandbox reported $${c.sandbox_reported_usd.toFixed(4)} (total $${c.total_usd.toFixed(4)}; ${c.scope})` : NR}</li>
       </ul>
-    </div>
+    </Q>
   );
 }
 
 export default function Report({ run }) {
   const r = run?.report;
-  if (!r) return <p>Loading…</p>;
+  const [opened, setOpened] = useState(() => new Set());
+  if (!r) return <p className="status-line">Loading…</p>;
+  const head = r.claims.find((c) => !c.target.held_out) || r.claims[0];
+  const openCard = (id) => {
+    setOpened((s) => new Set(s).add(id));
+    requestAnimationFrame(() => document.getElementById(`claim-${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
+  };
   return (
     <section className="report">
       <div className="report-head">
@@ -285,23 +369,20 @@ export default function Report({ run }) {
         {r.partial && <p className="warn">Partial report: the run or dollar budget ran out before every claim was verified.</p>}
         {r.setup_check && <p className={r.setup_check.reproducible === false ? "warn" : "small"}>Setup check: {r.setup_check.note}.</p>}
       </div>
-      {r.claims.map((c) => <Card key={c.target.claim_id} c={c} />)}
-      {r.closest_overall?.length > 0 && <Closest r={r} />}
-      {r.triaged_failures?.length > 0 && (
-        <div className="sub"><h5>Failed hypotheses (triaged by Nemotron 3 Super)</h5><ul>
-          {r.triaged_failures.map((x, i) => (
-            <li key={i}><code>{x.knob}={x.value}</code>: {x.kind}, {x.why}
-              {x.retried ? <> · retried as <code>{x.retried}</code></> : x.suggestion ? <> · suggested <code>{x.suggestion}</code>, already measured</> : null}</li>
-          ))}
-        </ul></div>
-      )}
-      {r.untestable?.length > 0 && (
-        <p className="small">Not testable within the budget: {r.untestable.map(({ knob, value }) => <code key={`${knob}=${value}`}>{knob}={value}</code>)}</p>
-      )}
-      {r.unmapped_assumptions?.length > 0 && (
-        <p className="small">Not testable with this harness: {r.unmapped_assumptions.map((k) => <code key={k}>{k}</code>)}</p>
-      )}
-      <Provenance p={r.provenance} />
+      {r.claims.length > 1 && <AtAGlance claims={r.claims} onOpen={openCard} />}
+      {r.claims.map((c) => <Card key={c.target.claim_id} c={c} open={c === head || opened.has(c.target.claim_id)} />)}
+      <div className="report-tail">
+        {r.closest_overall?.length > 0 && <Closest r={r} />}
+        {r.triaged_failures?.length > 0 && (
+          <Q q="Failed hypotheses" gist={`${r.triaged_failures.length} triaged by Nemotron 3 Super`}><ul>
+            {r.triaged_failures.map((x, i) => (
+              <li key={i}><code>{changeText(x.knob, x.value)}</code>: {x.kind}, {x.why}
+                {x.retried ? <> · retried as <code>{x.retried}</code></> : x.suggestion ? <> · suggested <code>{x.suggestion}</code>, already measured</> : null}</li>
+            ))}
+          </ul></Q>
+        )}
+        <Provenance p={r.provenance} />
+      </div>
     </section>
   );
 }
