@@ -1,25 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "./api.js";
 import Gauge from "./Gauge.jsx";
 import HeroInstrument from "./Hero.jsx";
+import { href } from "./nav.js";
 import { PlantedChart, VersionStrips } from "./Record.jsx";
 import Replay from "./Replay.jsx";
 import Report from "./Report.jsx";
-import Scoreboard from "./Scoreboard.jsx";
-import { VERDICT, Verdict, changesText, num, prettyKnob, signedPct, useShowcase } from "./ui.jsx";
-import { GLOSSARY, PlainLabel, Term, currentVersion, vName, versionStatus } from "./words.jsx";
+import { Loading, Verdict, changesText, signedPct, useShowcase } from "./ui.jsx";
+import { GLOSSARY, PlainLabel, PlantedChange, Term, currentVersion, vName, versionStatus } from "./words.jsx";
 
-export const href = (path, q = {}) => {
-  const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v)).toString();
-  return `#${path}${qs ? `?${qs}` : ""}`;
-};
 const HERO_CASES = ["fastgcn-v15", "sdcn", "gcn-attack", "fair-clustering"];
 const SHORT = { "gcn-attack": "Topology attack", sdcn: "SDCN", "fastgcn-v15": "FastGCN", "fair-clustering": "Fair Clustering" };
-
-function Loading({ what = "Loading…", error }) {
-  if (error) return <p className="notice" role="alert">Couldn’t load the showcase data ({String(error.message || error)}). Start the server with <code>uvicorn gapfinder.api.server:app</code> and reload.</p>;
-  return <p className="status-line" aria-live="polite">{what}</p>;
-}
 
 function useRun(id) {
   const [run, setRun] = useState(null);
@@ -57,7 +48,7 @@ export function Home() {
         <h1 id="hero-title">When a paper’s number and its code’s number disagree, GapFinder finds out why.</h1>
         <p className="lede">It runs the released code in cloud sandboxes, changes one condition at a time, and ends each claim with a
           verdict: the cause, part of it, or a plain statement that nothing it could change explains the gap.</p>
-        {cases.length > 0 && <HeroInstrument cases={cases} short={SHORT} href={href} />}
+        {cases.length > 0 && <HeroInstrument cases={cases} short={SHORT} />}
       </section>
 
       <section className="section" aria-labelledby="record-title">
@@ -251,85 +242,6 @@ export function Case({ slug, query }) {
 
 // a planted change as the scorer words it ("scale: lr: the paper's v is the code's 0.5 x v", "setting: wd = 0.001"):
 // the identifier as code, the description as prose
-// in words: "the paper's v is the code's 0.5 x v" reads "a value the paper states as v is 0.5 × v in the code"
-function Planted({ text }) {
-  const t = text.replace(/^\w+: /, "");
-  const i = t.indexOf(": ");
-  if (i > 0 && !t.slice(0, i).includes(" ")) {
-    const rest = t.slice(i + 2).replace(/ x /g, " × ").replace(/^the paper's v is the code's (.+?) × v$/, "a value the paper states as v is $1 × v in the code");
-    return <span className="planted"><code>{prettyKnob(t.slice(0, i))}</code> {rest}</span>;
-  }
-  const [k, v] = t.split(" = ");
-  return <span className="planted"><code>{v !== undefined ? `${prettyKnob(k)} = ${v}` : t}</code></span>;
-}
-
-// ------------------------------------------------------------------ synthetic cases
-const FAMILIES = [["", "All"], ["setting", "Settings"], ["scale", "Scale conventions"], ["data", "Data cuts"], ["code", "Code defects"],
-  ["reporting", "Reporting rules"], ["control", "Controls"]];
-
-export function Synthetic({ query, navigate }) {
-  const { data, error } = useShowcase();
-  const tab = query.get("tab") === "gapbench" ? "gapbench" : "planted";
-  const fam = query.get("family") || "";
-  const set = (q) => navigate("/synthetic", { tab, family: fam, ...q });
-  const planted = useMemo(() => (data?.planted || []).filter((p) => !fam || p.family === fam), [data, fam]);
-  if (!data) return <div className="shell"><Loading error={error} /></div>;
-  return (
-    <div className="shell">
-      <section className="hero" style={{ paddingBottom: 0 }}>
-        <h1>Synthetic cases</h1>
-        <p className="lede">Gaps with known answers: changes planted into papers whose code reproduces, and the GapBench tasks. These are the
-          ones it got right. The evidence page has the full rates, misses included.</p>
-      </section>
-      <div className="toggle" role="group" aria-label="Which set" style={{ margin: "32px 0 16px" }}>
-        <button type="button" aria-pressed={tab === "planted"} onClick={() => set({ tab: "planted" })}>Planted gaps ({data.planted.length})</button>
-        <button type="button" aria-pressed={tab === "gapbench"} onClick={() => set({ tab: "gapbench", family: "" })}>GapBench tasks ({data.gapbench.length})</button>
-      </div>
-      {tab === "planted" ? (
-        <>
-          <div className="filters" role="group" aria-label="Filter by kind of gap">
-            {FAMILIES.map(([k, t]) => (
-              <button key={k || "all"} type="button" className="seg" aria-pressed={fam === k} onClick={() => set({ family: k })}>{t}</button>
-            ))}
-          </div>
-          <div className="ledger-wrap">
-            <table>
-              <thead><tr><th scope="col">Case</th><th scope="col">What was planted</th><th scope="col">What GapFinder found</th><th scope="col">Label</th><th scope="col">Version</th></tr></thead>
-              <tbody>
-                {planted.map((p) => (
-                  <tr key={p.id} className="link">
-                    <td className="paper-cell"><a href={href(`/run/${p.id}`)}>{p.title.replace(/^Planted /, "").replace(/^./, (m) => m.toUpperCase())}</a></td>
-                    <td>{p.planted.length ? p.planted.map((x) => <Planted key={x} text={x} />) : <span className="muted">nothing (a control)</span>}</td>
-                    <td>{Object.keys(p.found || {}).length ? <code>{changesText(p.found)}</code> : <span className="muted">no change: reported as reproduced</span>}</td>
-                    <td>{p.label || "Reproduced"}</td>
-                    <td className="num" style={{ whiteSpace: "nowrap" }}>{p.version}, seed {p.seed}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      ) : (
-        <div className="ledger-wrap">
-          <table>
-            <thead><tr><th scope="col">Task</th><th scope="col">Kind</th><th scope="col">Outcome</th><th scope="col">What GapFinder found</th></tr></thead>
-            <tbody>
-              {data.gapbench.map((p) => (
-                <tr key={p.id} className="link">
-                  <td className="paper-cell"><a href={href(`/run/${p.id}`)}>{p.title.split(":")[0].replace("GapBench ", "")}</a></td>
-                  <td>{p.title.split(": ").slice(1).join(": ")}</td>
-                  <td>{p.outcome === "correct" ? "Found the cause" : "Correctly abstained"}</td>
-                  <td>{Object.values(p.found || {}).map((f, i) => <code key={i}>{changesText(f.changes) || "no change"}</code>)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ------------------------------------------------------------------ any recorded run
 export function RunPage({ id }) {
   const { run, error } = useRun(id);
@@ -353,7 +265,7 @@ export function RunPage({ id }) {
           <div>{g ? <Gauge g={g} label={m.title} /> : <p className="muted">This run records no gap on its target.</p>}</div>
           <div>
             {m.planted && <><h3 className="minor-head">What was <Term k="planted">planted</Term></h3>
-              <p>{m.planted.length ? m.planted.map((x) => <Planted key={x} text={x} />) : <>Nothing: a <Term k="control">control</Term>, where the right answer is no gap.</>}</p></>}
+              <p>{m.planted.length ? m.planted.map((x) => <PlantedChange key={x} text={x} />) : <>Nothing: a <Term k="control">control</Term>, where the right answer is no gap.</>}</p></>}
             {m.hidden && <><h3 className="minor-head">The hidden setting</h3><p><code>{changesText(m.hidden)}</code></p></>}
             <h3 className="minor-head">What GapFinder found</h3>
             <p>{g && Object.keys(g.changes || {}).length ? <code>{changesText(g.changes)}</code> : "No change: it reported the number as reproduced."}</p>
@@ -409,59 +321,3 @@ export function How() {
     </div>
   );
 }
-
-// ------------------------------------------------------------------ the evidence
-export function Evidence() {
-  const { data, error } = useShowcase();
-  if (!data) return <div className="shell"><Loading error={error} /></div>;
-  return (
-    <div className="shell">
-      <section className="hero" style={{ paddingBottom: 0 }}>
-        <h1>The evidence</h1>
-        <p className="lede">Every measurement, with what it can and can’t show. Only the sealed blind papers are clean evidence; the rest were
-          made while the engine was being built.</p>
-      </section>
-      <section className="section" aria-labelledby="ev-real">
-        <header><h2 id="ev-real">Real papers, re-run post-hoc</h2>
-          <p>Sixteen papers with documented causes. A demonstration: the fixes were found on them.</p></header>
-        <VersionStrips data={data} />
-      </section>
-      <section className="section" aria-labelledby="ev-planted">
-        <header><h2 id="ev-planted">Planted gaps on fresh batches</h2>
-          <p>Each batch is made after the version is frozen, from operators the engine doesn’t share. Versions are adopted only when they
-            are no worse on a fresh batch.</p></header>
-        <PlantedChart totals={data.planted_totals} />
-        <div className="ledger-wrap" style={{ marginTop: 24 }}>
-          <table>
-            <thead><tr><th scope="col">Version</th><th scope="col">Seed</th><th scope="col" className="num">Gaps found</th><th scope="col" className="num">Confidently wrong</th><th scope="col" className="num">Controls right</th><th scope="col">By kind</th></tr></thead>
-            <tbody>
-              {[...data.planted_totals].sort((a, b) => a.seed - b.seed || +a.version.slice(1) - +b.version.slice(1)).map((t) => (
-                <tr key={`${t.version}-${t.seed}`}>
-                  <td>{t.version}{t.adopted ? "" : <span className="muted"> (not adopted)</span>}</td><td className="num">{t.seed}</td>
-                  <td className="num">{t.found} of {t.gaps}</td><td className="num">{t.confidently_wrong}</td>
-                  <td className="num">{t.controls ? `${t.controls_correct} of ${t.controls}` : "none"}</td>
-                  <td className="small">{Object.entries(t.by_kind).map(([k, [f, n]]) => `${k} ${f}/${n}`).join(", ")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <section className="section" aria-labelledby="ev-dev">
-        <header><h2 id="ev-dev">The development suite</h2>
-          <p>GapBench tasks run locally at no cost, two replicates per version. Identical code swings by about five between runs.</p></header>
-        <div className="ledger-wrap"><table>
-          <thead><tr><th scope="col">Version</th><th scope="col">Status</th><th scope="col" className="num">Runs with a cause found (of 138)</th><th scope="col">Replicates</th></tr></thead>
-          <tbody>{data.dev_suite.map((d) => <tr key={d.version}><td>{d.version}</td><td>{d.adopted === false ? <span className="muted">not adopted</span> : "adopted"}</td><td className="num">{d.correct}</td><td className="num">{d.runs.join(", ")}</td></tr>)}</tbody>
-        </table></div>
-      </section>
-      <section className="section" aria-labelledby="ev-agent">
-        <header><h2 id="ev-agent">Against a general coding agent</h2>
-          <p>The same inputs and dollar cap on GapBench’s sealed tasks.</p></header>
-        <Scoreboard />
-      </section>
-    </div>
-  );
-}
-
-export { VERDICT, num };

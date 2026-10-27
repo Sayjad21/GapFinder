@@ -13,6 +13,11 @@ export function useShowcase() {
   return { data, error };
 }
 
+export function Loading({ what = "Loading…", error }) {
+  if (error) return <p className="notice" role="alert">Couldn’t load the showcase data ({String(error.message || error)}). Start the server with <code>uvicorn gapfinder.api.server:app</code> and reload.</p>;
+  return <p className="status-line" aria-live="polite">{what}</p>;
+}
+
 // ------------------------------------------------------------------ numbers
 const LOCALE = typeof navigator !== "undefined" ? navigator.languages?.[0] : undefined;
 export function digits(values) {
@@ -29,14 +34,25 @@ export function signedPct(x, d = 1) {
   return new Intl.NumberFormat(LOCALE, { style: "percent", minimumFractionDigits: d, maximumFractionDigits: d,
     signDisplay: "exceptZero" }).format(x).replace("-", "−"); // a true minus, not a hyphen
 }
-export const changesText = (c) => Object.entries(c || {}).map(([k, v]) => `${prettyKnob(k)} = ${v}`).join(", ");
-// a patch knob "@ast:gae/preprocessing.py:32:test_percent" reads as "test_percent (gae/preprocessing.py:32)"
+// A patch knob "@ast:gae/preprocessing.py:32:test_percent" reads "test_percent (gae/preprocessing.py:32)". A code edit,
+// "@ast:src/utils.py:79:@mut.32.num.mul2" set to 1, reads "edit: double the number (src/utils.py:79)"; a call whose result
+// is replaced carries the new expression base64-encoded, too long to show, so it is named, not printed.
+const EDIT_WORDS = { "num.mul2": "double the number", "num.div2": "halve the number", "num.neg": "negate the number",
+  "num.zero": "set the number to zero", "num.one": "set the number to one" };
+const EDIT = /^@ast:(.+?):(\d+):@mut\.\d+\.(.+)$/;
 export function prettyKnob(k) {
+  const e = EDIT.exec(k);
+  if (e) {
+    const op = e[3];
+    const words = op.startsWith("Call.set.") ? "replace the call’s result" : op.startsWith("Call.red.") ? `reduce with ${op.slice(9)} instead`
+      : EDIT_WORDS[op] || op;
+    return `${words} (${e[1]}:${e[2]})`;
+  }
   const m = /^@ast:(.+?):(\d+):(.+)$/.exec(k);
-  if (!m) return k;
-  const name = m[3].replace(/^@mut\.\d+\./, "");
-  return `${name} (${m[1]}:${m[2]})`;
+  return m ? `${m[3]} (${m[1]}:${m[2]})` : k;
 }
+export const changeText = (k, v) => (EDIT.test(k) && String(v) === "1" ? `edit: ${prettyKnob(k)}` : `${prettyKnob(k)} = ${v}`);
+export const changesText = (c) => Object.entries(c || {}).map(([k, v]) => changeText(k, v)).join(", ");
 
 // ------------------------------------------------------------------ verdicts
 export const VERDICT = {

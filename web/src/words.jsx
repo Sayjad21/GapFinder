@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { prettyKnob } from "./ui.jsx";
 
 // The page's vocabulary: what the engine's internal names are called for a reader, and a definition for every word a
 // reader new to the project would have to guess at.
@@ -79,6 +80,25 @@ export function PlainLabel({ label, formal = false }) {
       {plain(l)}{formal && plain(l) !== l && <small className="formal"> ({l})</small>}
     </span>
   );
+}
+
+// prose with `backticked` identifiers, the identifiers set as code
+export function WithCode({ text }) {
+  return String(text).split(/`([^`]+)`/).map((s, i) => (i % 2 ? <code key={i}>{s}</code> : s));
+}
+
+// ------------------------------------------------------------------ a planted change, as the scorer words it
+// "scale: lr: the paper's v is the code's 0.5 x v" reads "lr: a value the paper states as v is 0.5 × v in the code";
+// "setting: wd = 0.001" reads "wd = 0.001". The identifier is code, the description prose.
+export function PlantedChange({ text }) {
+  const t = text.replace(/^\w+: /, "");
+  const i = t.indexOf(": ");
+  if (i > 0 && !t.slice(0, i).includes(" ")) {
+    const rest = t.slice(i + 2).replace(/ x /g, " × ").replace(/^the paper's v is the code's (.+?) × v$/, "a value the paper states as v is $1 × v in the code");
+    return <span className="planted"><code>{prettyKnob(t.slice(0, i))}</code> <WithCode text={rest} /></span>;
+  }
+  const [k, v] = t.split(" = ");
+  return <span className="planted"><code>{v !== undefined ? `${prettyKnob(k)} = ${v}` : t}</code></span>;
 }
 
 // ------------------------------------------------------------------ names

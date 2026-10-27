@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Gauge from "./Gauge.jsx";
+import { href } from "./nav.js";
 import { digits, num, prefersReducedMotion, signedPct } from "./ui.jsx";
 
 const AUTO_MS = 1800;
@@ -8,7 +9,7 @@ const AUTO_MS = 1800;
 // leave), then, once it has been on screen a moment or when the viewer asks, with GapFinder's change applied. The
 // sentence under the gauge says what the current state shows. Moves on its own only once per case, never under
 // reduced motion, and never after the viewer has used the toggle.
-export default function HeroInstrument({ cases, short, href }) {
+export default function HeroInstrument({ cases, short }) {
   const [pick, setPick] = useState(cases[0]?.slug);
   const [show, setShow] = useState("before");
   const [touched, setTouched] = useState(false);

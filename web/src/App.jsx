@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Case, Cases, Evidence, Home, How, RunPage, Synthetic, href } from "./pages.jsx";
+import { href } from "./nav.js";
+import { Case, Cases, Home, How, RunPage } from "./pages.jsx";
+import Evidence from "./pages/Evidence.jsx";
+import Synthetic from "./pages/Synthetic.jsx";
 import { ThemeToggle } from "./ui.jsx";
 
-// Hash routes, so the static site (GitHub Pages) needs no server rewrites. State lives in the query: #/case/sdcn?v=c7
+// Hash routes (see nav.js): the path picks the page, the query holds its state
 function parse() {
   const raw = window.location.hash.replace(/^#/, "") || "/";
   const [path, qs = ""] = raw.split("?");
